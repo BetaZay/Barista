@@ -1,0 +1,64 @@
+From 07b4339241fa4132adcb76dc2f3a6e7e6e7d55aa Mon Sep 17 00:00:00 2001
+From: Cemu <cemu@example.invalid>
+Date: Tue, 12 May 2026 19:28:53 -0600
+Subject: [PATCH 2/3] wpa: add Tendonin RSN selectors and PTK rot3
+
+---
+ src/common/wpa_common.c | 12 ++++++++++++
+ src/common/wpa_common.h |  8 ++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/src/common/wpa_common.c b/src/common/wpa_common.c
+index 1cfdd9a..8ce2f92 100644
+--- a/src/common/wpa_common.c
++++ b/src/common/wpa_common.c
+@@ -555,6 +555,18 @@ int wpa_pmk_to_ptk(const u8 *pmk, size_t pmk_len, const char *label,
+ 			return -1;
+ 	}
+ 
++#ifdef CONFIG_TENDONIN
++	{
++		u8 rotate_data[3];
++
++		os_memcpy(rotate_data, tmp, sizeof(rotate_data));
++		os_memmove(tmp, tmp + sizeof(rotate_data),
++			   ptk_len - sizeof(rotate_data));
++		os_memcpy(tmp + ptk_len - sizeof(rotate_data), rotate_data,
++			  sizeof(rotate_data));
++	}
++#endif /* CONFIG_TENDONIN */
++
+ 	wpa_printf(MSG_DEBUG, "WPA: PTK derivation - A1=" MACSTR " A2=" MACSTR,
+ 		   MAC2STR(addr1), MAC2STR(addr2));
+ 	wpa_hexdump(MSG_DEBUG, "WPA: Nonce1", nonce1, WPA_NONCE_LEN);
+diff --git a/src/common/wpa_common.h b/src/common/wpa_common.h
+index 1e31368..437a1e4 100644
+--- a/src/common/wpa_common.h
++++ b/src/common/wpa_common.h
+@@ -68,7 +68,11 @@ WPA_CIPHER_BIP_CMAC_256)
+ 
+ 
+ #define RSN_AUTH_KEY_MGMT_UNSPEC_802_1X RSN_SELECTOR(0x00, 0x0f, 0xac, 1)
++#ifdef CONFIG_TENDONIN
++#define RSN_AUTH_KEY_MGMT_PSK_OVER_802_1X RSN_SELECTOR(0xa4, 0xc0, 0xe1, 2)
++#else
+ #define RSN_AUTH_KEY_MGMT_PSK_OVER_802_1X RSN_SELECTOR(0x00, 0x0f, 0xac, 2)
++#endif
+ #define RSN_AUTH_KEY_MGMT_FT_802_1X RSN_SELECTOR(0x00, 0x0f, 0xac, 3)
+ #define RSN_AUTH_KEY_MGMT_FT_PSK RSN_SELECTOR(0x00, 0x0f, 0xac, 4)
+ #define RSN_AUTH_KEY_MGMT_802_1X_SHA256 RSN_SELECTOR(0x00, 0x0f, 0xac, 5)
+@@ -103,7 +107,11 @@ WPA_CIPHER_BIP_CMAC_256)
+ #if 0
+ #define RSN_CIPHER_SUITE_WRAP RSN_SELECTOR(0x00, 0x0f, 0xac, 3)
+ #endif
++#ifdef CONFIG_TENDONIN
++#define RSN_CIPHER_SUITE_CCMP RSN_SELECTOR(0xa4, 0xc0, 0xe1, 4)
++#else
+ #define RSN_CIPHER_SUITE_CCMP RSN_SELECTOR(0x00, 0x0f, 0xac, 4)
++#endif
+ #define RSN_CIPHER_SUITE_WEP104 RSN_SELECTOR(0x00, 0x0f, 0xac, 5)
+ #define RSN_CIPHER_SUITE_AES_128_CMAC RSN_SELECTOR(0x00, 0x0f, 0xac, 6)
+ #define RSN_CIPHER_SUITE_NO_GROUP_ADDRESSED RSN_SELECTOR(0x00, 0x0f, 0xac, 7)
+-- 
+2.54.0
+

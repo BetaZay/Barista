@@ -1,0 +1,110 @@
+From 3f667e76cd0afc4ea2e8f7be7015309cc0cf2041 Mon Sep 17 00:00:00 2001
+From: Cemu <cemu@example.invalid>
+Date: Wed, 2 Sep 2026 20:45:00 -0600
+Subject: [PATCH 5/5] wps: use Nintendo vendor type and WPS 1.0 IEs
+
+Real Wii U pairing APs wrap WPS attributes in the a4:c0:e1:f4 vendor
+type, omit the WFA WPS 2.0 extension, and advertise the original WPS 1.0
+configuration method bits.  Accept that vendor type from the GamePad as
+well as emitting it from hostapd.
+---
+ src/ap/wps_hostapd.c            |  2 ++
+ src/common/ieee802_11_defs.h    |  4 ++++
+ src/wps/wps.c                   |  8 ++++++++
+ src/wps/wps_attr_build.c        |  9 +++++++++
+ 4 files changed, 23 insertions(+)
+
+diff --git a/src/ap/wps_hostapd.c b/src/ap/wps_hostapd.c
+index 82d4d5f..542a895 100644
+--- a/src/ap/wps_hostapd.c
++++ b/src/ap/wps_hostapd.c
+@@ -1135,6 +1135,7 @@ int hostapd_init_wps(struct hostapd_data *hapd,
+ 		os_strdup(hapd->conf->serial_number) : NULL;
+ 	wps->config_methods =
+ 		wps_config_methods_str2bin(hapd->conf->config_methods);
++#ifndef CONFIG_TENDONIN
+ 	if ((wps->config_methods &
+ 	     (WPS_CONFIG_DISPLAY | WPS_CONFIG_VIRT_DISPLAY |
+ 	      WPS_CONFIG_PHY_DISPLAY)) == WPS_CONFIG_DISPLAY) {
+@@ -1149,6 +1150,7 @@ int hostapd_init_wps(struct hostapd_data *hapd,
+ 			   "virtual_push_button for WPS 2.0 compliance");
+ 		wps->config_methods |= WPS_CONFIG_VIRT_PUSHBUTTON;
+ 	}
++#endif /* CONFIG_TENDONIN */
+ 	os_memcpy(wps->dev.pri_dev_type, hapd->conf->device_type,
+ 		  WPS_DEV_TYPE_LEN);
+ 
+diff --git a/src/common/ieee802_11_defs.h b/src/common/ieee802_11_defs.h
+index 0fe6310..99d85cd 100644
+--- a/src/common/ieee802_11_defs.h
++++ b/src/common/ieee802_11_defs.h
+@@ -1422,7 +1422,11 @@ struct ieee80211_ampe_ie {
+ 				* 00:50:F2 */
+ #define WPA_IE_VENDOR_TYPE 0x0050f201
+ #define WMM_IE_VENDOR_TYPE 0x0050f202
++#ifdef CONFIG_TENDONIN
++#define WPS_IE_VENDOR_TYPE 0xa4c0e1f4
++#else /* CONFIG_TENDONIN */
+ #define WPS_IE_VENDOR_TYPE 0x0050f204
++#endif /* CONFIG_TENDONIN */
+ #define OUI_WFA 0x506f9a
+ #define P2P_IE_VENDOR_TYPE 0x506f9a09
+ #define WFD_IE_VENDOR_TYPE 0x506f9a0a
+diff --git a/src/wps/wps.c b/src/wps/wps.c
+index fd5bd93..9516e49 100644
+--- a/src/wps/wps.c
++++ b/src/wps/wps.c
+@@ -429,7 +429,11 @@ struct wpabuf * wps_build_assoc_req_ie(enum wps_request_type req_type)
+ 
+ 	wpabuf_put_u8(ie, WLAN_EID_VENDOR_SPECIFIC);
+ 	len = wpabuf_put(ie, 1);
++#ifdef CONFIG_TENDONIN
++	wpabuf_put_be32(ie, WPS_DEV_OUI_NIN);
++#else /* CONFIG_TENDONIN */
+ 	wpabuf_put_be32(ie, WPS_DEV_OUI_WFA);
++#endif /* CONFIG_TENDONIN */
+ 
+ 	if (wps_build_version(ie) ||
+ 	    wps_build_req_type(ie, req_type) ||
+@@ -463,7 +467,11 @@ struct wpabuf * wps_build_assoc_resp_ie(void)
+ 
+ 	wpabuf_put_u8(ie, WLAN_EID_VENDOR_SPECIFIC);
+ 	len = wpabuf_put(ie, 1);
++#ifdef CONFIG_TENDONIN
++	wpabuf_put_be32(ie, WPS_DEV_OUI_NIN);
++#else /* CONFIG_TENDONIN */
+ 	wpabuf_put_be32(ie, WPS_DEV_OUI_WFA);
++#endif /* CONFIG_TENDONIN */
+ 
+ 	if (wps_build_version(ie) ||
+ 	    wps_build_resp_type(ie, WPS_RESP_AP) ||
+diff --git a/src/wps/wps_attr_build.c b/src/wps/wps_attr_build.c
+index f372256..33b133b 100644
+--- a/src/wps/wps_attr_build.c
++++ b/src/wps/wps_attr_build.c
+@@ -211,6 +211,11 @@ int wps_build_wfa_ext(struct wpabuf *msg, int req_to_enroll,
+ {
+ 	u8 *len;
+ 
++#ifdef CONFIG_TENDONIN
++	/* The Wii U implements WPS 1.0 and does not advertise WFA Version2. */
++	return 0;
++#endif /* CONFIG_TENDONIN */
++
+ #ifdef CONFIG_WPS_TESTING
+ 	if (WPS_VERSION == 0x10)
+ 		return 0;
+@@ -481,7 +486,11 @@ struct wpabuf * wps_ie_encapsulate(struct wpabuf *data)
+ 			frag_len = 251;
+ 		wpabuf_put_u8(ie, WLAN_EID_VENDOR_SPECIFIC);
+ 		wpabuf_put_u8(ie, 4 + frag_len);
++#ifdef CONFIG_TENDONIN
++		wpabuf_put_be32(ie, WPS_DEV_OUI_NIN);
++#else /* CONFIG_TENDONIN */
+ 		wpabuf_put_be32(ie, WPS_DEV_OUI_WFA);
++#endif /* CONFIG_TENDONIN */
+ 		wpabuf_put_data(ie, pos, frag_len);
+ 		pos += frag_len;
+ 	}
+-- 
+2.51.0

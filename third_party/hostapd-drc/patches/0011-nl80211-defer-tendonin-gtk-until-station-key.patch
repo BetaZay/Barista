@@ -1,0 +1,90 @@
+From 3131313131313131313131313131313131313131 Mon Sep 17 00:00:00 2001
+From: drc-project <drc-project@example.invalid>
+Date: Thu, 3 Sep 2026 19:05:00 -0600
+Subject: [PATCH] nl80211: defer Tendonin GTK until station key
+
+rtw89 can return ENOENT while attaching the initial group key before an AP
+station security context exists.  Keep the AP alive, remember that GTK, and
+replay it immediately after the first pairwise key has been accepted.
+---
+ src/drivers/driver_nl80211.c | 46 ++++++++++++++++++++++++++++++++++++
+ src/drivers/driver_nl80211.h |  7 ++++++
+ 2 files changed, 53 insertions(+)
+
+diff --git a/src/drivers/driver_nl80211.h b/src/drivers/driver_nl80211.h
+index 618746e..d66f739 100644
+--- a/src/drivers/driver_nl80211.h
++++ b/src/drivers/driver_nl80211.h
+@@ -130,6 +130,13 @@ struct wpa_driver_nl80211_data {
+ 	int has_capability;
+ 	int has_driver_key_mgmt;
+ 
++#ifdef CONFIG_TENDONIN
++	u8 pending_gtk[32];
++	size_t pending_gtk_len;
++	u32 pending_gtk_suite;
++	u8 pending_gtk_idx;
++#endif /* CONFIG_TENDONIN */
++
+ 	int operstate;
+ 
+ 	int scan_complete_events;
+diff --git a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+index 0ed6caa..fc3cb1f 100644
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -3661,6 +3661,52 @@ static int wpa_driver_nl80211_set_key(struct i802_bss *bss,
+ 			ret = send_and_recv_cmd(drv, msg);
+ 		}
+ 	}
++	if (ret == -ENOENT && alg != WPA_ALG_NONE &&
++	    (key_flag & KEY_FLAG_GROUP) && key_len <= sizeof(drv->pending_gtk)) {
++		os_memcpy(drv->pending_gtk, key, key_len);
++		drv->pending_gtk_len = key_len;
++		drv->pending_gtk_suite = wpa_alg_to_cipher_suite(alg, key_len);
++		drv->pending_gtk_idx = key_idx;
++		wpa_printf(MSG_DEBUG,
++			   "nl80211: deferring Tendonin GTK until first pairwise key");
++		ret = 0;
++	} else if (ret == 0 && (key_flag & KEY_FLAG_PAIRWISE) &&
++		   drv->pending_gtk_len) {
++		struct nlattr *key_attr;
++		int gtk_ret;
++
++		wpa_printf(MSG_DEBUG,
++			   "nl80211: replaying deferred Tendonin GTK");
++		msg = nl80211_ifindex_msg(drv, ifindex, 0,
++					      NL80211_CMD_NEW_KEY);
++		if (msg) {
++			key_attr = nla_nest_start(msg, NL80211_ATTR_KEY);
++			if (!key_attr ||
++			    nla_put(msg, NL80211_KEY_DATA, drv->pending_gtk_len,
++				    drv->pending_gtk) ||
++			    nla_put_u32(msg, NL80211_KEY_CIPHER,
++					drv->pending_gtk_suite) ||
++			    nla_put_u8(msg, NL80211_KEY_IDX,
++				       drv->pending_gtk_idx)) {
++				nl80211_nlmsg_clear(msg);
++				nlmsg_free(msg);
++				msg = NULL;
++			}
++		}
++		if (msg) {
++			nla_nest_end(msg, key_attr);
++			gtk_ret = send_and_recv_cmd(drv, msg);
++			if (gtk_ret == 0) {
++				drv->pending_gtk_len = 0;
++				wpa_printf(MSG_DEBUG,
++					   "nl80211: deferred Tendonin GTK installed");
++			} else {
++				wpa_printf(MSG_DEBUG,
++					   "nl80211: deferred Tendonin GTK still pending: %d (%s)",
++					   gtk_ret, strerror(-gtk_ret));
++			}
++		}
++	}
+ #endif /* CONFIG_TENDONIN */
+ 	if ((ret == -ENOENT || ret == -ENOLINK) && alg == WPA_ALG_NONE)
+ 		ret = 0;
+-- 
+2.54.0

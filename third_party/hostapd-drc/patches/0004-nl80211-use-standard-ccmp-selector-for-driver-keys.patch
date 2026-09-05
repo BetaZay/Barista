@@ -1,0 +1,35 @@
+From 67a7bc8b23928de8ab436d39a4485d25fd459896 Mon Sep 17 00:00:00 2001
+From: Cemu <cemu@example.invalid>
+Date: Wed, 2 Sep 2026 12:00:00 -0600
+Subject: [PATCH 4/4] nl80211: use standard CCMP selector for Tendonin driver
+ keys
+
+Tendonin uses a Nintendo vendor selector in the RSN information element while
+the payload cipher remains CCMP.  NL80211 validates the selector used in
+NEW_KEY/SET_KEY against the kernel's supported cipher list and rejects that
+vendor selector with -EINVAL.  Keep the vendor selector on the air, but submit
+the standard RSN CCMP selector when programming the Linux driver.
+---
+ src/drivers/driver_nl80211.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+index 6c369ba..bb77b82 100644
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -3250,7 +3250,13 @@ static u32 wpa_alg_to_cipher_suite(enum wpa_alg alg, size_t key_len)
+ 	case WPA_ALG_TKIP:
+ 		return RSN_CIPHER_SUITE_TKIP;
+ 	case WPA_ALG_CCMP:
++#ifdef CONFIG_TENDONIN
++		/* The RSN IE uses Nintendo's selector, but nl80211 accepts only
++		 * the standard selector when installing an otherwise normal CCMP key. */
++		return RSN_SELECTOR(0x00, 0x0f, 0xac, 4);
++#else
+ 		return RSN_CIPHER_SUITE_CCMP;
++#endif /* CONFIG_TENDONIN */
+ 	case WPA_ALG_GCMP:
+ 		return RSN_CIPHER_SUITE_GCMP;
+ 	case WPA_ALG_CCMP_256:
+-- 
+2.54.0

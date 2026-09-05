@@ -1,0 +1,16 @@
+build/
+build-*/
+checkpoints/
+__pycache__/
+*.pyc
+*.pcap
+*.pcapng
+*.mkv
+*.mp4
+*.mov
+*.MOV
+*.bin
+*.log
+credentials.conf
+*wpa*.conf
+*.key

@@ -1,0 +1,48 @@
+From 1677e7d53c4d3f681e3a24d1cf52af49c42467a7 Mon Sep 17 00:00:00 2001
+From: Cemu <cemu@example.invalid>
+Date: Wed, 2 Sep 2026 20:50:00 -0600
+Subject: [PATCH 6/6] wps: match Wii U registrar advertisement
+
+The Wii U leaves the push-button bit in its advertised Config Methods and
+Selected Registrar Config Methods fields. Device Password ID remains the
+normal default-PIN value (0x0000).
+---
+ src/wps/wps_registrar.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/wps/wps_registrar.c b/src/wps/wps_registrar.c
+index f49784f..9f7f355 100644
+--- a/src/wps/wps_registrar.c
++++ b/src/wps/wps_registrar.c
+@@ -596,6 +596,7 @@ static int wps_build_sel_reg_config_methods(struct wps_registrar *reg,
+ 	if (!reg->sel_reg_union)
+ 		return 0;
+ 	methods = reg->wps->config_methods;
++#ifndef CONFIG_TENDONIN
+ 	methods &= ~WPS_CONFIG_PUSHBUTTON;
+ 	methods &= ~(WPS_CONFIG_VIRT_PUSHBUTTON |
+ 		     WPS_CONFIG_PHY_PUSHBUTTON);
+@@ -603,6 +604,7 @@ static int wps_build_sel_reg_config_methods(struct wps_registrar *reg,
+ 		wps_set_pushbutton(&methods, reg->wps->config_methods);
+ 	if (reg->sel_reg_config_methods_override >= 0)
+ 		methods = reg->sel_reg_config_methods_override;
++#endif /* CONFIG_TENDONIN */
+ 	wpa_printf(MSG_DEBUG, "WPS:  * Selected Registrar Config Methods (%x)",
+ 		   methods);
+ 	wpabuf_put_be16(msg, ATTR_SELECTED_REGISTRAR_CONFIG_METHODS);
+@@ -620,9 +622,12 @@ static int wps_build_probe_config_methods(struct wps_registrar *reg,
+ 	 * These are the methods that the AP supports as an Enrollee for adding
+ 	 * external Registrars.
+ 	 */
+-	methods = reg->wps->config_methods & ~WPS_CONFIG_PUSHBUTTON;
++	methods = reg->wps->config_methods;
++#ifndef CONFIG_TENDONIN
++	methods &= ~WPS_CONFIG_PUSHBUTTON;
+ 	methods &= ~(WPS_CONFIG_VIRT_PUSHBUTTON |
+ 		     WPS_CONFIG_PHY_PUSHBUTTON);
++#endif /* CONFIG_TENDONIN */
+ 	wpa_printf(MSG_DEBUG, "WPS:  * Config Methods (%x)", methods);
+ 	wpabuf_put_be16(msg, ATTR_CONFIG_METHODS);
+ 	wpabuf_put_be16(msg, 2);
+-- 
+2.51.0

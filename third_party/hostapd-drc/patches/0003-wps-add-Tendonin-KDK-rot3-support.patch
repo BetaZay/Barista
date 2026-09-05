@@ -1,0 +1,49 @@
+From fda1462e9e64e8091dd3b41153941baf5b805918 Mon Sep 17 00:00:00 2001
+From: Cemu <cemu@example.invalid>
+Date: Tue, 12 May 2026 19:28:53 -0600
+Subject: [PATCH 3/3] wps: add Tendonin KDK rot3 support
+
+---
+ src/wps/wps_common.c | 13 +++++++++++++
+ src/wps/wps_defs.h   |  1 +
+ 2 files changed, 14 insertions(+)
+
+diff --git a/src/wps/wps_common.c b/src/wps/wps_common.c
+index 747dc47..373ce52 100644
+--- a/src/wps/wps_common.c
++++ b/src/wps/wps_common.c
+@@ -112,6 +112,19 @@ int wps_derive_keys(struct wps_data *wps)
+ 	hmac_sha256_vector(dhkey, sizeof(dhkey), 3, addr, len, kdk);
+ 	wpa_hexdump_key(MSG_DEBUG, "WPS: KDK", kdk, sizeof(kdk));
+ 
++#ifdef CONFIG_TENDONIN
++	{
++		u8 rotate_data[3];
++
++		os_memcpy(rotate_data, kdk, sizeof(rotate_data));
++		os_memmove(kdk, kdk + sizeof(rotate_data),
++			   sizeof(kdk) - sizeof(rotate_data));
++		os_memcpy(kdk + sizeof(kdk) - sizeof(rotate_data), rotate_data,
++			  sizeof(rotate_data));
++		wpa_hexdump_key(MSG_DEBUG, "WPS: KDK_ROT3", kdk, sizeof(kdk));
++	}
++#endif /* CONFIG_TENDONIN */
++
+ 	wps_kdf(kdk, NULL, 0, "Wi-Fi Easy and Secure Key Derivation",
+ 		keys, sizeof(keys));
+ 	os_memcpy(wps->authkey, keys, WPS_AUTHKEY_LEN);
+diff --git a/src/wps/wps_defs.h b/src/wps/wps_defs.h
+index ddaeda5..412544b 100644
+--- a/src/wps/wps_defs.h
++++ b/src/wps/wps_defs.h
+@@ -281,6 +281,7 @@ enum wps_assoc_state {
+ 
+ 
+ #define WPS_DEV_OUI_WFA 0x0050f204
++#define WPS_DEV_OUI_NIN ((0x00a4c0e1 << 8) | 0xf4)
+ 
+ enum wps_dev_categ {
+ 	WPS_DEV_COMPUTER = 1,
+-- 
+2.54.0
+

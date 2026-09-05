@@ -1,0 +1,36 @@
+From 1313131313131313131313131313131313131313 Mon Sep 17 00:00:00 2001
+From: drc-project <drc-project@example.invalid>
+Date: Thu, 3 Sep 2026 20:30:00 -0600
+Subject: [PATCH] AP: reassert Tendonin station state after association ACK
+
+The Wii U GamePad completes the four-way handshake, but mac80211 rejects
+the pairwise key with ENOENT because its station is no longer marked
+associated.  hostapd calls hostapd_set_sta_flags() after the association
+response is acknowledged, but that helper normally excludes the
+AUTHENTICATED and ASSOCIATED flags because they were supplied by the earlier
+station-add/update operation.
+
+Include those flags for the Tendonin build so the post-ACK update restores
+the exact state mac80211 requires before accepting a pairwise key.
+---
+ src/ap/ap_drv_ops.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/ap/ap_drv_ops.c b/src/ap/ap_drv_ops.c
+index e1a1c49..94e5513 100644
+--- a/src/ap/ap_drv_ops.c
++++ b/src/ap/ap_drv_ops.c
+@@ -316,6 +316,11 @@ int hostapd_set_sta_flags(struct hostapd_data *hapd, struct sta_info *sta)
+ 	total_flags = hostapd_sta_flags_to_drv(sta->flags);
+ 	set_flags = WPA_STA_SHORT_PREAMBLE | WPA_STA_WMM | WPA_STA_MFP |
+ 		WPA_STA_AUTHORIZED;
++#ifdef CONFIG_TENDONIN
++	/* Reassert these after the association response TX status callback. */
++	set_flags |= WPA_STA_AUTHENTICATED | WPA_STA_ASSOCIATED;
++#endif /* CONFIG_TENDONIN */
++
+ 
+ 	/*
+ 	 * All the station flags other than WPA_STA_SHORT_PREAMBLE are relevant
+-- 
+2.54.0

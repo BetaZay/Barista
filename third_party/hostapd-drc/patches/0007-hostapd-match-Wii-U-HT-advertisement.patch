@@ -1,0 +1,107 @@
+From 7d915124d45335dfd22583aeb12ddbcfc5dfaa2a Mon Sep 17 00:00:00 2001
+From: drc-project <drc-project@example.invalid>
+Date: Wed, 2 Sep 2026 21:00:00 -0600
+Subject: [PATCH 7/7] hostapd: match Wii U HT advertisement
+
+Use the HT capability, A-MPDU, and RIFS values observed from a real Wii U
+pairing AP. Omit the modern Extended Capabilities IE that the console does
+not advertise.
+---
+ src/ap/beacon.c            |  4 ++++
+ src/ap/ieee802_11_ht.c     |  9 +++++++++
+ src/ap/ieee802_11_shared.c |  7 +++++++
+ 3 files changed, 20 insertions(+)
+
+diff --git a/src/ap/beacon.c b/src/ap/beacon.c
+index 5081f11..b768d88 100644
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -759,7 +759,9 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
+ 		pos = csa_pos;
+ 	}
+ 
++#ifndef CONFIG_TENDONIN
+ 	pos = hostapd_eid_supported_op_classes(hapd, pos);
++#endif /* CONFIG_TENDONIN */
+ 	pos = hostapd_eid_ht_capabilities(hapd, pos);
+ 	pos = hostapd_eid_ht_operation(hapd, pos);
+ 
+@@ -2268,7 +2270,9 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 		hapd->cs_c_off_ecsa_beacon = csa_pos - tail - 1;
+ 	tailpos = csa_pos;
+ 
++#ifndef CONFIG_TENDONIN
+ 	tailpos = hostapd_eid_supported_op_classes(hapd, tailpos);
++#endif /* CONFIG_TENDONIN */
+ 	tailpos = hostapd_eid_ht_capabilities(hapd, tailpos);
+ 	tailpos = hostapd_eid_ht_operation(hapd, tailpos);
+ 
+
+diff --git a/src/ap/ieee802_11_ht.c b/src/ap/ieee802_11_ht.c
+index f90f125..a942340 100644
+--- a/src/ap/ieee802_11_ht.c
++++ b/src/ap/ieee802_11_ht.c
+@@ -35,8 +35,14 @@ u8 * hostapd_eid_ht_capabilities(struct hostapd_data *hapd, u8 *eid)
+ 
+ 	cap = (struct ieee80211_ht_capabilities *) pos;
+ 	os_memset(cap, 0, sizeof(*cap));
++#ifdef CONFIG_TENDONIN
++	/* Match the Wii U pairing AP's captured HT20 advertisement exactly. */
++	cap->ht_capabilities_info = host_to_le16(0x001c);
++	cap->a_mpdu_params = 0x19; /* 16383 bytes, 8 usec minimum spacing */
++#else /* CONFIG_TENDONIN */
+ 	cap->ht_capabilities_info = host_to_le16(hapd->iconf->ht_capab);
+ 	cap->a_mpdu_params = hapd->iface->current_mode->a_mpdu_params;
++#endif /* CONFIG_TENDONIN */
+ 	os_memcpy(cap->supported_mcs_set, hapd->iface->current_mode->mcs_set,
+ 		  16);
+ 
+@@ -96,6 +102,9 @@ u8 * hostapd_eid_ht_operation(struct hostapd_data *hapd, u8 *eid)
+ 
+ 	oper->primary_chan = hapd->iconf->channel;
+ 	oper->operation_mode = host_to_le16(hapd->iface->ht_op_mode);
++#ifdef CONFIG_TENDONIN
++	oper->ht_param |= HT_INFO_HT_PARAM_RIFS_MODE;
++#endif /* CONFIG_TENDONIN */
+ 	if (hapd->iconf->secondary_channel == 1)
+ 		oper->ht_param |= HT_INFO_HT_PARAM_SECONDARY_CHNL_ABOVE |
+ 			HT_INFO_HT_PARAM_STA_CHNL_WIDTH;
+diff --git a/src/ap/ieee802_11_shared.c b/src/ap/ieee802_11_shared.c
+index 3dd3a6a..9dfd525 100644
+--- a/src/ap/ieee802_11_shared.c
++++ b/src/ap/ieee802_11_shared.c
+@@ -362,6 +362,7 @@ void ieee802_11_sa_query_action(struct hostapd_data *hapd,
+ }
+ 
+ 
++#ifndef CONFIG_TENDONIN
+ static void hostapd_ext_capab_byte(struct hostapd_data *hapd, u8 *pos, int idx,
+ 				   bool mbssid_complete)
+ {
+@@ -478,11 +479,16 @@ static void hostapd_ext_capab_byte(struct hostapd_data *hapd, u8 *pos, int idx,
+ 		break;
+ 	}
+ }
++#endif /* CONFIG_TENDONIN */
+ 
+ 
+ u8 * hostapd_eid_ext_capab(struct hostapd_data *hapd, u8 *eid,
+ 			   bool mbssid_complete)
+ {
++#ifdef CONFIG_TENDONIN
++	/* The Wii U pairing beacon does not carry Extended Capabilities. */
++	return eid;
++#else /* CONFIG_TENDONIN */
+ 	u8 *pos = eid;
+ 	u8 len = EXT_CAPA_MAX_LEN, i;
+ 
+@@ -520,6 +526,7 @@ u8 * hostapd_eid_ext_capab(struct hostapd_data *hapd, u8 *eid,
+ 		return eid;
+ 
+ 	return eid + 2 + len;
++#endif /* CONFIG_TENDONIN */
+ }
+ 
+ 
+-- 
+2.51.0

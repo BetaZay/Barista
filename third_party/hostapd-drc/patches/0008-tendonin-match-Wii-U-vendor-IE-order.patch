@@ -1,0 +1,139 @@
+From 5b22e1a499cc67f87f13b798dce2f4ce11100008 Mon Sep 17 00:00:00 2001
+From: Cemu <cemu@example.invalid>
+Date: Wed, 2 Sep 2026 21:15:00 -0600
+Subject: [PATCH 8/8] ap: match Wii U vendor IE ordering
+
+The Wii U places its Broadcom vendor HT IE before the Nintendo WPS IE,
+then emits the Broadcom compatibility IE and WMM parameters.  The GamePad
+uses this legacy layout while selecting a pairing AP.
+---
+ src/ap/beacon.c | 68 +++++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 63 insertions(+), 5 deletions(-)
+
+diff --git a/src/ap/beacon.c b/src/ap/beacon.c
+index ddddddd..eeeeeee 100644
+--- a/src/ap/beacon.c
++++ b/src/ap/beacon.c
+@@ -852,8 +852,21 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
+ 	pos = hostapd_get_wpa_ie(hapd, pos, epos - pos);
+ 	pos = hostapd_get_osen_ie(hapd, pos, epos - pos);
+ 
++#ifdef CONFIG_TENDONIN
++	/* Broadcom vendor HT IE is the first configured vendor element. */
++	if (hapd->conf->vendor_elements &&
++	    wpabuf_len(hapd->conf->vendor_elements) >= 2) {
++		const u8 *vendor = wpabuf_head(hapd->conf->vendor_elements);
++		size_t first_len = 2 + vendor[1];
++		if (first_len <= wpabuf_len(hapd->conf->vendor_elements)) {
++			os_memcpy(pos, vendor, first_len);
++			pos += first_len;
++		}
++	}
++#else /* CONFIG_TENDONIN */
+ 	/* Wi-Fi Alliance WMM */
+ 	pos = hostapd_eid_wmm(hapd, pos);
++#endif /* CONFIG_TENDONIN */
+ 
+ #ifdef CONFIG_WPS
+ 	if (hapd->conf->wps_state && hapd->wps_probe_resp_ie) {
+@@ -863,6 +876,24 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
+ 	}
+ #endif /* CONFIG_WPS */
+ 
++#ifdef CONFIG_TENDONIN
++	/* Remaining vendor elements precede the legacy WMM parameters. */
++	if (hapd->conf->vendor_elements &&
++	    wpabuf_len(hapd->conf->vendor_elements) >= 2) {
++		const u8 *vendor = wpabuf_head(hapd->conf->vendor_elements);
++		size_t first_len = 2 + vendor[1];
++		size_t vendor_len = wpabuf_len(hapd->conf->vendor_elements);
++		if (first_len <= vendor_len) {
++			os_memcpy(pos, vendor + first_len,
++				  vendor_len - first_len);
++			pos += vendor_len - first_len;
++		}
++	}
++
++	/* Wi-Fi Alliance WMM */
++	pos = hostapd_eid_wmm(hapd, pos);
++#endif /* CONFIG_TENDONIN */
++
+ #ifdef CONFIG_P2P
+ 	if ((hapd->conf->p2p & P2P_ENABLED) && params->is_p2p &&
+ 	    hapd->p2p_probe_resp_ie) {
+@@ -885,11 +916,13 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
+ 	pos = hostapd_eid_owe_trans(hapd, pos, epos - pos);
+ 	pos = hostapd_eid_dpp_cc(hapd, pos, epos - pos);
+ 
++#ifndef CONFIG_TENDONIN
+ 	if (hapd->conf->vendor_elements) {
+ 		os_memcpy(pos, wpabuf_head(hapd->conf->vendor_elements),
+ 			  wpabuf_len(hapd->conf->vendor_elements));
+ 		pos += wpabuf_len(hapd->conf->vendor_elements);
+ 	}
++#endif /* CONFIG_TENDONIN */
+ 
+ #ifdef CONFIG_TESTING_OPTIONS
+ 	if (hapd->conf->presp_elements) {
+@@ -2335,8 +2368,21 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 	tailpos = hostapd_get_wpa_ie(hapd, tailpos, tailend - tailpos);
+ 	tailpos = hostapd_get_osen_ie(hapd, tailpos, tailend - tailpos);
+ 
++#ifdef CONFIG_TENDONIN
++	/* Broadcom vendor HT IE is the first configured vendor element. */
++	if (hapd->conf->vendor_elements &&
++	    wpabuf_len(hapd->conf->vendor_elements) >= 2) {
++		const u8 *vendor = wpabuf_head(hapd->conf->vendor_elements);
++		size_t first_len = 2 + vendor[1];
++		if (first_len <= wpabuf_len(hapd->conf->vendor_elements)) {
++			os_memcpy(tailpos, vendor, first_len);
++			tailpos += first_len;
++		}
++	}
++#else /* CONFIG_TENDONIN */
+ 	/* Wi-Fi Alliance WMM */
+ 	tailpos = hostapd_eid_wmm(hapd, tailpos);
++#endif /* CONFIG_TENDONIN */
+ 
+ #ifdef CONFIG_WPS
+ 	if (hapd->conf->wps_state && hapd->wps_beacon_ie) {
+@@ -2346,6 +2392,24 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 	}
+ #endif /* CONFIG_WPS */
+ 
++#ifdef CONFIG_TENDONIN
++	/* Remaining vendor elements precede the legacy WMM parameters. */
++	if (hapd->conf->vendor_elements &&
++	    wpabuf_len(hapd->conf->vendor_elements) >= 2) {
++		const u8 *vendor = wpabuf_head(hapd->conf->vendor_elements);
++		size_t first_len = 2 + vendor[1];
++		size_t vendor_len = wpabuf_len(hapd->conf->vendor_elements);
++		if (first_len <= vendor_len) {
++			os_memcpy(tailpos, vendor + first_len,
++				  vendor_len - first_len);
++			tailpos += vendor_len - first_len;
++		}
++	}
++
++	/* Wi-Fi Alliance WMM */
++	tailpos = hostapd_eid_wmm(hapd, tailpos);
++#endif /* CONFIG_TENDONIN */
++
+ #ifdef CONFIG_P2P
+ 	if ((hapd->conf->p2p & P2P_ENABLED) && hapd->p2p_beacon_ie) {
+ 		os_memcpy(tailpos, wpabuf_head(hapd->p2p_beacon_ie),
+@@ -2368,10 +2432,12 @@ int ieee802_11_build_ap_params(struct hostapd_data *hapd,
+ 	tailpos = hostapd_eid_dpp_cc(hapd, tailpos, tail + tail_len - tailpos);
+ 
++#ifndef CONFIG_TENDONIN
+ 	if (hapd->conf->vendor_elements) {
+ 		os_memcpy(tailpos, wpabuf_head(hapd->conf->vendor_elements),
+ 			  wpabuf_len(hapd->conf->vendor_elements));
+ 		tailpos += wpabuf_len(hapd->conf->vendor_elements);
+ 	}
++#endif /* CONFIG_TENDONIN */
+ 
+ 	tail_len = tailpos > tail ? tailpos - tail : 0;
+ 
+-- 
+2.51.0

@@ -1,0 +1,64 @@
+From 3130303030303030303030303030303030303030 Mon Sep 17 00:00:00 2001
+From: drc-project <drc-project@example.invalid>
+Date: Thu, 3 Sep 2026 18:30:00 -0600
+Subject: [PATCH] nl80211: retry Tendonin initial group key
+
+Some mac80211 drivers finish their AP security context asynchronously after
+START_AP.  In particular, rtw89 can transiently return ENOENT when hostapd
+installs the initial GTK immediately after setting the beacon.  Retry only
+this initial Tendonin group-key operation, keeping normal key errors intact.
+---
+ src/drivers/driver_nl80211.c | 38 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+index 3c3fcb8..dc83918 100644
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -3619,4 +3619,44 @@ static int wpa_driver_nl80211_set_key(struct i802_bss *bss,
+ 	ret = send_and_recv_cmd(drv, msg);
++#ifdef CONFIG_TENDONIN
++	if (ret == -ENOENT && alg != WPA_ALG_NONE &&
++	    (key_flag & KEY_FLAG_GROUP)) {
++		static const unsigned int retry_delays_us[] = { 100000, 250000,
++			500000 };
++		u32 suite = wpa_alg_to_cipher_suite(alg, key_len);
++		size_t attempt;
++
++		for (attempt = 0;
++		     attempt < ARRAY_SIZE(retry_delays_us) && ret == -ENOENT;
++		     attempt++) {
++			struct nlattr *key_attr;
++
++			wpa_printf(MSG_DEBUG,
++				   "nl80211: Tendonin GTK not ready; retry %zu/%zu after %u us",
++				   attempt + 1, ARRAY_SIZE(retry_delays_us),
++				   retry_delays_us[attempt]);
++			os_sleep(0, retry_delays_us[attempt]);
++			msg = nl80211_ifindex_msg(drv, ifindex, 0,
++						      NL80211_CMD_NEW_KEY);
++			if (!msg)
++				break;
++			key_attr = nla_nest_start(msg, NL80211_ATTR_KEY);
++			if (!key_attr ||
++			    nla_put(msg, NL80211_KEY_DATA, key_len, key) ||
++			    nla_put_u32(msg, NL80211_KEY_CIPHER, suite) ||
++			    (seq && seq_len &&
++			     nla_put(msg, NL80211_KEY_SEQ, seq_len, seq)) ||
++			    nla_put_u8(msg, NL80211_KEY_IDX, key_idx) ||
++			    nla_put_u32(msg, NL80211_KEY_TYPE,
++					NL80211_KEYTYPE_GROUP)) {
++				nl80211_nlmsg_clear(msg);
++				nlmsg_free(msg);
++				break;
++			}
++			nla_nest_end(msg, key_attr);
++			ret = send_and_recv_cmd(drv, msg);
++		}
++	}
++#endif /* CONFIG_TENDONIN */
+ 	if ((ret == -ENOENT || ret == -ENOLINK) && alg == WPA_ALG_NONE)
+ 		ret = 0;
+ 	if (ret)
+-- 
+2.54.0
