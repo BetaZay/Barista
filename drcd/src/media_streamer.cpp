@@ -1,5 +1,8 @@
 #include "drcd/media_streamer.h"
+#include "real_replay.h"
 #include "serial_video_sender.h"
+#include "format_slot_scheduler.h"
+#include "video_packet_schedule.h"
 
 #include "drc_host/runtime_transport.h"
 #include "drc_ipc/media_bridge.h"
@@ -74,11 +77,6 @@ constexpr int kMacroblocksPerChunk = kMacroblocksPerRow * 6;
 constexpr int kVideoFpsNumerator = 60000;
 constexpr int kVideoFpsDenominator = 1001;
 constexpr auto kVideoFramePeriod = std::chrono::microseconds(16683);
-constexpr std::array<std::chrono::microseconds, kChunksPerFrame> kChunkSendOffsets{
-	std::chrono::microseconds(0), std::chrono::microseconds(3000),
-	std::chrono::microseconds(6000), std::chrono::microseconds(9000),
-	std::chrono::microseconds(11000)};
-static_assert(kChunkSendOffsets.back() < kVideoFramePeriod);
 
 void GeneratePattern(std::span<uint8_t> frame, uint64_t frame_number)
 {
@@ -278,7 +276,7 @@ public:
 		int last_macroblock = 0;
 	};
 
-	VideoEncoder()
+	explicit VideoEncoder(bool preserve_replay_frame_types = false)
 	{
 		x264_param_t parameters{};
 		x264_param_default_preset(&parameters, "slow", "zerolatency");
@@ -307,9 +305,22 @@ public:
 		parameters.i_frame_reference = 1;
 		parameters.b_constrained_intra = 1;
 		parameters.b_intra_refresh = DefaultEnabled("DRCD_INTRA_REFRESH") ? 1 : 0;
+		// Without PIR, the 30-frame keyint overrides explicit P requests with
+		// automatic IDRs. Offline comparison must retain the captured frame types.
+		// Keep the normal live encoder and PIR-enabled comparison unchanged.
+		if (preserve_replay_frame_types && !parameters.b_intra_refresh)
+			parameters.i_keyint_max = X264_KEYINT_MAX_INFINITE;
 		parameters.analyse.i_weighted_pred = 0;
 		parameters.analyse.b_weighted_bipred = 0;
 		parameters.analyse.b_transform_8x8 = 0;
+		// At fixed QP32, early P-skip and texture-biased RD leave uneven blocks
+		// in uniform fades. Evaluate residuals fully and prioritize pixel fidelity.
+		const char* legacy_quality = std::getenv("DRCD_LEGACY_ENCODER_QUALITY");
+		if (!legacy_quality || std::strcmp(legacy_quality, "1") != 0)
+		{
+			parameters.analyse.b_fast_pskip = 0;
+			parameters.analyse.b_psy = 0;
+		}
 		parameters.analyse.i_chroma_qp_offset = 0;
 		parameters.rc.i_rc_method = X264_RC_CQP;
 		parameters.rc.i_qp_constant = parameters.rc.i_qp_min = parameters.rc.i_qp_max = VideoQuantizer();
@@ -324,6 +335,17 @@ public:
 		parameters.i_log_level = X264_LOG_WARNING;
 		x264_param_apply_profile(&parameters, "main");
 		m_encoder = x264_encoder_open(&parameters);
+		if (m_encoder)
+		{
+			x264_param_t effective{};
+			x264_encoder_parameters(m_encoder, &effective);
+			// Check the effective contract, not just the requested pre-open value.
+			if (effective.analyse.i_chroma_qp_offset != 0)
+			{
+				x264_encoder_close(m_encoder);
+				m_encoder = nullptr;
+			}
+		}
 	}
 
 	~VideoEncoder() { if (m_encoder) x264_encoder_close(m_encoder); }
@@ -332,10 +354,10 @@ public:
 	std::vector<Chunk> encode(std::vector<uint8_t>& frame, bool request_idr,
 		bool& encoded_idr, std::string& error)
 	{
+		if (frame.size() != kRawFrameSize)
+		{ error = "DRH encoder requires one complete 864x480 I420 picture"; return {}; }
 		m_chunks = {};
 		m_chunk_present = {};
-		m_chunk_payloads = {};
-		m_chunk_sizes = {};
 		m_callback_error.clear();
 		x264_picture_t input{};
 		x264_picture_init(&input);
@@ -369,14 +391,6 @@ public:
 				" chunks (expected 5)";
 			return {};
 		}
-		// CABAC may report bytes which are still outstanding at callback time;
-		// their final value is resolved as later macroblocks are encoded.  Keep
-		// the x264 pointers in the callback and copy only after the frame has
-		// completely finished, as the original libdrc encoder does.
-		for (size_t index = 0; index < kChunksPerFrame; ++index)
-			m_chunks[index].bytes.assign(m_chunk_payloads[index],
-				m_chunk_payloads[index] + m_chunk_sizes[index]);
-
 		encoded_idr = std::all_of(m_chunks.begin(), m_chunks.end(), [](const Chunk& chunk) {
 			return chunk.nal_type == NAL_SLICE_IDR &&
 				chunk.reference_priority != NAL_PRIORITY_DISPOSABLE;
@@ -414,23 +428,27 @@ private:
 				std::to_string(chunk_index);
 			return;
 		}
+		if (nal->i_first_mb != chunk_index * kMacroblocksPerChunk ||
+			nal->i_last_mb != (chunk_index + 1) * kMacroblocksPerChunk - 1)
+		{
+			self.m_callback_error = "DRH callback does not describe exactly six logical rows";
+			return;
+		}
 		self.m_chunks[chunk_index] = {
-			.bytes = {},
+			.bytes = {nal->p_payload, nal->p_payload + nal->i_payload},
 			.nal_type = nal->i_type,
 			.reference_priority = nal->i_ref_idc,
 			.first_macroblock = nal->i_first_mb,
 			.last_macroblock = nal->i_last_mb,
 		};
-		self.m_chunk_payloads[chunk_index] = nal->p_payload;
-		self.m_chunk_sizes[chunk_index] = static_cast<size_t>(nal->i_payload);
+		// Patched x264 now publishes only after CABAC flush. Own the finalized
+		// bytes immediately; no pointers into the next encode survive this call.
 		self.m_chunk_present[chunk_index] = true;
 	}
 
 	x264_t* m_encoder = nullptr;
 	std::array<Chunk, kChunksPerFrame> m_chunks{};
 	std::array<bool, kChunksPerFrame> m_chunk_present{};
-	std::array<const uint8_t*, kChunksPerFrame> m_chunk_payloads{};
-	std::array<size_t, kChunksPerFrame> m_chunk_sizes{};
 	std::string m_callback_error;
 };
 
@@ -440,12 +458,107 @@ MediaStreamer::MediaStreamer(drc_host::RuntimeTransport& transport, std::string 
 
 MediaStreamer::~MediaStreamer() { stop(); }
 
+bool MediaStreamer::reencode_replay(std::istream& input, std::ostream& output, std::string& error)
+{
+	VideoEncoder encoder(true);
+	if (!encoder.valid()) { error = "replay encoder initialization failed"; return false; }
+	std::vector<uint8_t> frame(kRawFrameSize);
+	while (input.peek() != std::char_traits<char>::eof())
+	{
+		const int requested = input.get();
+		if ((requested != 0 && requested != 1) || !input.read(reinterpret_cast<char*>(frame.data()), frame.size()))
+		{ error = "truncated/invalid offline frame"; return false; }
+		bool idr = false;
+		auto chunks = encoder.encode(frame, requested == 1, idr, error);
+		if (chunks.size() != 5 || idr != bool(requested))
+		{ if (error.empty()) error = "offline encoder changed frame type"; return false; }
+		for (const auto& chunk : chunks)
+		{
+			const uint32_t size = chunk.bytes.size();
+			const char header[]{char(size), char(size>>8), char(size>>16), char(size>>24)};
+			output.write(header, sizeof(header));
+			output.write(reinterpret_cast<const char*>(chunk.bytes.data()), size);
+		}
+		output.flush();
+		if (!output) { error = "offline output failed"; return false; }
+	}
+	return true;
+}
+
 bool MediaStreamer::start(std::string& error)
 {
 	if (m_running.exchange(true))
 		return true;
 	const char* media_socket = std::getenv("DRCD_CEMU_SOCKET");
 	const bool external_media = media_socket && *media_socket;
+	const char* replay_path = std::getenv("DRCD_REAL_REPLAY");
+	if (replay_path && *replay_path)
+	{
+		if (!m_black_frames || external_media || !m_path.empty())
+		{
+			m_running.store(false);
+			error = "DRCD_REAL_REPLAY requires --black without Cemu/file input";
+			return false;
+		}
+		try
+		{
+			auto replay = RealReplay::Load(replay_path);
+			m_stop.store(false);
+			m_transport.report_status("Real-console replay: encoded bytes/boundaries/relative timing preserved; fresh timestamps and sequences; no encoder");
+			m_transport.report_status("Replay recovery policy: requests counted; next captured IDR handles recovery, no synthetic IDRs inserted");
+			m_video_thread = std::thread([this, replay = std::move(replay)] {
+				using namespace std::chrono;
+				uint16_t video_seq = 0, audio_seq = 0;
+				uint64_t loops = 0;
+				while (!m_stop.load())
+				{
+					const auto origin = steady_clock::now();
+					const uint32_t base = m_transport.timestamp_us() + replay.video_offset - 6250u;
+					for (const auto& record : replay.packets)
+					{
+						const auto deadline = origin + microseconds(record.offset);
+						while (!m_stop.load() && steady_clock::now() < deadline)
+							std::this_thread::sleep_until(std::min(deadline, steady_clock::now() + milliseconds(2)));
+						if (m_stop.load()) break;
+						if (steady_clock::now() - deadline > milliseconds(20))
+						{
+							m_transport.report_status("Replay aborted: scheduler more than 20ms late; refusing catch-up burst");
+							m_stop.store(true); break;
+						}
+						auto packet = record.data;
+						const bool video = record.kind == 0;
+						const size_t pos = record.kind == 1 ? 8 : 4;
+						const uint32_t old_stamp = video ? (uint32_t(packet[4]) << 24) | (uint32_t(packet[5]) << 16) |
+							(uint32_t(packet[6]) << 8) | packet[7] : RealReplay::LE(packet.data()+pos);
+						const uint32_t stamp = base + (old_stamp - replay.video_stamp);
+						for (size_t j=0; j<4; ++j) packet[pos+j] = static_cast<uint8_t>(stamp >> (video ? 24-8*j : 8*j));
+						if (record.kind != 1)
+						{
+							auto& seq = video ? video_seq : audio_seq;
+							packet[0] = (packet[0] & 0xfc) | ((seq >> 8) & 3);
+							packet[1] = seq & 255; seq = (seq+1) & 1023;
+						}
+						std::string send_error;
+						if (!m_transport.send(video ? drc_host::RuntimeChannel::Video : drc_host::RuntimeChannel::Audio, packet, send_error))
+						{
+							m_transport.report_status("Replay aborted: " + send_error);
+							m_stop.store(true); break;
+						}
+					}
+					m_transport.report_status("Replay loop=" + std::to_string(++loops) + " recovery_requests=" +
+						std::to_string(m_transport.stats().video_resync_requests));
+					// Loop seam is deliberately an IDR restart, not part of the original timing.
+					std::this_thread::sleep_for(milliseconds(17));
+				}
+				m_running.store(false);
+			});
+			return true;
+		}
+		catch (const std::exception& ex)
+		{
+			m_running.store(false); error = ex.what(); return false;
+		}
+	}
 	if (external_media && (!m_path.empty() || m_black_frames))
 	{
 		m_running.store(false);
@@ -668,7 +781,6 @@ void MediaStreamer::video_loop()
 	}
 	uint16_t sequence = 0;
 	uint64_t frame_number = 0;
-	auto next_frame = std::chrono::steady_clock::now();
 	auto next_status = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 	bool initialized = false;
 	bool force_idr = true;
@@ -676,6 +788,7 @@ void MediaStreamer::video_loop()
 	bool external_active = false;
 	bool external_connected = false;
 	uint64_t encode_failures = 0;
+	uint64_t late_video_starts = 0; // Serial sender only.
 	uint64_t interval_encode_us = 0;
 	uint64_t interval_encode_max_us = 0;
 	uint64_t interval_encoded_frames = 0;
@@ -685,26 +798,38 @@ void MediaStreamer::video_loop()
 	uint64_t interval_predicted_us = 0;
 	uint64_t interval_over_budget = 0;
 	uint64_t interval_resync_events = 0;
+	uint64_t interval_coalesced_events = 0;
+	// Covers IDR encoding/delivery, the empty slot, and the first resumed P.
+	// This is a host lifecycle, not a claim about the pad's internal state.
+	std::mutex recovery_mutex;
+	bool recovering = true;
+	uint64_t recovery_generation = 0;
 	const char* fast_encode = std::getenv("DRCD_FAST_ENCODE");
 	const char* option_order = std::getenv("DRCD_REFERENCE_VIDEO_OPTIONS");
 	const bool send_time_video = DefaultEnabled("DRCD_SEND_TIME_VIDEO");
 	const bool recovery_init = DefaultEnabled("DRCD_IDR_INIT");
 	const bool chunk_pacing = DefaultEnabled("DRCD_CHUNK_PACING");
+	const char* all_idr_option = std::getenv("DRCD_ALL_IDR");
+	const bool all_idr = all_idr_option && std::strcmp(all_idr_option, "1") == 0;
+	m_transport.report_status(all_idr
+		? "Video experiment: every frame independently encoded as IDR; increased encode/radio load expected"
+		: "Video reference chain: baseline IDR/P encoding");
 	m_transport.report_status(chunk_pacing
-		? "Video chunk pacing: 0/3/6/9/11ms, packets within each chunk contiguous"
+		? "Video pacing: 0/3/6/9/11ms chunk starts; multi-packet IDR/P chunks spread through 2.5/5/7.5/10/13ms"
 		: "Video chunk pacing disabled: whole-frame burst");
-	const char* recovery_pause_option = std::getenv("DRCD_IDR_PAUSE");
-	const bool recovery_pause = recovery_pause_option && std::strcmp(recovery_pause_option, "1") == 0;
-	m_transport.report_status(recovery_pause
-		? "Video recovery experiment: next frame scheduled 33.366ms after IDR send"
-		: "Video recovery spacing: baseline frame interval");
+	m_transport.report_status("Video recovery: IDR / format-only slot / P; coalesce until resumed P delivery; DRCD_IDR_PAUSE retired");
 	m_transport.report_status(recovery_init
 		? "Video recovery experiment: init bit on every IDR packet"
 		: "Video recovery: baseline init bit on first session frame only");
 	m_transport.report_status(send_time_video
-		? "Video timestamp experiment: after pacing sleep, AP clock minus 6250us; PCM unchanged"
+		? "Media sync: format AP TSF-1250us, video 5000us later with identical timestamp; PCM unchanged"
 		: "Video timestamp: baseline before encoding and pacing sleep");
+	m_transport.report_status("DRH encoder contract: effective chroma QP offset=0 (post-psy normalization)");
 	m_transport.report_status("Video quantizer: QP=" + std::to_string(VideoQuantizer()));
+	const char* legacy_quality = std::getenv("DRCD_LEGACY_ENCODER_QUALITY");
+	m_transport.report_status(legacy_quality && std::strcmp(legacy_quality, "1") == 0
+		? "Encoder quality: legacy psy/fast-P-skip"
+		: "Encoder quality: pixel-fidelity RD; early P-skip disabled");
 	const bool reference_options = option_order && std::strcmp(option_order, "1") == 0;
 	m_transport.report_status(reference_options
 		? "Video options: reference console order experiment"
@@ -716,6 +841,15 @@ void MediaStreamer::video_loop()
 		? "Video cyclic intra-refresh: enabled (baseline)"
 		: "Video cyclic intra-refresh: disabled (compatibility test); requested IDRs retained");
 	SerialVideoSender sender;
+	FormatSlotScheduler formats([&](std::optional<uint32_t> legacy) {
+		const uint32_t stamp = legacy.value_or(FormatVideoTimestamp(m_transport.timestamp_us()));
+		const auto packet = BuildVideoFormatPacket(stamp);
+		std::string send_error;
+		if (!m_transport.send(drc_host::RuntimeChannel::Audio, packet, send_error))
+			throw std::runtime_error("format send failed: " + send_error);
+		return stamp;
+	});
+	m_transport.report_status("DRH encoder v2: finalized CABAC slice, logical six-row chunks, two-byte read-ahead, owned output");
 	m_transport.report_status("Video pipeline: independent serial sender; at most one next frame encoding; no frame drops");
 	while (!m_stop.load() && (m_black_frames || m_bridge || ReadExact(pipe, frame)))
 	{
@@ -737,9 +871,17 @@ void MediaStreamer::video_loop()
 		}
 		if (m_generated_pattern)
 			GeneratePattern(frame, frame_number);
-		const bool resync_requested = m_transport.consume_video_resync_event();
-		interval_resync_events += resync_requested;
-		force_idr = resync_requested || force_idr;
+		uint64_t frame_recovery_generation;
+		{
+			std::lock_guard lock(recovery_mutex);
+			const bool resync_requested = m_transport.consume_video_resync_event();
+			interval_resync_events += resync_requested;
+			const bool coalesced = resync_requested && recovering;
+			interval_coalesced_events += coalesced;
+			force_idr = all_idr || (resync_requested && !coalesced) || force_idr;
+			if (force_idr) { recovering = true; ++recovery_generation; }
+			frame_recovery_generation = recovery_generation;
+		}
 		// libdrc timestamps the input before encoding, then transmits the
 		// completed frame on the following frame boundary.
 		uint32_t timestamp = m_transport.timestamp_us();
@@ -764,6 +906,12 @@ void MediaStreamer::video_loop()
 		}
 		if (idr)
 		{
+			if (!force_idr)
+			{
+				std::lock_guard lock(recovery_mutex);
+				recovering = true;
+				frame_recovery_generation = ++recovery_generation;
+			}
 			++interval_idr_frames;
 			interval_idr_us += encode_us;
 		}
@@ -774,9 +922,12 @@ void MediaStreamer::video_loop()
 		}
 		auto format = BuildVideoFormatPacket(timestamp);
 		std::vector<std::vector<uint8_t>> frame_packets;
+		std::vector<std::chrono::microseconds> packet_offsets;
 		for (size_t chunk_index = 0; chunk_index < chunks.size(); ++chunk_index)
 		{
 			auto remaining = std::span<const uint8_t>(chunks[chunk_index].bytes);
+			const size_t packet_count = (remaining.size() + kMaxVideoPayload - 1) / kMaxVideoPayload;
+			size_t chunk_packet = 0;
 			bool first_packet = true;
 			while (!remaining.empty())
 			{
@@ -787,6 +938,7 @@ void MediaStreamer::video_loop()
 					chunk_index + 1 == chunks.size() && last_packet, idr, reference_options);
 				sequence &= 0x3ff;
 				frame_packets.push_back(packet);
+				packet_offsets.push_back(VideoPacketOffset(chunk_index, chunk_packet++, packet_count));
 				remaining = remaining.subspan(count);
 				first_packet = false;
 			}
@@ -794,46 +946,59 @@ void MediaStreamer::video_loop()
 
 		const bool dump_frame = !artifact_dumped && idr;
 		artifact_dumped |= dump_frame;
+		FormatSlotScheduler::Slot slot;
+		if (!formats.Reserve(idr, send_time_video ? std::nullopt : std::optional(timestamp), slot))
+		{
+			m_transport.report_status("Format scheduler failed; stopping media");
+			m_stop.store(true);
+			break;
+		}
+		if (m_stop.load()) break;
+		const auto frame_deadline = slot.published +
+			(send_time_video ? kFormatVideoLead : std::chrono::microseconds(0));
+		timestamp = slot.timestamp;
+		StampVideoFrame(timestamp, format, frame_packets);
 		if (!sender.Submit([&, chunks = std::move(chunks), format = std::move(format),
-			frame_packets = std::move(frame_packets), timestamp, idr, frame_number,
-			dump_frame, error = std::move(error)]() mutable {
-		// The sender exclusively owns the pacing deadline and packet buffers.
-		// The producer can encode the next frame during this frame's waits.
-		// Preserve the frame boundary, then pace chunks, not individual packets.
-		// Rebase after an overrun without catching up.
-		next_frame = std::max(next_frame + kVideoFramePeriod,
-			std::chrono::steady_clock::now());
-		std::this_thread::sleep_until(next_frame);
+			frame_packets = std::move(frame_packets), packet_offsets = std::move(packet_offsets), timestamp, idr, frame_number,
+			dump_frame, frame_deadline, frame_recovery_generation, error = std::move(error)]() mutable {
+		// Only video runs here. A format for the next frame may already be on
+		// the audio socket; all video stays serialized with immutable timestamps.
+		std::this_thread::sleep_until(frame_deadline);
 		if (m_stop.load())
 			return;
-		if (send_time_video)
-		{
-			// The reference console's beacon-aligned video age is about 6.27ms.
-			// Stamp AFTER both encoding and sleep: a slow IDR must not acquire
-			// extra timestamp age from either. Do not alter cadence or PCM.
-			timestamp = m_transport.timestamp_us() - 6250u;
-			StampVideoFrame(timestamp, format, frame_packets);
-		}
 		const auto frame_send_started = std::chrono::steady_clock::now();
-		bool sends_ok = m_transport.send(drc_host::RuntimeChannel::Audio, format, error);
-		size_t sending_chunk = 0;
+		const auto late_us = std::chrono::duration_cast<std::chrono::microseconds>(
+			frame_send_started - frame_deadline).count();
+		if (late_us >= 1000 && (++late_video_starts <= 3 || late_video_starts % 120 == 0))
+			m_transport.report_status("Video start late by " + std::to_string(late_us) +
+				"us; shared format/video timestamp preserved; late_starts=" + std::to_string(late_video_starts));
+		bool sends_ok = true;
 		for (size_t packet_index = 0; packet_index < frame_packets.size(); ++packet_index)
 		{
-			if (chunk_pacing && (packet_index == 0 || (frame_packets[packet_index - 1][2] & 0x20)))
+			if (chunk_pacing)
 			{
-				std::this_thread::sleep_until(frame_send_started + kChunkSendOffsets.at(sending_chunk++));
+				std::this_thread::sleep_until(frame_send_started + packet_offsets[packet_index]);
 				if (m_stop.load()) break;
 			}
 			sends_ok = m_transport.send(drc_host::RuntimeChannel::Video,
 				frame_packets[packet_index], error) && sends_ok;
 		}
-		if (recovery_pause && idr)
+		if (!sends_ok)
 		{
-			// The next loop adds one more frame period before sending. Anchor
-			// this extra interval to the actual IDR send, not an expired deadline.
-			// No frame is encoded then discarded: preserve the reference chain.
-			// Audio and input workers remain independent of video pacing.
-			next_frame = frame_send_started + kVideoFramePeriod;
+			m_transport.report_status("Video send failed; stopping media to preserve reference order: " + error);
+			m_stop.store(true);
+		}
+		if (!idr && !m_stop.load())
+		{
+			std::lock_guard lock(recovery_mutex);
+			// Drain requests accumulated during this recovery before reopening
+			// the gate. A later request remains eligible for another recovery.
+			// An older P must not complete a newer IDR being encoded concurrently.
+			if (recovering && frame_recovery_generation == recovery_generation)
+			{
+				m_transport.consume_video_resync_event();
+				recovering = false;
+			}
 		}
 		if (dump_frame)
 		{
@@ -906,10 +1071,12 @@ void MediaStreamer::video_loop()
 				" idr_avg_us=" + std::to_string(interval_idr_us / std::max<uint64_t>(1, interval_idr_frames)) +
 				" p_frames=" + std::to_string(interval_predicted_frames) +
 				" p_avg_us=" + std::to_string(interval_predicted_us / std::max<uint64_t>(1, interval_predicted_frames)) +
-				" resync_events=" + std::to_string(interval_resync_events));
+				" resync_events=" + std::to_string(interval_resync_events) +
+				" coalesced_events=" + std::to_string(interval_coalesced_events));
 			interval_encode_us = interval_encode_max_us = interval_encoded_frames = 0;
 			interval_idr_frames = interval_idr_us = interval_predicted_frames = interval_predicted_us = 0;
 			interval_over_budget = interval_resync_events = 0;
+			interval_coalesced_events = 0;
 			std::cout << "Media stream active: " << frame_number << " video frames, "
 				<< m_audio_packets.load() << " audio packets" << std::endl;
 			const auto stats = m_transport.stats();
@@ -928,6 +1095,11 @@ void MediaStreamer::video_loop()
 	if (!sender.Finish())
 	{
 		m_transport.report_status("Video sender failed while finishing media");
+		m_stop.store(true);
+	}
+	if (!formats.Finish())
+	{
+		m_transport.report_status("Format scheduler failed while finishing media");
 		m_stop.store(true);
 	}
 	if (pipe)
@@ -965,6 +1137,10 @@ void MediaStreamer::audio_loop()
 	std::array<uint8_t, kAudioSamplesPerPacket * sizeof(int16_t)> pcm{};
 	uint16_t sequence = 0;
 	uint32_t tone_phase = 0;
+	const char* reference_audio_option = std::getenv("DRCD_REFERENCE_AUDIO_TIME");
+	const uint32_t audio_age_us = reference_audio_option &&
+		std::strcmp(reference_audio_option, "1") == 0 ? 10000u : 0u;
+	m_transport.report_status("PCM timestamp age: " + std::to_string(audio_age_us) + "us; size/cadence unchanged");
 	auto next_packet = std::chrono::steady_clock::now();
 	while (!m_stop.load() && (m_generated_pattern || m_bridge || ReadExact(pipe, pcm)))
 	{
@@ -976,7 +1152,7 @@ void MediaStreamer::audio_loop()
 		// as a burst; schedule from the first available block after a stall.
 		next_packet = std::max(next_packet, std::chrono::steady_clock::now());
 		std::this_thread::sleep_until(next_packet);
-		const auto packet = BuildAudioPacket(pcm, sequence++, m_transport.timestamp_us());
+		const auto packet = BuildAudioPacket(pcm, sequence++, m_transport.timestamp_us() - audio_age_us);
 		sequence &= 0x3ff;
 		std::string error;
 		(void)m_transport.send(drc_host::RuntimeChannel::Audio, packet, error);

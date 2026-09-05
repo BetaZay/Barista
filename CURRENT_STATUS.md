@@ -2,6 +2,534 @@
 
 Last updated: 2026-09-05
 
+## Encoder fade-quality default updated; offline improvement verified
+
+Focused on the white fades: disabled early P-skip and psy optimization by default,
+keeping QP32, chroma offset=0, five-chunk encoding, TSF, PCM, recovery and packet
+pacing unchanged. Both settings can be restored for a direct daemon/worker test
+with `DRCD_LEGACY_ENCODER_QUALITY=1`; the normal profile launcher pins the new mode.
+
+At identical input/QP, the 240-frame uniform fade's luma MSE fell 5.971 → 3.771
+(37%), and boundary error fell 24%. Residual unevenness remains: maximum luma
+range 12 → 11, median still 8. Fade bytes increased 17% with unchanged maximum
+frame size. Four excerpts from test1.mkv/test2.mp4 had 15–22% lower luma MSE and
+7–8% fewer bytes. This is measured encoder improvement, not a claim of complete
+artifact removal or resolution of earlier wireless/recovery problems.
+
+Build and all 18 CTest cases pass, including old/new slow/fast production-byte
+and decoded-reference comparisons plus a fade-quality regression. Saved before/
+after streams are in `/tmp/drcd-fade-quality-ze8WNh/`. See
+[encoder-fade-quality.md](docs/encoder-fade-quality.md) for results, limitations,
+commands and review files. These checks used offline encoder round trips, not
+physical transmission. GamePad acceptance of the new quality policy is pending.
+
+## P spreading did not fix artifacts; Cemu color/fade diagnostic ready
+
+User reports the same artifacts at fades to/from black and hard scene/color
+cuts in `/tmp/drcd-p-spread-ip.pcap`. P spreading did execute: 294 multi-packet
+P chunks had median host-send span 1501us (previous run 6us). All 4,255 complete
+frames decode strictly, with one partial shutdown frame. All 33 IDRs are complete,
+followed by a format-only gap, with no adjacent IDRs. PCM median spacing is
+8667us and format median 16683us. The requested MCS5 phase ran 66.386s before
+user interruption: 3925 frame starts, 30 IDRs, 88 requests; all 34 station samples
+reported MCS5. Counts are not directly comparable to the earlier 120s scene run.
+These host-side results do not prove wireless receipt or hardware decoding.
+
+An offline 64-frame black/red/green/blue/white-cut and fade sequence matched
+the encoder's internal reconstructed pixels exactly in both slow and fast modes.
+This does not establish compatibility with the physical decoder.
+
+Added opt-in `CEMU_DRCD_COLOR_TEST=1` to Cemu, not drcd: a 32s loop of two-second
+solid-color cuts, fades, and detailed checker/color transitions, after a 10s IPC
+lead-in. No game needed; replaces only the physical GamePad bridge source with
+silent test output. Logs phase and source/Unix times. Cemu build and deterministic
+pattern tests pass; 120 detailed fade frames rendered in 143ms on this PC.
+See `Cemu/BUILD.md` for launch commands. Use `/tmp/drcd-cemu-colors.pcap` with
+the MCS5 launcher; no Mac capture required. Hardware outcome pending.
+
+This first diagnostic retains current encoder/recovery policy; it does not yet
+compare explicitly forced IDR transitions. TSF/media protocol and production
+Wi-Fi defaults are unchanged. Restart Cemu without the test flag for normal use.
+
+## Ready for PC-only test: spread multi-packet P chunks
+
+The MCS 5 retry `/tmp/drcd-mcs5-scene-2-ip.pcap` ran successfully: the exact
+120-second requested-rate phase contained 7,129 frame starts, 28 IDRs and 99
+recovery requests, without disconnecting. All 60 station samples reported MCS 5.
+The full capture reconstructed and strictly decoded 7,449 complete frames;
+the remaining partial frame was at shutdown. The user still sees artifacts at
+large transitions/out of black and heavy motion, with smoother motion generally OK.
+
+One concrete sender mismatch: P chunks were sent as bursts even when large,
+whereas IDR chunks already spread their packets. The largest captured P frame
+was 57,906 bytes across 44 packets (chunk counts 9/9/10/8/8); each chunk's
+packets were submitted within roughly 32–40us. This is a candidate, not proof
+of receiver overflow: many recovery requests follow small frames, and that
+largest frame followed an already-started recovery-request episode.
+
+Changed only intra-chunk P packet scheduling. Both frame types now use the
+existing IDR windows: starts at 0/3/6/9/11ms, multi-packet chunks finishing at
+2.5/5/7.5/10/13ms. Single-packet chunks and IDR scheduling are unchanged.
+AP TSF, format publication, PCM, QP32/encoding, packet contents/boundaries,
+recovery lifecycle, and raw replay are unchanged. The explicit whole-frame
+burst diagnostic still bypasses pacing. These are scheduled host deadlines,
+not guaranteed on-air delivery times or a measured real-console P schedule.
+
+Regression coverage checks common scheduling for both frame types, preserved
+single-packet starts, bounds/frame budget, and distinct deadlines for the
+observed 44-packet transition frame. Build and all 18 CTest cases pass;
+launcher dry-run and `git diff --check` pass. Hardware acceptance remains pending.
+
+No new Mac capture needed. From `drc-project`, keep Cemu idle until the
+`mcs5_start` marker, then repeat the troublesome scene:
+
+```sh
+sudo python scripts/test-wifi-rate.py 5 /tmp/drcd-p-spread.pcap --baseline-seconds 5 --seconds 120
+```
+
+The PC capture/log can verify sender pacing and recovery counts; visible
+improvement still needs the GamePad observation. Production Wi-Fi defaults
+are unchanged; the launcher applies MCS 5 after streaming startup.
+
+## Test-launcher startup gate fixed; MCS 5 scene test did not run
+
+`/tmp/drcd-mcs5-scene.rate.jsonl` shows authorization at 23:09:05.392 UTC and
+launcher abort at 23:09:07.354 during baseline, before any `rate_request` event.
+The IP capture has no video, format or PCM packets. drcd was still negotiating
+startup and restarting the AP; the launcher incorrectly treated the first
+authorized link as the start of a stable test and aborted on that retry.
+
+Updated only the test launcher: it now requires current-session DRC handshake
+readiness, a successfully sent first frame, the GamePad active-stream flag and
+an authorized 5 GHz link before starting baseline. Startup retries before rate
+application are allowed and restart baseline within the wait budget. Previous
+session markers are invalidated on teardown/reassociation. Disconnect after the
+rate change still stops the experiment. Production drcd/media behavior is unchanged.
+All 18 launcher/profile/radiotap Python tests pass, including authorization without
+video and startup readiness lost/reacquired. This fixes premature test cancellation,
+not the underlying reason a particular initial negotiation needed a retry.
+
+Retry with a new capture name, keeping Cemu idle until `mcs5_start`:
+
+```sh
+sudo python scripts/test-wifi-rate.py 5 /tmp/drcd-mcs5-scene-2.pcap --baseline-seconds 5 --seconds 120
+```
+
+## MCS tests completed: post-association masks take effect; MCS 5 promising
+
+Compared `mac-mcs{4,5,6}.pcap` with `/tmp/drcd-rate-mcs{4,5,6}*`.
+All launchers completed successfully; the independent Mac metadata shows each
+requested MCS becoming dominant after the change, with some fallback rates.
+All 15 post-change station samples in each run reported its requested MCS.
+Production defaults remain unchanged.
+
+During the exact requested 30-second phases (PC event-file boundaries):
+
+| Requested HT MCS | Recovery requests received | Video frame starts | IDRs |
+| --- | ---: | ---: | ---: |
+| 4 | 71 | 1759 | 25 |
+| 5 | 8 | 1794 | 3 |
+| 6 | 17 | 1791 | 6 |
+
+MCS 5 is the best candidate in these runs, not an established universal winner:
+the content/complexity differed, and the MCS 4 requested phase contained larger
+frames. Each full host capture has continuous video sequences and only one
+unfinished shutdown frame. Format/PCM pacing stayed regular.
+
+User reports artifacts in similar spots on repeated runs. Clarification of scene
+moments versus screen regions is pending. Important confound: the largest
+~53–59KB pictures and ~61–65ms encoding spikes occurred at approximately 5–15s,
+BEFORE the 20-second post-association rate change. Repeating introductory artifacts
+there would not demonstrate that changing the rate failed to affect those frames.
+
+Next targeted validation: keep Cemu at its idle logo until the `mcs5_start` marker,
+then start/replay the problematic scene with MCS 5 already applied. A five-second
+baseline and 120-second requested phase are supported without changing defaults:
+
+```sh
+sudo python scripts/test-wifi-rate.py 5 /tmp/drcd-mcs5-scene.pcap --baseline-seconds 5 --seconds 120
+```
+
+Capture independently on the Mac before connection as usual. Repeated scene-linked
+corruption can arise from deterministic encoder/receiver behavior or repeatable
+delivery bursts; the clean software replay does not distinguish these completely.
+
+## Ready: bounded post-association MCS 6 / 5 / 4 tests
+
+Added `scripts/test-wifi-rate.py`, an opt-in capture launcher. It waits for an
+authorized GamePad, records 20 seconds of baseline, requests one HT MCS mask,
+records 30 seconds, then stops via existing capture cleanup. It records exact
+phase/change times and station statistics in `*.rate.jsonl`; no automatic-rate
+phase or production streaming change is included. Disconnect/rejection stops
+the test. Run each rate in its own PC and Mac capture; see `docs/wifi-rate-tests.md`.
+
+Reason: `/tmp/drcd-motion-air-2*` and `mac-motion-bit.pcap` worsened after the
+manual bitrate-clear test: requests rose, UVC replies stalled, and the pad
+disassociated (reason 8) and reconnected. The resulting ~4.5-second media gap
+and sequence reset cross sessions, not an ordinary dropped frame in one stream.
+Also, both Mac runs show MCS 7 despite the startup "fixed MCS 6" log. Startup
+command acceptance is not actual on-air enforcement; this test applies after
+association and the new key-free `summarize-wifi-rates.py` checks Mac rate metadata.
+
+Tests exercise the launcher with mocked Wi-Fi/processes and radiotap parsing;
+no rate test has been run against hardware by the agent. The working recovery,
+TSF, encoder and PCM baseline remains unchanged. Hardware outcomes are pending.
+
+## Hardware improvement confirmed by user: recovery-slot build
+
+`/tmp/drcd-recovery-slots-ip.pcap`: user reports much smoother playback, top
+artifacts essentially gone, and better stability; some motion artifacts remain.
+Preserve this configuration. Analysis did not change streaming settings.
+
+The capture has 7,444 complete frames (~59.45fps), one partial shutdown frame,
+and no video sequence gaps. All 35 IDRs have the intended format-only gap;
+none is followed directly by another IDR. There were 105 requests during about
+125 seconds of video, plus 15 after video stopped. Formats and PCM remained
+regular, including through a 63.6ms encoding peak. Strict software decode of
+all complete frames passes, but does not prove pad receipt or visual fidelity.
+
+Remaining motion artifacts are not yet assigned to quantization, delivery or
+receiver behavior. A reconstructed local replay is ready for visual comparison;
+authenticated radio matching needs a privileged local credential read. See
+`docs/recovery-slots-result.md` for measurements, limitations and the command.
+
+## Ready for hardware: independent formats and console-style recovery slots
+
+Implemented the console recovery findings below in the live encoder path:
+
+- A separate 59.94Hz format clock continues during slow encoding and recovery.
+  Each ready video frame reserves a future slot and uses that format's immutable
+  timestamp. Missed clock deadlines rebase without a burst of stale formats.
+- Every IDR is followed by one format-only slot before video can resume. The
+  expected ready-encoder sequence is IDR / format-only / P, with approximately
+  33.367ms between those video starts. Slow encoding can leave additional slots
+  empty; already-encoded reference frames are never discarded or reordered.
+- Repeated requests are coalesced from IDR selection through completion of the
+  first resumed P's host transmission. Accumulated requests are drained before
+  reopening the gate; later requests can trigger another recovery. A generation
+  guard prevents an older P from completing a newer concurrent recovery.
+  Explicit source changes can still force an IDR. This host lifecycle is not
+  a measurement of the GamePad's internal recovery completion.
+- Actual AP TSF, format age 1250us, 5000us format/video lead, QP32, chroma offset,
+  encoding/chunks, PCM timing, input, keepalive and recorded replay are unchanged.
+  `DRCD_IDR_PAUSE` is retired/ignored: the gap is now default and formats continue.
+  Explicit all-IDR diagnostics now necessarily use at most about 30 video fps.
+
+Build and all 18 CTest cases pass (socket tests run outside the socket-restricted
+sandbox). New tests cover independent formats during a simulated encoder stall,
+IDR gaps, no catch-up burst after a publisher stall, and publisher failure.
+Loopback streaming injects repeated requests through IDR/gap intervals and checks
+format-only slots, resumed P frames, packet continuity, shared timestamps, PCM
+and input. Hardware artifact reduction remains unverified.
+
+From `drc-project`, keep Cemu using its existing drcd connection and run:
+
+```sh
+sudo bash scripts/test-media-profile.sh baseline cemu /tmp/drcd-recovery-slots.pcap
+```
+
+Use the same motion-heavy scene for 45–60 seconds, then Ctrl-C. This saves
+`/tmp/drcd-recovery-slots.log`, the radio/IP captures and first-IDR artifacts.
+Assess visible top/motion corruption and audio continuity, not just fewer
+requests (coalescing intentionally changes request handling).
+
+## Previous diagnosis (before implementation)
+
+## Console recovery research: format-only slot after every observed real IDR
+
+Research only; production streaming behavior is unchanged. DRH firmware traces
+ordinary GamePad requests separately from wireless-failure recovery. Both are
+coalesced/state-guarded, but only the traced wireless path sets the sender's
+discard-until-IDR gate. Ordinary requests cannot reset capture in transitional
+states 1..4; drcd currently consumes requests before each encode without an
+equivalent recovery lifecycle.
+
+More importantly, all six IDRs in `/tmp/wiiu-real-decrypted-ip.pcap` are followed
+by P video at timestamp +33366/33367us, with a format-only timestamp at
++16683/16684us. Video sequence numbers are consecutive across every gap, strongly
+supporting a sender-side gap rather than a missing captured video frame.
+Formats continue despite missing video slots. The old `DRCD_IDR_PAUSE` option
+delays the coupled format producer too, so it does not reproduce this behavior.
+
+Next targeted implementation: independent 59.94Hz format scheduling, the observed
+IDR / format-only / P pattern, and stateful request coalescing; retain actual AP
+TSF and PCM behavior. This is evidence for a specific compatibility correction,
+not proof of the initial decoder reset's cause. Only 10 requests overlapped an
+IDR's host transmission in the latest run, so suppressing requests only while
+sending an IDR would miss most of the loop. See
+`../wiiu-code/research/CONSOLE_RECOVERY.md`; all 38 research tests pass.
+
+## Hardware result: artifacts persist, then clear during recovery-free stretch
+
+`/tmp/drcd-research-sync-ip.pcap` verifies the current chroma/early-format build:
+4,312 complete outgoing frames, format/video lead median 5,053us, and a passing
+strict software decode of the full reconstructed stream. Nevertheless, the user
+observed heavy top/motion artifacts; this is not a completed hardware fix.
+
+There are 2,202 generic recovery requests. The longest request-free interval is
+49.976..72.321s relative to first video (22.35s); the user confirms top artifacts
+cleared toward the end. This supports investigating resynchronization, without
+proving cause or counting each request as a distinct failed frame. Motion-heavy
+encoding also peaked at ~64.6ms, with 187 outgoing frames in the 35..40s bin.
+
+Console-side investigation found an already-readable `drh_fw.bin` in the supplied
+title tree, so SLC decryption is not needed to start tracing its sender. The first
+map includes a discard-until-IDR/frame-begin mechanism; its upstream trigger is
+not yet confirmed. See `../wiiu-code/research/CONSOLE_SIDE.md`. No additional
+encoder, transport, recovery or AP TSF changes were made during this diagnosis.
+
+## Current build: research-backed chroma and format timing corrections
+
+Applied the concrete findings from `../wiiu-code/research`, preserving actual
+AP TSF selection, QP32 default, five finalized six-row chunks, video packet
+spreading, 416-frame PCM packetization/cadence, input and keepalive policy.
+
+- DRH now enforces **effective chroma QP offset 0 after x264's psy normalization**.
+  Previously requesting zero became -2 in the default slow preset, disagreeing
+  with our implicit/reference PPS. Fast search and reconfiguration also enforce
+  zero. The wrapper checks the post-open value and rejects a mismatched library.
+- Format messages now use AP TSF minus 1250us, followed by video 5000us later
+  with the **same immutable timestamp** (nominal video age remains 6250us).
+  The producer sends the format while the serial sender may still be finishing
+  the preceding frame. This avoids making 5ms lead + 13ms IDR delivery reduce
+  the frame rate. Late production rebases before publishing the format; normal
+  sleep overshoot does not accumulate into cadence drift. Late video starts are
+  reported, not hidden by changing an already-published timestamp.
+- No new environment variable is required. `DRCD_SEND_TIME_VIDEO=0` retains the
+  legacy timestamp/no-early-format diagnostic path. Replay preserves its own
+  recorded schedule; regenerate re-encoded replay assets to use corrected chroma.
+
+The firmware skips sync updates aged >=8000 ticks. In the independent old Mac
+capture, 124/5461 format messages exceeded that estimated age at first observation;
+the console reference had 0/2027. However, early-format replay runs still requested
+recovery. Neither this correction nor the proven offline chroma mismatch alone
+establishes the physical reset cause. Do not count repeated waiting-state requests
+as independent frame failures or change recovery policy on that assumption.
+
+Build and all 17 CTest cases pass (socket tests run with loopback access).
+Validation includes exact reconstructed YUV pixels and production CABAC-byte
+identity for 48 frames each with slow and fast search, plus loopback format age,
+shared timestamp, ~5ms lead, frame cadence, video ordering, PCM and input checks.
+The 300-frame/1500-chunk strict H.264 stress decode also passes. Hardware acceptance
+of this combined build is incomplete (see hardware result above).
+See `docs/research-update.md`.
+
+```sh
+sudo bash scripts/test-media-profile.sh baseline cemu /tmp/drcd-research-sync.pcap
+```
+
+Expected log: `/tmp/drcd-research-sync.log`, including `Media sync: format AP
+TSF-1250us` and `effective chroma QP offset=0`. No change to the paired credentials
+or wireless settings is needed. Sections below are historical context.
+
+## Radio capture now follows monitor recreation
+
+Encoder-v2 hardware run still artifacted: 1864 recovery requests / 45.847s,
+2600 complete outgoing frames, no video sequence gaps, late output ~59.94fps.
+The new IDR packet completion medians matched 2.5/5/7.5/10/13ms. Radio capture
+ended 4.49s before media began because drcd recreated drcdtsf; old tcpdump was
+never restarted. This run therefore cannot establish over-air loss/delivery.
+
+`capture-drcd-session.sh` now launches `capture-radio-follow.py`, which tracks
+the monitor's sysfs ifindex and restarts tcpdump on disappearance/recreation or
+process exit. Complete radiotap records from each attachment are normalized
+into one streaming classic pcap. Partial records at a restart are discarded
+and reported; no raw concatenation of pcap file headers occurs. A companion
+`*.pcap.radio.json` records attachment times/ifindices, record count, first/last
+packet times, partial segments and fatal errors. Reattachment gaps remain
+possible and must not be interpreted as confirmed radio loss.
+
+The parent watchdog checks both radio and decrypted-IP capture processes for
+the entire session. Missing monitor for 30s or three consecutive tcpdump
+failures are fatal; capture failure triggers normal daemon cleanup rather than
+silently collecting an IP-only run. Shutdown sends SIGINT to tcpdump and drains
+its pipe, with a bounded forced-stop fallback. Existing outputs are not reused.
+
+Seven no-hardware tests passed: fragmented pcap input, mixed endian/timestamp
+precision, partial-record recovery, malformed records, monitor disappearance,
+same-name/new-ifindex replacement while the old process remains alive, absent
+monitor timeout and repeated process failure (some covered in combined tests).
+Shell syntax checks pass. Encoder, AP TSF and keepalive code are unchanged.
+
+```sh
+sudo bash scripts/test-media-profile.sh baseline cemu /tmp/drcd-encoder-v2-radio.pcap
+```
+
+Expected log `/tmp/drcd-encoder-v2-radio.log`; capture attachment summary
+`/tmp/drcd-encoder-v2-radio.pcap.radio.json`. Stop normally with Ctrl-C after
+45–60 seconds. Physical capture continuity still needs this run to verify.
+
+
+## Current default: finalized-slice DRH encoder v2
+
+At user request, reworked the encoder/chunk delivery path as the normal default,
+not another opt-in encoder switch. AP TSF selection/readout, send-time TSF-6250us
+video timestamps, 416-frame PCM cadence and live keepalive remain unchanged.
+
+The x264 DRH patch now records four six-row boundaries, finishes and flushes
+the single CABAC slice, then publishes five finalized chunks. It no longer
+publishes partial CABAC buffers during encoding. Boundaries include two bytes
+of conservative arithmetic-decoder read-ahead, bounded against the final slice
+length; ranges are nonempty, contiguous and cover the slice exactly. This is a
+delivery policy, not a proven specification of the GamePad's internal buffer.
+No synthetic padding or independent slice headers are inserted. Tiny chunks
+can still exist; their existence alone has not been established as invalid.
+
+Callbacks now carry exact logical MB ranges 0–323/324–647/648–971/972–1295/
+1296–1619. The wrapper validates them and owns the finalized bytes immediately,
+instead of retaining raw encoder pointers until later. DRH rejects unsupported
+dimensions/non-CABAC/multiple-slice geometry. Existing constrained H.264 settings
+and explicit recovery-IDR generation remain in place.
+
+The serial sender now spreads packets within multi-packet IDR chunks through
+2.5/5/7.5/10/13ms completion windows, retaining 0/3/6/9/11ms chunk starts.
+Single-packet chunks keep their start deadline; P scheduling is unchanged.
+All packets in a frame retain the same send-time timestamp. Added direct
+scheduler tests. Patched x264 build dependencies now cover all C/header/assembly
+inputs, avoiding stale libraries when analysis or CABAC files change.
+
+Verified the 546-frame source clip: all concatenated slice bytes match the old
+encoder; 50 frames have different chunk boundaries. Strict full-clip decoding
+passes. A separate 300-frame flat/moving-checkerboard/chroma stress run covers
+1500 nonempty chunks and repeated forced IDRs, also with strict decoding.
+These are software invariants; physical artifact elimination is not claimed.
+
+Use the normal Cemu stream (no replay):
+
+```sh
+sudo bash scripts/test-media-profile.sh baseline cemu /tmp/drcd-encoder-v2.pcap
+```
+
+Here `baseline` means current defaults and clears earlier replay/experiment
+overrides; the original Git checkpoint remains `34b4866`. Log:
+`/tmp/drcd-encoder-v2.log`, identifying `DRH encoder v2`.
+
+
+## Offline no-intra-refresh replay ready
+
+The re-encoded replay produced 2181 requests in 52.67s versus 741 in 41.19s
+for the original. Three consecutive loops began requesting recovery at about
+0.55s, shortly after cyclic intra-refresh begins at frame 30 (~0.52s). This is
+a correlation, not proof; one re-encoded loop had only a boundary request.
+
+Added `--no-intra-refresh` to the offline converter, leaving default/live
+encoding unchanged. Initially x264 substituted an automatic IDR at frame 30
+when PIR was disabled, and our exact-frame-type check rejected the conversion.
+The offline no-PIR encoder now also sets keyint_max to infinite to prevent that
+substitution; captured explicit IDRs are still honored. The PIR-enabled encoder
+and all normal live paths retain their original keyint settings.
+
+Prepared `/tmp/drc-real-reencoded-no-intra.replay`: 546 frames, one IDR. Compared
+with `/tmp/drc-real-reencoded.replay`, packet counts and scheduled times, video
+flags/timestamps/options and all audio/format records are identical. Only video
+payloads and their length fields change. Strict FFmpeg decoding passes.
+
+```sh
+sudo env -u DRCD_CEMU_SOCKET DRCD_AP_TSF_CLOCK=1 \
+  DRCD_REAL_REPLAY=/tmp/drc-real-reencoded-no-intra.replay \
+  DRCD_LOG_FILE=/tmp/drcd-real-no-intra.log \
+  bash scripts/capture-drcd-session.sh /tmp/drcd-real-no-intra.pcap --np --black
+```
+
+Hardware outcome pending; observe several loops and distinguish within-loop
+corruption from loop seams. Prior replay artifacts remain intact.
+
+
+## Same-content offline re-encode comparison ready
+
+User observed mostly clean real replay (white Wii U logo) and intact audio.
+The recorded replay had two entire loops without recovery until their seams,
+but other loops developed recovery storms. Identical source packets behaved
+differently between loops, so delivery/timing still matters. Radio capture
+ended before playback and cannot establish actual reception for that run.
+
+Added offline `drcd_reencode_replay` and `scripts/reencode-real-replay.py`.
+Decoded all 546 frames of `/tmp/drc-real-reference.replay` at full coded
+864x480 resolution (SPS cropping disabled; no stretching of the visible 854
+columns). Re-encoded through the same VideoEncoder used by normal streaming,
+with QP32/slow/intra-refresh enabled and original IDR/P decisions. Output:
+`/tmp/drc-real-reencoded.replay`. No encode work runs during hardware playback.
+
+Original format/PCM records are byte-for-byte and time-for-time unchanged.
+Video timestamps, options, init flags and chunk-start times match the source.
+Video payloads and lengths change. 18/2730 chunks change packet count; 17 tiny
+chunks now contain only one byte, so cannot retain both original first/last
+packet times without invalid padding. Their last-packet times change. Other
+chunks retain their original time windows, interpolating extra slots if needed.
+This comparison tests encoder/chunk output through the same replay scheduler,
+not perfectly identical packet sizes or airtime. Strict FFmpeg decoding passes.
+
+```sh
+sudo env -u DRCD_CEMU_SOCKET DRCD_AP_TSF_CLOCK=1 \
+  DRCD_REAL_REPLAY=/tmp/drc-real-reencoded.replay \
+  DRCD_LOG_FILE=/tmp/drcd-real-reencoded.log \
+  bash scripts/capture-drcd-session.sh /tmp/drcd-real-reencoded.pcap --np --black
+```
+
+Original replay file and baseline defaults remain intact. Let several loops
+play and distinguish seam artifacts from within-loop corruption. Clean original
+but consistently corrupted re-encode implicates encoder/chunk output; clean
+re-encode shifts attention to the normal live pipeline/recovery/workload. Neither
+result alone excludes radio effects or proves compatibility with complex scenes.
+
+
+## Real-console replay experiment ready
+
+Latest baseline/all-IDR/audio-time hardware runs all artifacted; all-IDR looked
+worst. All sustained ~60 outgoing fps late in the run, with ~40–45 recovery
+requests/sec. Normal concatenated-frame FFmpeg decoding did not expose errors.
+Vanilla ignores timestamps and chunk-end boundaries when assembling pictures,
+so these software tests do not establish physical chunk/deadline compatibility.
+
+Added opt-in `DRCD_REAL_REPLAY` with `--black` (no Cemu/file source). It bypasses
+x264 and normal video/audio workers and transmits captured video, format and
+PCM packets on one ordered schedule. Payloads, packet boundaries, flags and
+relative capture timing are retained. Video/PCM sequences are regenerated;
+all timestamps receive the same modulo-32-bit translation to the live clock,
+anchoring first video at AP TSF minus 6250us. Live keepalive remains unchanged.
+Recovery requests are counted, not converted to synthetic encoder frames.
+Each loop restarts at the captured IDR; loop seams are not original timing.
+Scheduler slips >20ms or send errors abort replay rather than burst old packets.
+
+`scripts/prepare-real-replay.py` extracted 546 complete frames, one IDR,
+546 matching format messages and 1052 PCM packets over 9.125383 seconds from
+`/tmp/wiiu-real-decrypted-ip.pcap` into `/tmp/drc-real-reference.replay`.
+It selects an intact IDR-led chain and rejects gaps/missing formats. The real
+video includes 1710-byte UDP payloads (supported by the session's 1800 MTU).
+No credentials or captured encrypted/session-control packets are replayed.
+
+From drc-project, with Cemu unnecessary:
+
+```sh
+sudo env -u DRCD_CEMU_SOCKET DRCD_AP_TSF_CLOCK=1 \
+  DRCD_REAL_REPLAY=/tmp/drc-real-reference.replay \
+  DRCD_LOG_FILE=/tmp/drcd-real-replay.log \
+  bash scripts/capture-drcd-session.sh /tmp/drcd-real-replay.pcap --np --black
+```
+
+Look for the original captured console scene, not black or a Cemu image. Let
+several loops play; report corruption within a loop separately from the seam.
+This is a diagnostic replay, not a live game stream or guaranteed fix.
+The baseline profile launcher explicitly clears the replay variable.
+
+
+## Checkpoint and controlled media test matrix
+
+Git baseline `34b4866` / `baseline-before-media-experiments` includes the patched
+x264 sources. Original nested x264 history is retained in ignored
+`checkpoints/x264-original.git`. No credentials, media or captures were committed.
+
+The no-intra-refresh physical run was worse (blocking/tearing); keep the default
+intra-refresh enabled. Added opt-in all-IDR encoding and reference PCM timestamp
+age (10ms), with ordinary defaults unchanged. AP TSF, packet sizes and keepalive
+are preserved. The launcher pins known settings and saves separate logs for
+each capture. See [media experiments](docs/media-experiments.md) for commands,
+test interpretation and non-destructive checkpoint recovery.
+
+New hardware outcomes remain pending. Earlier sections below are historical.
+Build and all 15 CTest cases passed; launcher dry-run checks passed for every
+profile with both Cemu and generated sources, including stale environment overrides.
+
 ## Isolated encoder test: cyclic intra-refresh off
 
 User's artifact.MOV shows intermittent colored blocks near the upper image,

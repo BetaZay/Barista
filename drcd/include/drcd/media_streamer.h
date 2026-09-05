@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <iosfwd>
 
 namespace drc_host { class RuntimeTransport; }
 namespace drc_ipc { class MediaBridge; }
@@ -24,6 +25,8 @@ public:
 	void stop();
 	bool running() const { return m_running.load(); }
 	static bool protocol_self_test(std::string& error);
+	// Offline diagnostic: one IDR/P byte + I420 frame in, five length-prefixed DRH chunks out.
+	static bool reencode_replay(std::istream& input, std::ostream& output, std::string& error);
 
 private:
 	class VideoEncoder;

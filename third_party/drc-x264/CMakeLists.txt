@@ -3,6 +3,9 @@ set(DRC_X264_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/build")
 set(DRC_X264_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/install")
 set(DRC_X264_LIBRARY "${DRC_X264_INSTALL_DIR}/lib/libx264.a")
 set(DRC_X264_HEADER "${DRC_X264_INSTALL_DIR}/include/x264.h")
+file(GLOB_RECURSE DRC_X264_BUILD_INPUTS CONFIGURE_DEPENDS
+    "${DRC_X264_SOURCE_DIR}/*.c" "${DRC_X264_SOURCE_DIR}/*.h"
+    "${DRC_X264_SOURCE_DIR}/*.asm" "${DRC_X264_SOURCE_DIR}/*.S")
 
 add_custom_command(
     OUTPUT "${DRC_X264_LIBRARY}" "${DRC_X264_HEADER}"
@@ -15,6 +18,7 @@ add_custom_command(
         "${CMAKE_CURRENT_SOURCE_DIR}/yasm-wrapper.sh"
         "${DRC_X264_SOURCE_DIR}/x264.h"
         "${DRC_X264_SOURCE_DIR}/encoder/encoder.c"
+        ${DRC_X264_BUILD_INPUTS}
     COMMENT "Building Wii U DRC-patched x264"
     VERBATIM
 )

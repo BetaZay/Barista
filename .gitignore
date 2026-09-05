@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 *.pcap
 *.pcapng
+*.replay
 *.mkv
 *.mp4
 *.mov

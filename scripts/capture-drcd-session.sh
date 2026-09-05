@@ -12,6 +12,8 @@ Run drcd and capture its runtime radiotap monitor at the same time. This keeps
 with a real Wii U capture.
 Also records decrypted DRC UDP traffic to a companion *-ip.pcap file. This
 reveals actual payloads and host send timing without the runtime Wi-Fi key.
+Radio capture follows monitor recreation, recording complete packets into one
+pcap. A companion *.pcap.radio.json records attachment events and capture gaps.
 
 Defaults:
   pcap            /tmp/drcd-radio-<timestamp>.pcap
@@ -48,7 +50,7 @@ monitor_interface=${DRC_TSF_MONITOR_IFACE:-drcdtsf}
 if (($# == 0)); then
 	set -- --np --play "$project_dir/test1.mkv"
 fi
-if [[ -e $output_path || -e $ip_output_path ]]; then
+if [[ -e $output_path || -e $ip_output_path || -e $output_path.radio.json ]]; then
 	echo "error: output or companion IP capture already exists: $output_path / $ip_output_path" >&2
 	exit 1
 fi
@@ -56,7 +58,7 @@ if [[ ! -x $drcd_binary ]]; then
 	echo "error: drcd binary not found: $drcd_binary" >&2
 	exit 1
 fi
-for required_command in iw tcpdump awk setsid; do
+for required_command in iw tcpdump awk setsid python3; do
 	if ! command -v "$required_command" >/dev/null 2>&1; then
 		echo "error: required command not found: $required_command" >&2
 		exit 1
@@ -82,9 +84,14 @@ cleanup()
 	local exit_status=$?
 	trap - EXIT INT TERM
 
-	if [[ -n $capture_pid ]] && kill -0 "$capture_pid" >/dev/null 2>&1; then
-		kill -INT "$capture_pid" >/dev/null 2>&1 || true
-		wait "$capture_pid" >/dev/null 2>&1 || true
+	if [[ -n $capture_pid ]]; then
+		if kill -0 "$capture_pid" >/dev/null 2>&1; then
+			kill -INT "$capture_pid" >/dev/null 2>&1 || true
+		fi
+		if ! wait "$capture_pid"; then
+			echo "error: radio capture supervisor failed; inspect $output_path.radio.json" >&2
+			if ((exit_status == 0)); then exit_status=1; fi
+		fi
 	fi
 	if [[ -n $drcd_pid ]] && kill -0 "$drcd_pid" >/dev/null 2>&1; then
 		kill -INT "$drcd_pid" >/dev/null 2>&1 || true
@@ -131,27 +138,27 @@ setsid "$drcd_binary" "$@" &
 drcd_pid=$!
 
 echo "capture: waiting for runtime monitor $monitor_interface"
-for ((attempt = 0; attempt < 300; ++attempt)); do
-	if iw dev "$monitor_interface" info >/dev/null 2>&1; then
-		break
-	fi
-	if ! kill -0 "$drcd_pid" >/dev/null 2>&1; then
-		wait "$drcd_pid" || true
-		echo "error: drcd exited before creating $monitor_interface" >&2
-		exit 1
-	fi
-	sleep 0.1
-done
-if ! iw dev "$monitor_interface" info >/dev/null 2>&1; then
-	echo "error: timed out waiting for $monitor_interface" >&2
-	exit 1
-fi
-
-setsid tcpdump -q -U -s 0 -i "$monitor_interface" -w "$output_path" &
+setsid python3 "$script_dir/capture-radio-follow.py" "$monitor_interface" "$output_path" &
 capture_pid=$!
 capture_started=1
 echo "capture: recording drcd radio traffic to $output_path"
 echo "capture: turn on the GamePad; press Ctrl-C after the result is visible"
+
+# The daemon can recreate drcdtsf without exiting. The radio follower tracks
+# ifindex changes; watchdog both capture processes for the entire session.
+while kill -0 "$drcd_pid" >/dev/null 2>&1; do
+	if ! kill -0 "$capture_pid" >/dev/null 2>&1; then
+		wait "$capture_pid" || true
+		echo "error: radio capture stopped while drcd was running" >&2
+		exit 1
+	fi
+	if ! kill -0 "$ip_capture_pid" >/dev/null 2>&1; then
+		wait "$ip_capture_pid" || true
+		echo "error: decrypted UDP capture stopped while drcd was running" >&2
+		exit 1
+	fi
+	sleep 0.2
+done
 
 set +e
 wait "$drcd_pid"

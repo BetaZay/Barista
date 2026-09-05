@@ -1229,6 +1229,11 @@ static int validate_parameters( x264_t *h, int b_open )
     if( b_open && h->mb.i_psy_trellis && !h->param.i_avcintra_class )
         h->param.analyse.i_chroma_qp_offset -= h->param.analyse.f_psy_trellis < 0.25 ? 1 : 2;
     h->param.analyse.i_chroma_qp_offset = x264_clip3(h->param.analyse.i_chroma_qp_offset, -12, 12);
+    /* DRH carries no PPS. Its receiver contract uses chroma_qp_index_offset=0,
+     * so psy analysis must not silently change the effective offset above.
+     * Enforce after normalization, including fast-search and reconfiguration. */
+    if( h->param.b_drh_mode )
+        h->param.analyse.i_chroma_qp_offset = 0;
     /* MB-tree requires AQ to be on, even if the strength is zero. */
     if( !h->param.rc.i_aq_mode && h->param.rc.b_mb_tree )
     {
@@ -2781,6 +2786,9 @@ static intptr_t slice_write( x264_t *h )
     bs_realign( &h->out.bs );
 
     /* Slice */
+    if( h->param.b_drh_mode && (!h->param.b_cabac || h->mb.i_mb_width != 54 ||
+        h->mb.i_mb_height != 30 || h->sh.i_first_mb != 0 || h->sh.i_last_mb != 1619) )
+        return -1;
     nal_start( h, h->i_nal_type, h->i_nal_ref_idc );
     h->out.nal[h->out.i_nal].i_first_mb = h->sh.i_first_mb;
 
@@ -2819,8 +2827,10 @@ static intptr_t slice_write( x264_t *h )
     i_mb_y = h->sh.i_first_mb / h->mb.i_mb_width;
     i_mb_x = h->sh.i_first_mb % h->mb.i_mb_width;
     i_skip = 0;
-    int cabac_last_size = -2;
-    int b_cabac_chunk_ending = 0;
+    /* Snapshot logical six-row boundaries, not callbacks into mutable CABAC
+     * storage. Resolve outstanding bytes and the final slice before publishing. */
+    int drh_ends[5] = {0};
+    int drh_boundary_count = 0;
 
     while( 1 )
     {
@@ -3072,36 +3082,12 @@ cont:
         if( mb_xy == h->sh.i_last_mb )
             break;
 
-        /* The DRC decoder consumes five independently packetized groups of
-         * six macroblock rows, but they are one headerless CABAC slice. */
-        if( h->param.b_drh_mode )
-        {
-            if( b_cabac_chunk_ending && cabac_size_bytes( &h->cabac ) > cabac_last_size )
-            {
-                x264_nal_t *nal = &h->out.nal[h->out.i_nal++];
-                nal->i_last_mb = mb_xy;
-                nal->i_payload = cabac_size_bytes( &h->cabac ) - cabac_last_size;
-
-                if( h->param.nalu_process )
-                    h->param.nalu_process( h, nal, h->fenc->opaque );
-                nal_check_buffer( h );
-
-                nal = &h->out.nal[h->out.i_nal - 1];
-                x264_nal_t *nal_next = &h->out.nal[h->out.i_nal];
-                nal_next->i_ref_idc = nal->i_ref_idc;
-                nal_next->i_type = nal->i_type;
-                nal_next->b_long_startcode = nal->b_long_startcode;
-                nal_next->i_first_mb = mb_xy + 1;
-                nal_next->i_payload = 0;
-                nal_next->p_payload = nal->p_payload + nal->i_payload;
-
-                cabac_last_size = cabac_size_bytes( &h->cabac );
-                b_cabac_chunk_ending = 0;
-            }
-
-            if( i_mb_y > 0 && (i_mb_y % 6) == 0 && i_mb_x == 0 )
-                b_cabac_chunk_ending = 1;
-        }
+        if( h->param.b_drh_mode && i_mb_x == h->mb.i_mb_width - 1 &&
+            ((i_mb_y + 1) % 6) == 0 && drh_boundary_count < 4 )
+            /* CABAC decoding reads ahead of the symbols already encoded.
+             * Supply two subsequent bytes from the finished slice, never padding
+             * or restarting its arithmetic coder at a transport boundary. */
+            drh_ends[drh_boundary_count++] = cabac_size_bytes( &h->cabac ) + 2;
 
         if( SLICE_MBAFF )
         {
@@ -3134,7 +3120,37 @@ cont:
         bs_rbsp_trailing( &h->out.bs );
         bs_flush( &h->out.bs );
     }
-    if( nal_end( h ) )
+    if( h->param.b_drh_mode )
+    {
+        x264_nal_t original = h->out.nal[h->out.i_nal];
+        uint8_t *end = &h->out.p_bitstream[bs_pos( &h->out.bs ) / 8];
+        int length = end - original.p_payload;
+        if( drh_boundary_count != 4 || length < 5 )
+            return -1;
+        drh_ends[4] = length;
+        memset( end, 0xff, 64 );
+        int begin = 0;
+        for( int chunk = 0; chunk < 5; chunk++ )
+        {
+            /* Every published range is nonempty and the ranges concatenate
+             * exactly to the finalized slice, including its termination bytes. */
+            int boundary = chunk == 4 ? length :
+                x264_clip3( drh_ends[chunk], begin + 1, length - (4 - chunk) );
+            x264_nal_t *nal = &h->out.nal[h->out.i_nal];
+            *nal = original;
+            nal->i_first_mb = chunk * 6 * h->mb.i_mb_width;
+            nal->i_last_mb = (chunk + 1) * 6 * h->mb.i_mb_width - 1;
+            nal->p_payload = original.p_payload + begin;
+            nal->i_payload = boundary - begin;
+            if( h->param.nalu_process )
+                h->param.nalu_process( (x264_t *)h->api, nal, h->fenc->opaque );
+            h->out.i_nal++;
+            if( nal_check_buffer( h ) )
+                return -1;
+            begin = boundary;
+        }
+    }
+    else if( nal_end( h ) )
         return -1;
 
     if( h->sh.i_last_mb == (h->i_threadslice_end * h->mb.i_mb_width - 1) )

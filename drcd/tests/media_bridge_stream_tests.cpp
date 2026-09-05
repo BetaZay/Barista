@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <thread>
 
 int main()
@@ -50,14 +51,21 @@ int main()
     bool packet_order_ok = true;
     int previous_video_sequence = -1;
     std::array<uint8_t, 4> frame_timestamp{};
-    const char* pause_option = std::getenv("DRCD_IDR_PAUSE");
-    const bool pause_test = pause_option && std::strcmp(pause_option, "1") == 0;
+    // Recovery spacing is now unconditional, not an opt-in pause of formats.
+    const bool pause_test = true;
     std::vector<int64_t> after_idr_gaps, after_p_gaps;
     auto previous_frame_time = Clock::time_point{};
     bool previous_idr = false;
     unsigned recovery_idrs = 0;
     bool recovery_flags_ok = true;
     std::vector<uint32_t> video_ages;
+    std::vector<uint32_t> format_ages;
+    std::map<uint32_t, Clock::time_point> format_times, video_times;
+    std::vector<std::pair<uint32_t, bool>> video_order;
+    std::vector<uint32_t> audio_ages;
+    const char* all_idr_option = std::getenv("DRCD_ALL_IDR");
+    const bool all_idr = all_idr_option && std::strcmp(all_idr_option, "1") == 0;
+    unsigned predicted_frames = 0;
     bool activated = false, input_received = false, audible_pcm = false;
     std::array<uint8_t, 128> input{}; input[2] = 0x80;
     sockaddr_in console{}; console.sin_family = AF_INET; console.sin_port = htons(50022);
@@ -65,6 +73,8 @@ int main()
     std::array<int16_t, 832> samples{}; samples.fill(1234);
     auto next_audio = Clock::now();
     auto next_resync = Clock::now() + std::chrono::milliseconds(500);
+    auto burst_until = Clock::time_point{};
+    auto next_burst = Clock::time_point{};
     while (Clock::now() - started < std::chrono::seconds(3))
     {
         if (client.connected() && !activated)
@@ -79,14 +89,17 @@ int main()
             sendto(video, input.data(), input.size(), 0, reinterpret_cast<sockaddr*>(&console), sizeof(console));
             next_audio = Clock::now() + std::chrono::milliseconds(8);
         }
-        if ((recovery_test || pause_test) && Clock::now() >= next_resync)
+        const bool periodic_request = Clock::now() >= next_resync;
+        const bool burst_request = Clock::now() < burst_until && Clock::now() >= next_burst;
+        if (periodic_request || burst_request)
         {
             auto message_address = console;
             message_address.sin_port = htons(50010);
             const uint8_t request[]{1,0,0,0};
             sendto(video, request, sizeof(request), 0,
                 reinterpret_cast<sockaddr*>(&message_address), sizeof(message_address));
-            next_resync = Clock::now() + std::chrono::milliseconds(500);
+            if (periodic_request) next_resync = Clock::now() + std::chrono::milliseconds(500);
+            next_burst = Clock::now() + std::chrono::milliseconds(2);
         }
         std::array<uint8_t, 128> received{};
         input_received |= client.read_input(received) && received[2] == 0x80;
@@ -133,14 +146,29 @@ int main()
                     }
                     previous_frame_time = received_at;
                     previous_idr = std::find(packet + 8, packet + 16, uint8_t{0x80}) != packet + 16;
+                    if (previous_idr && !all_idr)
+                        burst_until = received_at + std::chrono::milliseconds(24);
+                    predicted_frames += !previous_idr;
                     ++frames;
                     const uint32_t stamp = (uint32_t(packet[4]) << 24) |
                         (uint32_t(packet[5]) << 16) | (uint32_t(packet[6]) << 8) | packet[7];
                     video_ages.push_back(transport.timestamp_us() - stamp);
+                    video_times.emplace(stamp, received_at);
+                    video_order.emplace_back(stamp, previous_idr);
+                }
+                if (fd == audio && n == 32 && packet[0] == 4)
+                {
+                    const uint32_t stamp = uint32_t(packet[8]) | (uint32_t(packet[9]) << 8) |
+                        (uint32_t(packet[10]) << 16) | (uint32_t(packet[11]) << 24);
+                    format_times.emplace(stamp, Clock::now());
+                    format_ages.push_back(transport.timestamp_us() - stamp);
                 }
                 if (fd == audio && n == 1672 && !(packet[0] & 4))
                 {
                     ++pcm_packets;
+                    const uint32_t stamp = uint32_t(packet[4]) | (uint32_t(packet[5]) << 8) |
+                        (uint32_t(packet[6]) << 16) | (uint32_t(packet[7]) << 24);
+                    audio_ages.push_back(transport.timestamp_us() - stamp);
                     audible_pcm |= packet[8] == 0xd2 && packet[9] == 4;
                 }
             }
@@ -150,6 +178,8 @@ int main()
     client.stop(); media.stop(); transport.stop(); close(video); close(audio);
     const char* send_time = std::getenv("DRCD_SEND_TIME_VIDEO");
     bool timing_ok = true;
+    // All-IDR diagnostics intentionally spend every other slot on formats only.
+    const unsigned minimum_frames = all_idr ? 75 : 140;
     if (!send_time || std::strcmp(send_time, "0") != 0)
     {
         std::sort(video_ages.begin(), video_ages.end());
@@ -158,12 +188,34 @@ int main()
         // Includes the 1ms receiver polling delay, but must exclude the
         // sender's 16.683ms pacing sleep. Allows moderate scheduler jitter.
         timing_ok = median >= 6250 && median < 12000;
+        std::sort(format_ages.begin(), format_ages.end());
+        const uint32_t format_median = format_ages.empty() ? 0 : format_ages[format_ages.size()/2];
+        std::vector<int64_t> leads;
+        for (const auto& [stamp, when] : video_times)
+        {
+            const auto found = format_times.find(stamp);
+            if (found != format_times.end())
+                leads.push_back(std::chrono::duration_cast<std::chrono::microseconds>(when - found->second).count());
+        }
+        std::sort(leads.begin(), leads.end());
+        const auto lead_median = leads.empty() ? 0 : leads[leads.size()/2];
+        std::cout << "format_median_age_us=" << format_median << " format_video_lead_us=" << lead_median
+                  << " matched_timestamps=" << leads.size() << '\n';
+        timing_ok &= leads.size() == video_times.size() && leads.size() >= minimum_frames &&
+            format_median >= 1250 && format_median < 4500 && lead_median >= 3000 && lead_median < 7500;
     }
     std::cout << "frames=" << frames << " pcm=" << pcm_packets << " audio_data=" << audible_pcm
               << " input=" << input_received << " artifacts=" << directory << '\n';
     if (recovery_test)
         std::cout << "recovery_idrs=" << recovery_idrs << " packet_flags_ok=" << recovery_flags_ok << '\n';
     bool spacing_ok = true;
+    const char* reference_audio = std::getenv("DRCD_REFERENCE_AUDIO_TIME");
+    const uint32_t expected_audio_age = reference_audio && std::strcmp(reference_audio, "1") == 0 ? 10000u : 0u;
+    std::sort(audio_ages.begin(), audio_ages.end());
+    const uint32_t audio_median = audio_ages.empty() ? 0 : audio_ages[audio_ages.size()/2];
+    std::cout << "pcm_median_age_us=" << audio_median << " predicted_frames=" << predicted_frames << '\n';
+    timing_ok &= !audio_ages.empty() && audio_median >= expected_audio_age && audio_median < expected_audio_age + 6000;
+    const bool reference_chain_ok = all_idr ? predicted_frames == 0 && recovery_idrs == frames : predicted_frames > 0;
     bool pacing_ok = chunk_timestamps_ok && packet_order_ok;
     if (pacing_test)
     {
@@ -174,7 +226,7 @@ int main()
             std::sort(offsets.begin(), offsets.end());
             const auto median = offsets.empty() ? -1 : offsets[offsets.size()/2];
             std::cout << "chunk=" << i << " median_offset_us=" << median << '\n';
-            pacing_ok &= offsets.size() >= 100 && std::abs(median - expected[i]) < 1800;
+            pacing_ok &= offsets.size() >= minimum_frames - 5 && std::abs(median - expected[i]) < 1800;
         }
     }
     if (pause_test)
@@ -184,9 +236,32 @@ int main()
         const auto idr_gap = after_idr_gaps.empty() ? 0 : after_idr_gaps[after_idr_gaps.size()/2];
         const auto p_gap = after_p_gaps.empty() ? 0 : after_p_gaps[after_p_gaps.size()/2];
         std::cout << "post_idr_median_us=" << idr_gap << " post_p_median_us=" << p_gap << '\n';
-        spacing_ok = after_idr_gaps.size() >= 4 && after_p_gaps.size() >= 100 &&
-            idr_gap >= 30000 && idr_gap < 40000 && p_gap >= 14000 && p_gap < 23000;
+        spacing_ok = after_idr_gaps.size() >= 4 && idr_gap >= 30000 && idr_gap < 43000;
+        if (!all_idr)
+            spacing_ok &= after_p_gaps.size() >= 100 && p_gap >= 14000 && p_gap < 23000;
     }
-    return frames >= 140 && pcm_packets >= 300 && input_received && audible_pcm && timing_ok &&
-        spacing_ok && pacing_ok && (!recovery_test || (recovery_idrs >= 4 && recovery_flags_ok)) ? 0 : 1;
+    // For every observed IDR transition verify an actual format-only slot, not
+    // merely a longer video gap. Sequence continuity above checks no video drop.
+    unsigned recovery_gaps = 0;
+    bool recovery_slots_ok = true;
+    if (!send_time || std::strcmp(send_time, "0") != 0)
+        for (size_t i = 1; i < video_order.size(); ++i)
+        {
+            const auto [previous_stamp, was_idr] = video_order[i - 1];
+            if (!was_idr) continue;
+            const auto [stamp, is_idr] = video_order[i];
+            unsigned empty_formats = 0;
+            for (const auto& [format_stamp, when] : format_times)
+                if (uint32_t(format_stamp - previous_stamp) < uint32_t(stamp - previous_stamp) &&
+                    format_stamp != previous_stamp && !video_times.contains(format_stamp)) ++empty_formats;
+            recovery_slots_ok &= empty_formats >= 1;
+            // Source activation may explicitly force a second startup IDR.
+            if (!all_idr && i > 4) recovery_slots_ok &= !is_idr;
+            ++recovery_gaps;
+        }
+    std::cout << "format_packets=" << format_times.size() << " recovery_gaps=" << recovery_gaps
+              << " recovery_slots_ok=" << recovery_slots_ok << '\n';
+    return frames >= minimum_frames && format_times.size() >= 165 && recovery_slots_ok &&
+        pcm_packets >= 300 && input_received && audible_pcm && timing_ok &&
+        reference_chain_ok && spacing_ok && pacing_ok && (!recovery_test || (recovery_idrs >= 4 && recovery_flags_ok)) ? 0 : 1;
 }
