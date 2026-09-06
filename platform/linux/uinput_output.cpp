@@ -8,8 +8,8 @@
 namespace barista {
 namespace {
 constexpr std::pair<int,uint32_t> Buttons[] = {
-    {BTN_EAST,0x8000}, {BTN_SOUTH,0x4000}, {BTN_NORTH,0x2000}, {BTN_WEST,0x1000},
-    {BTN_TL,0x20}, {BTN_TR,0x10}, {BTN_START,0x4}, {BTN_SELECT,0x8}, {BTN_MODE,0x2},
+    {BTN_SOUTH,0x8000}, {BTN_EAST,0x4000}, {BTN_NORTH,0x2000}, {BTN_WEST,0x1000},
+    {BTN_TL,0x20}, {BTN_TR,0x10}, {BTN_START,0x8}, {BTN_SELECT,0x4}, {BTN_MODE,0x2},
     {BTN_THUMBL,0x800000}, {BTN_THUMBR,0x400000}
 };
 constexpr int Axes[] = {ABS_X,ABS_Y,ABS_RX,ABS_RY,ABS_Z,ABS_RZ,ABS_HAT0X,ABS_HAT0Y};
@@ -46,8 +46,8 @@ bool UinputOutput::Submit(const ControllerState& state)
     for (size_t i = 0; i < 4; ++i) add(EV_ABS, Axes[i], state.sticks[i]);
     add(EV_ABS, ABS_Z, state.buttons & 0x80 ? 255 : 0);
     add(EV_ABS, ABS_RZ, state.buttons & 0x40 ? 255 : 0);
-    add(EV_ABS, ABS_HAT0X, !!(state.buttons & 0x100) - !!(state.buttons & 0x200));
-    add(EV_ABS, ABS_HAT0Y, !!(state.buttons & 0x400) - !!(state.buttons & 0x800));
+    add(EV_ABS, ABS_HAT0X, !!(state.buttons & 0x800) - !!(state.buttons & 0x400));
+    add(EV_ABS, ABS_HAT0Y, !!(state.buttons & 0x100) - !!(state.buttons & 0x200));
     add(EV_SYN, SYN_REPORT, 0);
     const auto bytes = events.size() * sizeof(input_event);
     if (write(m_fd, events.data(), bytes) != static_cast<ssize_t>(bytes)) { Stop(); return false; }
