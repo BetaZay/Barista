@@ -32,6 +32,10 @@ if [[ "$current_hash" != "$patch_hash" ]]; then
 	git -C "$src_dir" am --abort >/dev/null 2>&1 || true
 	git -C "$src_dir" reset --hard "$tag"
 	git -C "$src_dir" clean -xfd
+	# `git am` creates local commits. CI runners do not necessarily have a
+	# global identity, so keep this deterministic and scoped to this checkout.
+	git -C "$src_dir" config user.name "Barista build"
+	git -C "$src_dir" config user.email "build@barista.invalid"
 	for patch in "$patch_dir"/*.patch; do
 		git -C "$src_dir" am "$patch"
 	done
