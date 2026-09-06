@@ -38,7 +38,8 @@ private:
     QByteArray m_response;
     QString m_owner, m_mode, m_interface, m_endpoint, m_error, m_phase = "idle";
     uint m_uid = 0;
-    bool m_authorizing = false, m_connected = false, m_stopping = false;
+    bool m_authorizing = false, m_connected = false, m_stopping = false, m_batteryAvailable = false;
+    int m_battery = 0;
     std::unique_ptr<drc_ipc::AppHook> m_input;
     barista::UinputOutput m_controller;
 };

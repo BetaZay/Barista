@@ -66,6 +66,9 @@ std::string BuildStatusResponse(bool ok, const std::string& message, const drc_h
 	out << "pair_code=" << (state.pairing_code.has_value() ? std::to_string(state.pairing_code->numeric()) : "-") << "\n";
 	out << "pair_symbols=" << (state.pairing_code.has_value() ? state.pairing_code->symbols_utf8() : "-") << "\n";
 	out << "connected=" << (state.gamepad_connected ? "1" : "0") << "\n";
+	out << "battery_available=" << (backend.battery_charge_valid ? "1" : "0") << "\n";
+	if (backend.battery_charge_valid)
+		out << "battery=" << static_cast<unsigned int>(backend.battery_charge) << "\n";
 	out << "backend_phase=" << (backend.phase.empty() ? "-" : backend.phase) << "\n";
 	out << "backend_base_interface=" << (backend.base_interface.empty() ? "-" : backend.base_interface) << "\n";
 	out << "backend_ap_interface=" << (backend.ap_interface.empty() ? "-" : backend.ap_interface) << "\n";

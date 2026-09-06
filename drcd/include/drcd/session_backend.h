@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <optional>
+#include <cstdint>
 #include <string>
 
 namespace drcd
@@ -30,6 +31,8 @@ struct BackendSnapshot
 	std::string base_interface;
 	std::string ap_interface;
 	bool using_virtual_ap = false;
+	bool battery_charge_valid = false;
+	uint8_t battery_charge = 0;
 	std::string last_error;
 };
 

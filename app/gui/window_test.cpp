@@ -33,6 +33,8 @@ int main(int argc, char** argv)
         QVariantMap status{{"available",true},{"running",false},{"controllerSupported",true},{"phase","idle"}};
         auto apply = [&] { Check(QMetaObject::invokeMethod(&window,"ApplyStatus",Qt::DirectConnection,Q_ARG(QVariantMap,status)),"apply status"); };
         apply(); Check(start->isEnabled() && pair->isEnabled() && !stop->isEnabled(),"idle actions");
+        status["batteryAvailable"] = true; status["battery"] = 100; apply();
+        Check(window.findChild<QLabel*>("gamepadBattery") && window.findChild<QLabel*>("gamepadBattery")->text() == "100%","GamePad battery is shown");
         int operations = 0;
         QObject::connect(window.findChild<ControlClient*>(),&ControlClient::Pending,[&](bool pending) { if (pending) ++operations; });
         for (auto* action : {start,pair}) {

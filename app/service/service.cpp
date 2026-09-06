@@ -15,6 +15,13 @@
 
 namespace {
 constexpr auto ControlSocket = "/run/barista/worker.sock";
+constexpr int GamePadBatteryFull = 176;
+
+int BatteryPercent(int raw)
+{
+    return qBound(0, (raw * 100 + GamePadBatteryFull / 2) / GamePadBatteryFull, 100);
+}
+
 bool BusServiceRunning(const QString& name)
 {
     const QDBusReply<bool> reply = QDBusConnection::systemBus().interface()->isServiceRegistered(name);
@@ -121,6 +128,7 @@ QVariantMap Service::GetStatus()
     }
     return {{"apiVersion",1}, {"platform","linux"}, {"running",m_worker.state() != QProcess::NotRunning},
         {"phase",m_phase}, {"connected",m_connected}, {"mode",m_mode}, {"interface",m_interface},
+        {"batteryAvailable",m_batteryAvailable}, {"battery",m_battery},
         {"ownedByCaller",mine}, {"busy",m_authorizing || m_stopping}, {"error",m_error},
         {"mediaEndpoint",mine && m_mode == "real" ? m_endpoint : QString()},
         {"appConnected",appConnected}, {"appName",appName}, {"appPid",appPid},
@@ -260,7 +268,7 @@ QString Service::Start(const QString& interface, const QString& mode, const QStr
     if (!TrustedExecutable(BARISTA_WORKER) || !TrustedExecutable(BARISTA_HOSTAPD))
         return "Install root-owned Barista engine and hostapd binaries first; writable development binaries cannot run privileged";
     if (QFileInfo::exists("/tmp/drcd.sock")) return "Stop the legacy drcd/capture session first (existing /tmp/drcd.sock)";
-    m_error.clear(); m_phase = "idle"; m_connected = false;
+    m_error.clear(); m_phase = "idle"; m_connected = false; m_batteryAvailable = false; m_battery = 0;
     m_mode = mode; m_interface = interface; m_uid = uid;
     m_endpoint = QString("/run/barista/media-%1.sock").arg(uid);
     // Runtime directory is root-owned; only remove our exact previous socket,
@@ -303,7 +311,7 @@ void Service::StopWorker()
 {
     m_controller.Stop(); m_input.reset();
     if (m_worker.state() != QProcess::NotRunning) { m_stopping = true; m_phase = "stopping"; m_worker.terminate(); }
-    else { m_owner.clear(); m_connected = false; m_phase = "idle"; }
+    else { m_owner.clear(); m_connected = false; m_batteryAvailable = false; m_battery = 0; m_phase = "idle"; }
 }
 void Service::Poll()
 {
@@ -320,6 +328,8 @@ void Service::ParseStatus()
     for (const auto& line : m_response.split('\n')) {
         if (line.startsWith("phase=")) m_phase = QString::fromUtf8(line.mid(6));
         if (line.startsWith("connected=")) m_connected = line.mid(10) == "1";
+        if (line.startsWith("battery_available=")) m_batteryAvailable = line.mid(18) == "1";
+        if (line.startsWith("battery=")) m_battery = BatteryPercent(line.mid(8).toInt());
         // Deliberately do not expose PINs, credentials, or arbitrary engine logs.
     }
 }

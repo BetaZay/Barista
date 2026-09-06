@@ -427,6 +427,8 @@ public:
 		m_command_timeouts.store(0);
 		m_uvc_uac_replies.store(0);
 		m_input_packets.store(0);
+		m_battery_charge_valid.store(false);
+		m_battery_charge.store(0);
 		m_message_packets.store(0);
 		m_video_packets_received.store(0);
 		m_audio_packets_received.store(0);
@@ -557,6 +559,8 @@ public:
 			.running = m_running.load(),
 			.protocol_ready = m_protocol_ready.load(),
 			.waiting_for_streaming = m_waiting_for_streaming.load(),
+			.battery_charge_valid = m_battery_charge_valid.load(),
+			.battery_charge = m_battery_charge.load(),
 			.command_packets_received = m_command_packets.load(),
 			.command_retries = m_command_retries.load(),
 			.command_timeouts = m_command_timeouts.load(),
@@ -915,6 +919,8 @@ private:
 		const InputSnapshot current = DecodeInput(packet);
 		const auto now = std::chrono::steady_clock::now();
 		m_waiting_for_streaming.store(current.waiting_for_streaming);
+		m_battery_charge.store(current.battery_charge);
+		m_battery_charge_valid.store(true);
 		if (!m_waiting_stream_state_valid ||
 			current.waiting_for_streaming != m_last_waiting_for_streaming)
 		{
@@ -1138,6 +1144,8 @@ private:
 	std::atomic_bool m_uic_reply_seen{false};
 	std::atomic_bool m_uvc_uac_reply_seen{false};
 	std::atomic_bool m_input_seen{false};
+	std::atomic_bool m_battery_charge_valid{false};
+	std::atomic_uint8_t m_battery_charge{0};
 	std::atomic_bool m_waiting_for_streaming{true};
 	bool m_session_ready_announced = false;
 	bool m_input_snapshot_valid = false;

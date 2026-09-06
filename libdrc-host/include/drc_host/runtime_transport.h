@@ -41,6 +41,8 @@ struct RuntimeTransportStats
 	bool running = false;
 	bool protocol_ready = false;
 	bool waiting_for_streaming = true;
+	bool battery_charge_valid = false;
+	uint8_t battery_charge = 0;
 	uint64_t command_packets_received = 0;
 	uint64_t command_retries = 0;
 	uint64_t command_timeouts = 0;

@@ -953,7 +953,14 @@ public:
 
 	BackendSnapshot snapshot() const override
 	{
-		return m_snapshot;
+		BackendSnapshot snapshot = m_snapshot;
+		if (m_runtime_transport)
+		{
+			const auto stats = m_runtime_transport->stats();
+			snapshot.battery_charge_valid = stats.battery_charge_valid;
+			snapshot.battery_charge = stats.battery_charge;
+		}
+		return snapshot;
 	}
 
 	bool consume_pairing_complete_event() override

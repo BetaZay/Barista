@@ -30,7 +30,7 @@ private:
     QComboBox *m_interface, *m_mode;
     QLineEdit *m_code, *m_endpoint;
     QLabel *m_status, *m_message, *m_description, *m_hint, *m_details, *m_pairHint;
-    QLabel *m_gamepadState, *m_gamepadPhase, *m_gamepadMode, *m_gamepadIface;
+    QLabel *m_gamepadState, *m_gamepadPhase, *m_gamepadMode, *m_gamepadIface, *m_gamepadBattery;
     QLabel *m_appName, *m_appLock, *m_appLastSeen, *m_appSocket, *m_appIdleLogo, *m_appLogo;
     QWidget* m_pairSymbols;
     QPushButton *m_start, *m_stop, *m_pair, *m_copy, *m_prepare;

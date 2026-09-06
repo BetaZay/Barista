@@ -195,6 +195,7 @@ void test_runtime_keepalive()
 	input[0] = 0x12;
 	input[1] = 0x34;
 	input[83] = 1;
+	input[5] = 73;
 	sockaddr_in input_destination{};
 	input_destination.sin_family = AF_INET;
 	input_destination.sin_port = htons(50022);
@@ -213,6 +214,7 @@ void test_runtime_keepalive()
 	expect(stats.input_packets_received == 1, "transport did not accept loopback HID input");
 	expect(stats.uvc_uac_replies >= 1, "transport did not retain the UVC/UAC reply");
 	expect(stats.waiting_for_streaming, "HID waiting-for-streaming bit was not decoded");
+	expect(stats.battery_charge_valid && stats.battery_charge == 73, "HID battery charge was not decoded");
 
 	bool saw_big_endian_sequence = false;
 	while (auto status = transport.consume_status_event())

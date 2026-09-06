@@ -146,10 +146,13 @@ Window::Window(bool smokeTest)
     m_gamepadPhase = new QLabel("Idle", connection);
     m_gamepadMode = new QLabel("Screen + controller", connection);
     m_gamepadIface = new QLabel("wlan0", connection);
+    m_gamepadBattery = new QLabel("—", connection);
+    m_gamepadBattery->setObjectName("gamepadBattery");
     gamepadForm->addRow("GamePad:", m_gamepadState);
     gamepadForm->addRow("Phase:", m_gamepadPhase);
     gamepadForm->addRow("Mode:", m_gamepadMode);
     gamepadForm->addRow("Interface:", m_gamepadIface);
+    gamepadForm->addRow("Battery:", m_gamepadBattery);
     connectionLayout->addLayout(gamepadForm);
 
     auto* div1 = new QFrame(connection);
@@ -506,6 +509,10 @@ void Window::ApplyStatus(const QVariantMap& status)
     m_gamepadPhase->setText(running ? (phase.isEmpty() ? "Running" : phase) : "Idle");
     m_gamepadMode->setText(sessionMode == "controller" ? "Controller only" : "Screen + controller");
     m_gamepadIface->setText(ifaceName.isEmpty() ? m_interface->currentText() : ifaceName);
+    if (status.value("batteryAvailable").toBool())
+        m_gamepadBattery->setText(QString("%1%").arg(status.value("battery").toInt()));
+    else
+        m_gamepadBattery->setText("—");
     if (connected) {
         m_gamepadState->setText("● Connected (5 GHz GamePad Wi-Fi)");
         SetTone(m_gamepadState, Tone::Good, true);
