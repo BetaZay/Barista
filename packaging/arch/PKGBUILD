@@ -10,27 +10,10 @@ makedepends=('cmake' 'ninja' 'git' 'python' 'nasm' 'make' 'gcc' 'polkit')
 source=()
 sha256sums=()
 
-# Build from a checkout.  CI sets BARISTA_SOURCE_DIR explicitly; local users
+# Build from a checkout. CI sets BARISTA_SOURCE_DIR explicitly; local users
 # can run `cd packaging/arch && BARISTA_SOURCE_DIR="../.." makepkg -f`.
 _barista_source() {
     printf '%s\n' "${BARISTA_SOURCE_DIR:-${startdir}/../..}"
-}
-
-pkgver() {
-    cd "$(_barista_source)"
-    local desc
-    if desc=$(git describe --long --tags --match="[0-9]*" --match="v[0-9]*" 2>/dev/null); then
-        printf '%s\n' "$desc" | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
-        return 0
-    fi
-    local count hash
-    count=$(git rev-list --count HEAD 2>/dev/null)
-    hash=$(git rev-parse --short=7 HEAD 2>/dev/null)
-    if [ -n "$count" ] && [ -n "$hash" ]; then
-        printf '0.1.0.r%s.g%s\n' "$count" "$hash"
-        return 0
-    fi
-    printf '%s\n' "${pkgver}"
 }
 
 build() {
