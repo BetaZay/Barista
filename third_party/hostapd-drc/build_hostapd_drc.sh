@@ -16,7 +16,9 @@ out_hostapd_cli="$7"
 
 if [[ ! -d "$src_dir/.git" ]]; then
 	mkdir -p "$(dirname "$src_dir")"
-	git clone --branch "$tag" "$repo_url" "$src_dir"
+	# The source is pinned by commit, not a branch name. Clone first, then reset
+	# below; `git clone --branch <commit>` is not portable across Git versions.
+	git clone "$repo_url" "$src_dir"
 fi
 
 patch_hash="$({ printf '%s\0' "$tag"; sha256sum "$hostapd_config" "$patch_dir"/*.patch; } | sha256sum | cut -d' ' -f1)"

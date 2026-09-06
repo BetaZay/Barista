@@ -1,7 +1,9 @@
 set(DRC_HOSTAPD_REPOSITORY "https://git.w1.fi/hostap.git" CACHE STRING
     "Git repository used for the standalone patched hostapd build")
-set(DRC_HOSTAPD_TAG "hostap_2_11" CACHE STRING
-    "Upstream hostapd tag used by Barista")
+# hostap_2_11 is an annotated tag. Pin its peeled commit so `git clone`,
+# `reset --hard`, and patch application behave consistently across Git versions.
+set(DRC_HOSTAPD_TAG "d945ddd368085f255e68328f2d3b020ceea359af" CACHE STRING
+    "Pinned upstream hostapd commit used by Barista")
 
 set(drc_hostapd_root "${CMAKE_CURRENT_BINARY_DIR}")
 set(drc_hostapd_source "${drc_hostapd_root}/src")
