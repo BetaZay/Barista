@@ -24,8 +24,8 @@ public:
     void stop();
     bool connected() const;
     void set_active(bool active);
-    // Server-owned fallback, independent of a connector. Empty clears it.
-    // Active video takes precedence; otherwise this overrides client idle art.
+    // Server-owned fallback, displayed when disconnected or when no connector idle art is present.
+    // When connected, connector idle art takes precedence over the server fallback.
     bool set_idle_frame(std::span<const uint8_t> i420);
     void submit_rgb(std::vector<uint8_t> rgb, unsigned width, unsigned height, bool idle = false);
     void submit_pcm(std::span<const int16_t> stereo);

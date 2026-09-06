@@ -74,31 +74,30 @@ int main()
         wait_for([&] { return !server.connected(); });
         close(raw);
         check(server.read_video(frame, active) && !active && frame[0] == 16, "idle survives bad client");
-        // A service-provided logo wins over connector idle art, but not live video.
+        // While connected, connector idle art takes precedence over service fallback logo.
         const auto logo = drc_ipc::AppHook::rgb_to_i420(std::vector<uint8_t>(108,100),6,6);
         check(server.set_idle_frame(logo), "set service logo");
         check(server.read_video(frame, active) && !active && frame == logo, "logo while disconnected");
         check(client.start(path, error), "logo test reconnect");
         wait_for([&] { return server.connected() && client.connected(); });
         client.submit_rgb(black,6,6,true);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        check(server.read_video(frame, active) && !active && frame == logo, "server logo overrides connector idle");
+        wait_for([&] { return server.read_video(frame, active) && !active && frame == converted; });
         client.set_active(true);
         wait_for([&] { server.read_video(frame,active); return active; });
-        check(frame == logo, "logo until first active frame");
+        check(frame == converted, "connector logo until first active frame");
         client.submit_rgb(white,6,6);
         wait_for([&] { return server.read_video(frame,active) && active && frame[0] == 235; });
         // Static/paused active streams must not get replaced merely for being still.
         std::this_thread::sleep_for(std::chrono::milliseconds(1100));
         check(server.read_video(frame,active) && active && frame[0] == 235, "hold active paused frame");
         client.set_active(false);
-        wait_for([&] { return server.read_video(frame,active) && !active && frame == logo; });
+        wait_for([&] { return server.read_video(frame,active) && !active && frame == converted; });
         client.set_active(true);
         client.submit_rgb(white,6,6);
         wait_for([&] { return server.read_video(frame,active) && active && frame[0] == 235; });
         client.stop();
         wait_for([&] { return !server.connected(); });
-        check(server.read_video(frame,active) && !active && frame == logo, "logo replaces last game frame on disconnect");
+        check(server.read_video(frame,active) && !active && frame == logo, "service logo replaces last game frame on disconnect");
         server.stop();
         check(access(path.c_str(), F_OK) != 0, "socket cleanup");
         rmdir(directory);

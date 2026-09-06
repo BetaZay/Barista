@@ -312,7 +312,8 @@ bool AppHook::read_video(std::span<uint8_t> i420, bool& active)
     if (i420.size() != FrameBytes) return false;
     std::lock_guard lock(m_impl->mutex);
     active = m_impl->linked && m_impl->active && Clock::now() - m_impl->heartbeat < std::chrono::seconds(1);
-    const auto& idle = m_impl->server_idle.empty() ? m_impl->idle : m_impl->server_idle;
+    const auto& idle = (m_impl->linked && !m_impl->idle.empty()) ? m_impl->idle :
+                       (!m_impl->server_idle.empty() ? m_impl->server_idle : m_impl->idle);
     const auto& frame = active && !m_impl->video.empty() ? m_impl->video : idle;
     if (frame.size() != FrameBytes) return false;
     std::copy(frame.begin(), frame.end(), i420.begin()); return true;
