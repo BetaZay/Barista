@@ -19,16 +19,25 @@ application. It is not affiliated with Nintendo.
   Qt application runs as the regular desktop user.
 
 The application connector is **AppHook**, internally nicknamed **MUG** (Media
-User Gateway). It is a Linux-local Unix `SOCK_SEQPACKET` protocol and is not
-Cemu-specific. The reference client is the experimental
-[BetaZay/Cemu fork](https://github.com/BetaZay/Cemu), on its
-`barista-connector-prototype` branch. This connector is not part of, endorsed
-by, or supported by the upstream Cemu project. Other applications can implement
-the same AppHook instead of embedding any radio or pairing logic. The prototype
-uses Barista's default per-user session socket, `/run/barista/media-<uid>.sock`,
-automatically. Other clients can use that endpoint directly or set
-`BARISTA_MUG_SOCKET` as a development override; AppHook carries RGB video,
-stereo PCM, and GamePad input reports.
+User Gateway). It is a Linux-local Unix `SOCK_SEQPACKET` protocol, not an
+emulator-specific integration. It carries RGB video, stereo PCM, and GamePad
+input reports. Other applications can implement AppHook instead of embedding
+any radio or pairing logic.
+
+## Projects that work with Barista
+
+These are experimental forks, not features of or endorsements by their
+upstream projects.
+
+- [BetaZay/Cemu](https://github.com/BetaZay/Cemu), branch
+  `barista-connector-prototype` — Wii U GamePad video, audio, controls, and
+  touchscreen integration.
+- [BetaZay/Azahar](https://github.com/BetaZay/Azahar) — 3DS top/bottom-screen
+  layouts, video, audio, controls, touchscreen, motion, and C-stick support.
+
+The prototypes use Barista's default per-user session socket,
+`/run/barista/media-<uid>.sock`, automatically. Other clients can use that
+endpoint directly or set `BARISTA_MUG_SOCKET` as a development override.
 
 ## Wi-Fi requirements
 
@@ -90,10 +99,10 @@ compatibility and media recovery still need broader hardware testing.
 - Audio occasionally stutters.
 - The GamePad still requests recovery much more often than it does with a real
   Wii U connection.
+- Touch needs broader application and calibration testing.
 
 ### Not started
 
-- Touch
 - Camera
 - Microphone
 - Gyro
