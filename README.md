@@ -22,8 +22,13 @@ The application connector is **AppHook**, internally nicknamed **MUG** (Media
 User Gateway). It is a Linux-local Unix `SOCK_SEQPACKET` protocol and is not
 Cemu-specific. A client receives its session socket through
 `BARISTA_MUG_SOCKET`, submits RGB video and stereo PCM, and receives GamePad
-input. Cemu is the current working client; other applications can implement the
-same AppHook instead of embedding any radio or pairing logic.
+input.
+
+The reference client is the experimental
+[BetaZay/Cemu fork](https://github.com/BetaZay/Cemu), on its
+`barista-connector-prototype` branch. This connector is not part of, endorsed
+by, or supported by the upstream Cemu project. Other applications can implement
+the same AppHook instead of embedding any radio or pairing logic.
 
 ## Wi-Fi requirements
 
