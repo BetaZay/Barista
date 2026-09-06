@@ -12,13 +12,24 @@
 #ifdef BARISTA_LINUX_CONTROL
 #include <unistd.h>
 #endif
+#ifndef BARISTA_VERSION_STRING
+#define BARISTA_VERSION_STRING "0.1.0"
+#endif
+
 int main(int argc,char** argv)
 {
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view arg(argv[i]);
+        if (arg == "--version" || arg == "-v") {
+            std::printf("Barista %s\n", BARISTA_VERSION_STRING);
+            return 0;
+        }
+    }
     QApplication app(argc,argv);
 #ifdef BARISTA_LINUX_CONTROL
     if (geteuid() == 0) { qCritical("Do not run the Barista GUI as root; use its polkit-backed service"); return 1; }
 #endif
-    app.setApplicationName("Barista"); app.setOrganizationName("Barista"); app.setApplicationVersion("0.1.0");
+    app.setApplicationName("Barista"); app.setOrganizationName("Barista"); app.setApplicationVersion(BARISTA_VERSION_STRING);
     app.setDesktopFileName("org.barista.Barista");
     app.setWindowIcon(QIcon(":/barista/barista-logo.png"));
     const bool smoke = app.arguments().contains("--smoke-test");

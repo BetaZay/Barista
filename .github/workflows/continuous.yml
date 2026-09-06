@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -32,6 +34,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -42,6 +46,12 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build --parallel
           cpack --config build/CPackConfig.cmake -G DEB -B dist
+          ARCH="$(uname -m)"
+          for f in dist/*.deb; do
+            if [ -f "$f" ] && [ "$f" != "dist/barista-${ARCH}.deb" ]; then
+              mv "$f" "dist/barista-${ARCH}.deb"
+            fi
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: deb
@@ -54,15 +64,24 @@ jobs:
     container: fedora:latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           dnf -y install cmake ninja-build git python3 nasm gcc gcc-c++ make \
             qt6-qtbase-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd
       - name: Build package
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build --parallel
           cpack --config build/CPackConfig.cmake -G RPM -B dist
+          ARCH="$(uname -m)"
+          for f in dist/*.rpm; do
+            if [ -f "$f" ] && [ "$f" != "dist/barista-${ARCH}.rpm" ]; then
+              mv "$f" "dist/barista-${ARCH}.rpm"
+            fi
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: rpm
@@ -75,6 +94,8 @@ jobs:
     container: archlinux:latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel cmake ninja git python ffmpeg \
@@ -82,11 +103,17 @@ jobs:
           command -v pkcheck
       - name: Build package
         run: |
+          git config --system --add safe.directory '*'
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           su builder -s /bin/bash -c "cd '$GITHUB_WORKSPACE/packaging/arch' && BARISTA_SOURCE_DIR='$GITHUB_WORKSPACE' makepkg --noconfirm --force --nodeps"
           mkdir -p dist
-          find packaging/arch -maxdepth 1 -name 'barista-*.pkg.tar.*' -exec cp {} dist/ \;
+          ARCH="$(uname -m)"
+          pkg_file=$(find packaging/arch -maxdepth 1 -name 'barista-*.pkg.tar.*' | head -n 1)
+          if [ -n "$pkg_file" ]; then
+            ext="${pkg_file#*pkg.tar.}"
+            cp "$pkg_file" "dist/barista-${ARCH}.pkg.tar.${ext}"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: arch

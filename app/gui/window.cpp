@@ -83,7 +83,7 @@ Window::Window(bool smokeTest)
     quitAction->setShortcut(QKeySequence::Quit);
     auto* helpMenu = menuBar()->addMenu("&Help");
     helpMenu->addAction("&About Barista",this,[this] {
-        QMessageBox::about(this,"About Barista","Barista connects a Wii U GamePad to your computer.");
+        QMessageBox::about(this,"About Barista",QString("Barista %1\n\nBarista connects a Wii U GamePad to your computer.").arg(qApp->applicationVersion()));
     });
 
     auto* root = new QWidget(this);
