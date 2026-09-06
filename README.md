@@ -20,15 +20,15 @@ application. It is not affiliated with Nintendo.
 
 The application connector is **AppHook**, internally nicknamed **MUG** (Media
 User Gateway). It is a Linux-local Unix `SOCK_SEQPACKET` protocol and is not
-Cemu-specific. A client receives its session socket through
-`BARISTA_MUG_SOCKET`, submits RGB video and stereo PCM, and receives GamePad
-input.
-
-The reference client is the experimental
+Cemu-specific. The reference client is the experimental
 [BetaZay/Cemu fork](https://github.com/BetaZay/Cemu), on its
 `barista-connector-prototype` branch. This connector is not part of, endorsed
 by, or supported by the upstream Cemu project. Other applications can implement
-the same AppHook instead of embedding any radio or pairing logic.
+the same AppHook instead of embedding any radio or pairing logic. The prototype
+uses Barista's default per-user session socket, `/run/barista/media-<uid>.sock`,
+automatically. Other clients can use that endpoint directly or set
+`BARISTA_MUG_SOCKET` as a development override; AppHook carries RGB video,
+stereo PCM, and GamePad input reports.
 
 ## Wi-Fi requirements
 
@@ -55,11 +55,12 @@ service is activated on demand; use **Start** to authorize the Wi-Fi takeover.
 Use **Pair GamePad** only when pairing is needed. Closing the window keeps it in
 the tray by default.
 
-The Advanced page displays the automatically managed AppHook endpoint and can
-copy this launch prefix for a client application:
+The Advanced page displays the automatically managed AppHook endpoint. Clients
+should use that default endpoint; the environment variable is only an optional
+development override:
 
 ```sh
-env BARISTA_MUG_SOCKET=/run/barista/media-<uid>.sock your-app
+your-app
 ```
 
 The endpoint exists only while a Screen + controller session is active. It is
