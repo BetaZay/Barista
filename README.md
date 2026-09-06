@@ -57,6 +57,9 @@ work; it is not a guarantee for every firmware, kernel, access-point channel,
 or adapter. macOS and Windows currently provide the portable UI/core only—the
 real GamePad radio backend is Linux-only.
 
+For additional confirmed and incompatible hardware reports, see
+[Vanilla Wii U's Wireless Compatibility wiki](https://github.com/vanilla-wiiu/vanilla/wiki/Wireless-Compatibility).
+
 ## Use
 
 Install Barista, then open it normally from the desktop launcher. The system
@@ -100,10 +103,10 @@ compatibility and media recovery still need broader hardware testing.
 - The GamePad still requests recovery much more often than it does with a real
   Wii U connection.
 - Touch needs broader application and calibration testing.
+- Gyro needs broader application and orientation testing.
 
 ### Not started
 
 - Camera
 - Microphone
-- Gyro
 - NFC
