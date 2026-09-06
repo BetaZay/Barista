@@ -78,7 +78,8 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel cmake ninja git python ffmpeg \
-            nasm qt6-base openssl libnl systemd
+            nasm qt6-base openssl libnl polkit systemd
+          command -v pkcheck
       - name: Build package
         run: |
           useradd --create-home builder

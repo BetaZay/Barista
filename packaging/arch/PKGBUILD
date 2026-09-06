@@ -6,7 +6,7 @@ pkgdesc='Wii U GamePad desktop bridge'
 arch=('x86_64')
 license=('custom')
 depends=('qt6-base' 'networkmanager' 'polkit' 'kmod' 'iw' 'iproute2' 'openssl' 'libnl')
-makedepends=('cmake' 'ninja' 'git' 'python' 'nasm' 'make' 'gcc')
+makedepends=('cmake' 'ninja' 'git' 'python' 'nasm' 'make' 'gcc' 'polkit')
 source=()
 sha256sums=()
 
