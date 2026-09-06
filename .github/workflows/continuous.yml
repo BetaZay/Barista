@@ -83,9 +83,9 @@ jobs:
         run: |
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          su builder -s /bin/bash -c "cd '$GITHUB_WORKSPACE' && BARISTA_SOURCE_DIR='$GITHUB_WORKSPACE' makepkg --noconfirm --force --nodeps -p packaging/arch/PKGBUILD"
+          su builder -s /bin/bash -c "cd '$GITHUB_WORKSPACE/packaging/arch' && BARISTA_SOURCE_DIR='$GITHUB_WORKSPACE' makepkg --noconfirm --force --nodeps"
           mkdir -p dist
-          find . -maxdepth 1 -name 'barista-*.pkg.tar.*' -exec cp {} dist/ \;
+          find packaging/arch -maxdepth 1 -name 'barista-*.pkg.tar.*' -exec cp {} dist/ \;
       - uses: actions/upload-artifact@v4
         with:
           name: arch

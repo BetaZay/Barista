@@ -11,7 +11,7 @@ source=()
 sha256sums=()
 
 # Build from a checkout.  CI sets BARISTA_SOURCE_DIR explicitly; local users
-# can run `BARISTA_SOURCE_DIR="$PWD" makepkg -f` from the repository root.
+# can run `cd packaging/arch && BARISTA_SOURCE_DIR="../.." makepkg -f`.
 _barista_source() {
     printf '%s\n' "${BARISTA_SOURCE_DIR:-${startdir}/../..}"
 }
