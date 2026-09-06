@@ -18,6 +18,7 @@
 #include <QNetworkInterface>
 #include <QPlainTextEdit>
 #include <QPixmap>
+#include <QImage>
 #include <QPushButton>
 #include <QSettings>
 #include <QStatusBar>
@@ -55,6 +56,33 @@ QLabel* FormHint(const QString& text, QWidget* parent)
     label->setWordWrap(true);
     label->setStyleSheet("color: palette(mid);");
     return label;
+}
+
+QPixmap AppLogoPreview(const QString& path)
+{
+    if (!path.endsWith(".i420")) return QPixmap(path);
+    constexpr int width = 864, height = 480;
+    constexpr qsizetype bytes = width * height * 3 / 2;
+    QFile input(path);
+    if (!input.open(QIODevice::ReadOnly) || input.size() != bytes) return {};
+    const auto i420 = input.readAll();
+    if (i420.size() != bytes) return {};
+    const auto* data = reinterpret_cast<const uchar*>(i420.constData());
+    const auto* u = data + width * height;
+    const auto* v = u + width * height / 4;
+    QImage image(width,height,QImage::Format_RGB32);
+    for (int y = 0; y < height; ++y) {
+        auto* output = reinterpret_cast<QRgb*>(image.scanLine(y));
+        for (int x = 0; x < width; ++x) {
+            const int c = std::max(0,int(data[y * width + x]) - 16);
+            const int d = int(u[(y / 2) * (width / 2) + x / 2]) - 128;
+            const int e = int(v[(y / 2) * (width / 2) + x / 2]) - 128;
+            output[x] = qRgb(std::clamp((298 * c + 409 * e + 128) >> 8,0,255),
+                std::clamp((298 * c - 100 * d - 208 * e + 128) >> 8,0,255),
+                std::clamp((298 * c + 516 * d + 128) >> 8,0,255));
+        }
+    }
+    return QPixmap::fromImage(image);
 }
 }
 
@@ -528,8 +556,10 @@ void Window::ApplyStatus(const QVariantMap& status)
     }
 
     auto updateAppLogo = [this,appConnected,appIdleLogo] {
-        QPixmap logo;
-        if (appConnected && !appIdleLogo.isEmpty()) logo.load(appIdleLogo);
+        const QString source = appConnected ? appIdleLogo : QString();
+        if (source == m_appLogoSource) return;
+        m_appLogoSource = source;
+        const QPixmap logo = source.isEmpty() ? QPixmap{} : AppLogoPreview(source);
         if (logo.isNull()) {
             m_appLogo->setPixmap({});
             m_appLogo->setText(appConnected ? "No app\nicon" : "No app\nconnected");

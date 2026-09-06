@@ -40,6 +40,7 @@ private:
     QMap<QString,QLabel*> m_health;
     QVariantMap m_lastStatus;
     QString m_operationError;
+    QString m_appLogoSource;
     bool m_pending = false;
     bool m_smokeTest = false, m_backgroundNotice = false;
     bool m_quitting = false;
