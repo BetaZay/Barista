@@ -17,6 +17,7 @@
 #include <QMessageBox>
 #include <QNetworkInterface>
 #include <QPlainTextEdit>
+#include <QPixmap>
 #include <QPushButton>
 #include <QSettings>
 #include <QStatusBar>
@@ -143,7 +144,19 @@ Window::Window(bool smokeTest)
     appForm->addRow("Idle logo:", m_appIdleLogo);
     appForm->addRow("Last activity:", m_appLastSeen);
     appForm->addRow("Media socket:", m_appSocket);
-    connectionLayout->addLayout(appForm);
+    auto* appDetails = new QWidget(connection);
+    auto* appDetailsLayout = new QHBoxLayout(appDetails);
+    appDetailsLayout->setContentsMargins(0,0,0,0);
+    appDetailsLayout->setSpacing(16);
+    appDetailsLayout->addLayout(appForm,1);
+    m_appLogo = new QLabel(appDetails);
+    m_appLogo->setObjectName("connectedAppLogo");
+    m_appLogo->setFixedSize(76,76);
+    m_appLogo->setAlignment(Qt::AlignCenter);
+    m_appLogo->setStyleSheet("color: palette(mid); border: 1px solid palette(midlight); border-radius: 6px;");
+    m_appLogo->setText("No app\nicon");
+    appDetailsLayout->addWidget(m_appLogo,0,Qt::AlignTop);
+    connectionLayout->addWidget(appDetails);
 
     auto* div2 = new QFrame(connection);
     div2->setFrameShape(QFrame::HLine);
@@ -513,6 +526,19 @@ void Window::ApplyStatus(const QVariantMap& status)
     {
         appIdleLogo = mediaEndpoint + ".idle.i420";
     }
+
+    auto updateAppLogo = [this,appConnected,appIdleLogo] {
+        QPixmap logo;
+        if (appConnected && !appIdleLogo.isEmpty()) logo.load(appIdleLogo);
+        if (logo.isNull()) {
+            m_appLogo->setPixmap({});
+            m_appLogo->setText(appConnected ? "No app\nicon" : "No app\nconnected");
+            return;
+        }
+        m_appLogo->setText({});
+        m_appLogo->setPixmap(logo.scaled(m_appLogo->size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
+    };
+    updateAppLogo();
 
     if (!running) {
         m_appName->setText("No session running");
