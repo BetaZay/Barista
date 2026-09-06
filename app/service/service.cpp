@@ -100,10 +100,32 @@ QVariantMap Service::GetStatus()
     QStringList missingTools;
     for (const auto* tool : {"iw", "ip", "nmcli"})
         if (QStandardPaths::findExecutable(tool,{"/usr/sbin","/usr/bin","/sbin","/bin"}).isEmpty()) missingTools << tool;
+    bool appConnected = false;
+    QString appName;
+    qint64 appPid = 0;
+    qint64 appLastSeen = 0;
+    qint64 appConnectedAt = 0;
+    QString appIdleLogo;
+    if (m_mode == "real" && !m_endpoint.isEmpty())
+    {
+        drc_ipc::AppHook::ConnectedAppInfo appInfo{};
+        if (drc_ipc::AppHook::read_app_lock(m_endpoint.toStdString(), appInfo))
+        {
+            appConnected = appInfo.connected;
+            appName = QString::fromStdString(appInfo.name);
+            appPid = appInfo.pid;
+            appLastSeen = static_cast<qint64>(appInfo.last_seen);
+            appConnectedAt = static_cast<qint64>(appInfo.connected_at);
+            appIdleLogo = QString::fromStdString(appInfo.idle_logo);
+        }
+    }
     return {{"apiVersion",1}, {"platform","linux"}, {"running",m_worker.state() != QProcess::NotRunning},
         {"phase",m_phase}, {"connected",m_connected}, {"mode",m_mode}, {"interface",m_interface},
         {"ownedByCaller",mine}, {"busy",m_authorizing || m_stopping}, {"error",m_error},
         {"mediaEndpoint",mine && m_mode == "real" ? m_endpoint : QString()},
+        {"appConnected",appConnected}, {"appName",appName}, {"appPid",appPid},
+        {"appLastSeen",appLastSeen}, {"appConnectedAt",appConnectedAt},
+        {"appIdleLogo",appIdleLogo},
         {"controllerSupported",QFileInfo::exists("/dev/uinput")}, {"pairingSupported",true},
         {"setupSupported",true}, {"controllerSetupAvailable",TrustedSystemHelper(BARISTA_MODPROBE)},
         {"networkManagerRunning",BusServiceRunning("org.freedesktop.NetworkManager")},

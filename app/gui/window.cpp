@@ -8,6 +8,8 @@
 #include <QColor>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QGroupBox>
+#include <QDateTime>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -23,6 +25,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <array>
+#include <QFile>
+#include <QFileInfo>
 
 namespace {
 enum class Tone { Neutral, Good, Warning, Bad };
@@ -67,6 +71,7 @@ Window::Window(bool smokeTest)
     m_status->setMinimumHeight(m_status->fontMetrics().height() + 8);
     SetTone(m_status,Tone::Warning,true);
     statusBar()->addWidget(m_status,1);
+    statusBar()->hide();
 
     auto* sessionMenu = menuBar()->addMenu("&Session");
     auto* startAction = sessionMenu->addAction("&Start");
@@ -98,11 +103,55 @@ Window::Window(bool smokeTest)
     auto* connection = new QWidget(m_tabs);
     auto* connectionLayout = new QVBoxLayout(connection);
     connectionLayout->setContentsMargins(12,12,12,12);
-    connectionLayout->setSpacing(8);
+    connectionLayout->setSpacing(10);
     m_hint = new QLabel(connection);
     m_hint->setObjectName("connectionHint");
     m_hint->setWordWrap(true);
     connectionLayout->addWidget(m_hint);
+
+    auto* gamepadHeader = new QLabel("<b>GamePad Status</b>", connection);
+    connectionLayout->addWidget(gamepadHeader);
+    auto* gamepadForm = new QFormLayout;
+    ConfigureForm(gamepadForm);
+    m_gamepadState = new QLabel("Session not started", connection);
+    m_gamepadPhase = new QLabel("Idle", connection);
+    m_gamepadMode = new QLabel("Screen + controller", connection);
+    m_gamepadIface = new QLabel("wlan0", connection);
+    gamepadForm->addRow("GamePad:", m_gamepadState);
+    gamepadForm->addRow("Phase:", m_gamepadPhase);
+    gamepadForm->addRow("Mode:", m_gamepadMode);
+    gamepadForm->addRow("Interface:", m_gamepadIface);
+    connectionLayout->addLayout(gamepadForm);
+
+    auto* div1 = new QFrame(connection);
+    div1->setFrameShape(QFrame::HLine);
+    div1->setFrameShadow(QFrame::Sunken);
+    connectionLayout->addWidget(div1);
+
+    auto* appHeader = new QLabel("<b>Connected Application</b>", connection);
+    connectionLayout->addWidget(appHeader);
+    auto* appForm = new QFormLayout;
+    ConfigureForm(appForm);
+    m_appName = new QLabel("No application connected", connection);
+    m_appLock = new QLabel("—", connection);
+    m_appIdleLogo = new QLabel("—", connection);
+    m_appLastSeen = new QLabel("—", connection);
+    m_appSocket = new QLabel("—", connection);
+    m_appSocket->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    appForm->addRow("Application:", m_appName);
+    appForm->addRow("Access lock:", m_appLock);
+    appForm->addRow("Idle logo:", m_appIdleLogo);
+    appForm->addRow("Last activity:", m_appLastSeen);
+    appForm->addRow("Media socket:", m_appSocket);
+    connectionLayout->addLayout(appForm);
+
+    auto* div2 = new QFrame(connection);
+    div2->setFrameShape(QFrame::HLine);
+    div2->setFrameShadow(QFrame::Sunken);
+    connectionLayout->addWidget(div2);
+
+    auto* sessionHeader = new QLabel("<b>Session Controls</b>", connection);
+    connectionLayout->addWidget(sessionHeader);
     auto* choices = new QFormLayout;
     ConfigureForm(choices);
     m_interface = new QComboBox(connection);
@@ -132,12 +181,12 @@ Window::Window(bool smokeTest)
     sessionLayout->addWidget(m_stop);
     sessionLayout->addStretch();
     choices->addRow("Session:",sessionControls);
-    connectionLayout->addLayout(choices);
     m_description = new QLabel(connection);
     m_description->setWordWrap(true);
-    connectionLayout->addWidget(m_description);
+    choices->addRow(QString(), m_description);
+    connectionLayout->addLayout(choices);
     connectionLayout->addStretch();
-    m_tabs->addTab(connection,"Connection");
+    m_tabs->addTab(connection,"General");
 
     auto* pairing = new QWidget(m_tabs);
     auto* pairingLayout = new QVBoxLayout(pairing);
@@ -410,6 +459,100 @@ void Window::ApplyStatus(const QVariantMap& status)
     SetTone(m_status,sessionTone,true);
     m_hint->setText(hint);
     SetTone(m_hint,sessionTone);
+
+    const auto sessionMode = status.value("mode").toString();
+    const auto ifaceName = status.value("interface").toString();
+    m_gamepadPhase->setText(running ? (phase.isEmpty() ? "Running" : phase) : "Idle");
+    m_gamepadMode->setText(sessionMode == "controller" ? "Controller only" : "Screen + controller");
+    m_gamepadIface->setText(ifaceName.isEmpty() ? m_interface->currentText() : ifaceName);
+    if (connected) {
+        m_gamepadState->setText("● Connected (5 GHz GamePad Wi-Fi)");
+        SetTone(m_gamepadState, Tone::Good, true);
+    } else if (running) {
+        m_gamepadState->setText("● Waiting for GamePad (searching…)");
+        SetTone(m_gamepadState, Tone::Bad, true);
+    } else if (phase == "pairing") {
+        m_gamepadState->setText("● Pairing mode active");
+        SetTone(m_gamepadState, Tone::Warning, true);
+    } else {
+        m_gamepadState->setText("● Session not started");
+        SetTone(m_gamepadState, Tone::Neutral, false);
+    }
+
+    bool appConnected = status.value("appConnected").toBool();
+    QString appName = status.value("appName").toString();
+    qint64 appPid = status.value("appPid").toLongLong();
+    qint64 appLastSeen = status.value("appLastSeen").toLongLong();
+    QString appIdleLogo = status.value("appIdleLogo").toString();
+    const QString mediaEndpoint = status.value("mediaEndpoint").toString();
+
+    // Fallback: check lock file directly if mediaEndpoint is known
+    if (!appConnected && !mediaEndpoint.isEmpty())
+    {
+        QFile file(mediaEndpoint + ".lock");
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            while (!file.atEnd())
+            {
+                const QString line = QString::fromUtf8(file.readLine()).trimmed();
+                const int eq = line.indexOf('=');
+                if (eq > 0)
+                {
+                    const QString k = line.left(eq), v = line.mid(eq + 1);
+                    if (k == "app") appName = v;
+                    else if (k == "pid") appPid = v.toLongLong();
+                    else if (k == "last_seen") appLastSeen = v.toLongLong();
+                    else if (k == "idle_logo" || k == "logo") appIdleLogo = v;
+                }
+            }
+            if (appPid > 0) appConnected = true;
+        }
+    }
+
+    if (appIdleLogo.isEmpty() && !mediaEndpoint.isEmpty() && QFile::exists(mediaEndpoint + ".idle.i420"))
+    {
+        appIdleLogo = mediaEndpoint + ".idle.i420";
+    }
+
+    if (!running) {
+        m_appName->setText("No session running");
+        SetTone(m_appName, Tone::Neutral, false);
+        m_appLock->setText("—");
+        SetTone(m_appLock, Tone::Neutral, false);
+        if (m_appIdleLogo) m_appIdleLogo->setText("—");
+        m_appLastSeen->setText("—");
+        m_appSocket->setText("—");
+    } else if (sessionMode == "controller") {
+        m_appName->setText("Virtual PC Controller (uinput)");
+        SetTone(m_appName, Tone::Good, false);
+        m_appLock->setText("Not applicable in controller mode");
+        SetTone(m_appLock, Tone::Neutral, false);
+        if (m_appIdleLogo) m_appIdleLogo->setText("Default (Barista)");
+        m_appLastSeen->setText("Active");
+        m_appSocket->setText("Internal controller bridge");
+    } else if (appConnected) {
+        m_appName->setText(QString("%1 (PID %2)").arg(appName.isEmpty() ? "Connected App" : appName).arg(appPid));
+        SetTone(m_appName, Tone::Good, true);
+        m_appLock->setText(QString("Locked by %1").arg(appName.isEmpty() ? "active app" : appName));
+        SetTone(m_appLock, Tone::Good, false);
+        if (m_appIdleLogo) {
+            m_appIdleLogo->setText(appIdleLogo.isEmpty() ? "Default (Barista)" : QFileInfo(appIdleLogo).fileName());
+        }
+        qint64 now = QDateTime::currentSecsSinceEpoch();
+        qint64 diff = (appLastSeen > 0 && now >= appLastSeen) ? (now - appLastSeen) : 0;
+        m_appLastSeen->setText(diff == 0 ? "Active just now" : QString("%1s ago").arg(diff));
+        m_appSocket->setText(mediaEndpoint.isEmpty() ? "Active" : mediaEndpoint);
+    } else {
+        m_appName->setText("Waiting for application (e.g. Cemu)");
+        SetTone(m_appName, Tone::Warning, false);
+        m_appLock->setText("Unlocked");
+        SetTone(m_appLock, Tone::Neutral, false);
+        if (m_appIdleLogo) {
+            m_appIdleLogo->setText("Default (Barista)");
+        }
+        m_appLastSeen->setText("—");
+        m_appSocket->setText(mediaEndpoint.isEmpty() ? "Listening" : mediaEndpoint);
+    }
     const bool supported = Mode() != "controller" || status.value("controllerSupported").toBool() ||
         status.value("controllerSetupAvailable").toBool();
     m_start->setEnabled(available && !running && !busy && supported);

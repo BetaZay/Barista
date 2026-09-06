@@ -33,6 +33,20 @@ public:
     bool read_input(std::array<uint8_t, 128>& report) const;
     bool read_video(std::span<uint8_t> i420, bool& active);
     void read_pcm(std::span<uint8_t> s16le);
+    struct ConnectedAppInfo
+    {
+        bool connected = false;
+        uint32_t pid = 0;
+        uint32_t uid = 0;
+        std::string name;
+        std::string idle_logo;
+        uint64_t connected_at = 0;
+        uint64_t last_seen = 0;
+    };
+    ConnectedAppInfo connected_app() const;
+    std::string rejection_reason() const;
+    uint64_t idle_revision() const;
+    static bool read_app_lock(const std::string& socket_path, ConnectedAppInfo& info);
     static std::vector<uint8_t> rgb_to_i420(std::span<const uint8_t> rgb, unsigned width, unsigned height);
 private:
     class Impl;

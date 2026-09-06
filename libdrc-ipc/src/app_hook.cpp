@@ -5,8 +5,13 @@
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
+#include <fcntl.h>
+#include <fstream>
 #include <mutex>
+#include <signal.h>
+#include <sstream>
 #include <thread>
 #include <cerrno>
 #include <poll.h>
@@ -22,7 +27,7 @@ namespace
 using Clock = std::chrono::steady_clock;
 constexpr size_t Chunk = 16384;
 constexpr size_t MaxAudioSamples = 4800 * 2; // bounded to 100ms, never grow latency
-enum Type : uint32_t { Video = 1, Idle = 2, Active = 3, Pcm = 4, Input = 5 };
+enum Type : uint32_t { Video = 1, Idle = 2, Active = 3, Pcm = 4, Input = 5, Reject = 6 };
 // Fixed little-endian local protocol: magic, type, frame ID, byte offset.
 void put(uint8_t* p, uint32_t v) { for (unsigned i = 0; i < 4; ++i) p[i] = v >> (8 * i); }
 uint32_t get(const uint8_t* p)
@@ -30,6 +35,122 @@ uint32_t get(const uint8_t* p)
     return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
 }
 struct Rgb { std::vector<uint8_t> bytes; unsigned width = 0, height = 0; };
+
+bool is_pid_alive(pid_t pid)
+{
+    if (pid <= 0) return false;
+    if (kill(pid, 0) == 0) return true;
+    return errno == EPERM;
+}
+
+std::string get_process_name(pid_t pid)
+{
+    if (pid <= 0) return {};
+    std::string comm_path = "/proc/" + std::to_string(pid) + "/comm";
+    std::ifstream file(comm_path);
+    if (!file) return {};
+    std::string name;
+    if (std::getline(file, name))
+    {
+        while (!name.empty() && (name.back() == '\n' || name.back() == '\r' || name.back() == ' '))
+            name.pop_back();
+        return name;
+    }
+    return {};
+}
+
+bool read_lock_file(const std::string& lock_path, AppHook::ConnectedAppInfo& info)
+{
+    std::ifstream file(lock_path);
+    if (!file) return false;
+    info = {};
+    std::string line;
+    while (std::getline(file, line))
+    {
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        while (!val.empty() && (val.back() == '\r' || val.back() == '\n' || val.back() == ' ')) val.pop_back();
+        if (key == "pid") {
+            char* end = nullptr;
+            info.pid = static_cast<uint32_t>(std::strtoul(val.c_str(), &end, 10));
+        } else if (key == "uid") {
+            char* end = nullptr;
+            info.uid = static_cast<uint32_t>(std::strtoul(val.c_str(), &end, 10));
+        } else if (key == "app" || key == "name") {
+            info.name = val;
+        } else if (key == "idle_logo" || key == "logo") {
+            info.idle_logo = val;
+        } else if (key == "connected_at") {
+            char* end = nullptr;
+            info.connected_at = std::strtoull(val.c_str(), &end, 10);
+        } else if (key == "last_seen") {
+            char* end = nullptr;
+            info.last_seen = std::strtoull(val.c_str(), &end, 10);
+        }
+    }
+    info.connected = (info.pid > 0);
+    return info.connected;
+}
+
+bool write_lock_file(const std::string& lock_path, const AppHook::ConnectedAppInfo& info, uid_t allowed_uid)
+{
+    std::string tmp_path = lock_path + ".tmp." + std::to_string(getpid()) + "." + std::to_string(info.pid);
+    int fd = open(tmp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) return false;
+    if (geteuid() == 0)
+        (void)fchown(fd, allowed_uid, static_cast<gid_t>(-1));
+    (void)fchmod(fd, 0644);
+
+    std::ostringstream ss;
+    ss << "pid=" << info.pid << "\n";
+    ss << "uid=" << info.uid << "\n";
+    ss << "app=" << info.name << "\n";
+    if (!info.idle_logo.empty())
+        ss << "idle_logo=" << info.idle_logo << "\n";
+    ss << "connected_at=" << info.connected_at << "\n";
+    ss << "last_seen=" << info.last_seen << "\n";
+    std::string content = ss.str();
+    ssize_t written = write(fd, content.data(), content.size());
+    close(fd);
+    if (written != static_cast<ssize_t>(content.size()))
+    {
+        unlink(tmp_path.c_str());
+        return false;
+    }
+    return rename(tmp_path.c_str(), lock_path.c_str()) == 0;
+}
+
+bool check_and_clean_stale_lock(const std::string& lock_path, uint64_t max_age_seconds = 5)
+{
+    struct stat st{};
+    if (lstat(lock_path.c_str(), &st) != 0) return false;
+    AppHook::ConnectedAppInfo info{};
+    if (!read_lock_file(lock_path, info))
+    {
+        unlink(lock_path.c_str());
+        return true;
+    }
+    uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+    bool stale = false;
+    if (!is_pid_alive(static_cast<pid_t>(info.pid)))
+    {
+        stale = true;
+    }
+    else if (info.last_seen > 0 && now > info.last_seen + max_age_seconds)
+    {
+        stale = true;
+    }
+    if (stale)
+    {
+        unlink(lock_path.c_str());
+        if (!info.idle_logo.empty())
+            unlink(info.idle_logo.c_str());
+        return true;
+    }
+    return false;
+}
 }
 
 class AppHook::Impl
@@ -52,6 +173,8 @@ public:
     dev_t socket_dev{};
     ino_t socket_ino{};
     uid_t allowed_uid = geteuid();
+    ConnectedAppInfo client_info{};
+    std::string rejection_message;
 
     bool send_packet(int fd, Type type, uint32_t id, uint32_t offset, std::span<const uint8_t> payload)
     {
@@ -79,7 +202,7 @@ public:
         return true;
     }
 
-    void session(int fd)
+    void session(int fd, const ucred& cred)
     {
         linked = true;
         std::vector<uint8_t> assembly;
@@ -87,6 +210,40 @@ public:
         uint64_t sent_idle = 0;
         auto next_heartbeat = Clock::time_point{};
         auto last_received = Clock::now();
+        const std::string lock_path = path + ".lock";
+
+        ConnectedAppInfo current{};
+        if (server)
+        {
+            current.connected = true;
+            current.pid = cred.pid;
+            current.uid = cred.uid;
+            current.name = get_process_name(cred.pid);
+            if (current.name.empty()) current.name = "PID " + std::to_string(cred.pid);
+            current.connected_at = static_cast<uint64_t>(std::time(nullptr));
+            current.last_seen = current.connected_at;
+
+            const std::string idle_path = path + ".idle.i420";
+            if (std::ifstream test_file(idle_path, std::ios::binary); test_file)
+            {
+                std::vector<uint8_t> saved_idle(FrameBytes);
+                if (test_file.read(reinterpret_cast<char*>(saved_idle.data()), saved_idle.size()) &&
+                    test_file.gcount() == static_cast<std::streamsize>(FrameBytes))
+                {
+                    std::lock_guard lock(mutex);
+                    idle = std::move(saved_idle);
+                    current.idle_logo = idle_path;
+                    ++idle_revision;
+                }
+            }
+
+            {
+                std::lock_guard lock(mutex);
+                client_info = current;
+            }
+            write_lock_file(lock_path, current, allowed_uid);
+        }
+
         while (!stopping)
         {
             if (!server)
@@ -127,11 +284,51 @@ public:
                 }
                 if (available && !send_packet(fd, Input, 0, 0, report)) break;
                 if (Clock::now() - last_received > std::chrono::seconds(2)) break;
+
+                auto now_sec = static_cast<uint64_t>(std::time(nullptr));
+                if (now_sec != current.last_seen)
+                {
+                    current.last_seen = now_sec;
+                    {
+                        std::lock_guard lock(mutex);
+                        client_info.last_seen = now_sec;
+                    }
+                    write_lock_file(lock_path, current, allowed_uid);
+                }
             }
 
-            pollfd poll_fd{fd, POLLIN, 0};
-            poll(&poll_fd, 1, 2);
-            if (poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL)) break;
+            if (server)
+            {
+                pollfd poll_fds[2] = {
+                    {fd, POLLIN, 0},
+                    {listener, POLLIN, 0}
+                };
+                poll(poll_fds, 2, 2);
+                if ((poll_fds[0].revents & (POLLERR | POLLNVAL)) || ((poll_fds[0].revents & POLLHUP) && !(poll_fds[0].revents & POLLIN))) break;
+                if (poll_fds[1].revents & POLLIN)
+                {
+                    int reject_fd = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+                    if (reject_fd >= 0)
+                    {
+                        ucred rcred{}; socklen_t rsize = sizeof(rcred);
+                        if (getsockopt(reject_fd, SOL_SOCKET, SO_PEERCRED, &rcred, &rsize) == 0 &&
+                            (rcred.uid == allowed_uid || rcred.uid == 0))
+                        {
+                            std::string reason = "Busy: already connected to " + current.name + " (PID " + std::to_string(current.pid) + ")";
+                            send_packet(reject_fd, Reject, 0, 0, std::span(reinterpret_cast<const uint8_t*>(reason.data()), reason.size()));
+                        }
+                        shutdown(reject_fd, SHUT_WR);
+                        close(reject_fd);
+                    }
+                }
+            }
+            else
+            {
+                pollfd poll_fd{fd, POLLIN, 0};
+                poll(&poll_fd, 1, 2);
+                if ((poll_fd.revents & (POLLERR | POLLNVAL)) || ((poll_fd.revents & POLLHUP) && !(poll_fd.revents & POLLIN))) break;
+            }
+
             // Bound each batch so outgoing input/audio cannot starve.
             bool valid = true;
             for (unsigned batch = 0; batch < 64; ++batch)
@@ -144,6 +341,14 @@ public:
                 last_received = Clock::now();
                 const auto type = get(packet.data() + 4), id = get(packet.data() + 8), offset = get(packet.data() + 12);
                 const auto payload = std::span(packet).subspan(16, n - 16);
+                if (!server && type == Reject)
+                {
+                    std::string reason(reinterpret_cast<const char*>(payload.data()), payload.size());
+                    std::lock_guard lock(mutex);
+                    rejection_message = reason;
+                    valid = false;
+                    break;
+                }
                 if (server && (type == Video || type == Idle))
                 {
                     if (offset == 0) { assembly.clear(); assembly_id = id; assembly_type = type; }
@@ -152,9 +357,31 @@ public:
                     assembly.insert(assembly.end(), payload.begin(), payload.end());
                     if (assembly.size() == FrameBytes)
                     {
-                        std::lock_guard lock(mutex);
-                        if (type == Idle) idle = std::move(assembly);
-                        else { video = std::move(assembly); video_time = Clock::now(); }
+                        if (type == Idle)
+                        {
+                            const std::string idle_path = path + ".idle.i420";
+                            int img_fd = open(idle_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+                            if (img_fd >= 0)
+                            {
+                                if (geteuid() == 0)
+                                    (void)fchown(img_fd, allowed_uid, static_cast<gid_t>(-1));
+                                (void)fchmod(img_fd, 0644);
+                                (void)write(img_fd, assembly.data(), assembly.size());
+                                close(img_fd);
+                            }
+                            std::lock_guard lock(mutex);
+                            idle = std::move(assembly);
+                            client_info.idle_logo = idle_path;
+                            current.idle_logo = idle_path;
+                            ++idle_revision;
+                            write_lock_file(lock_path, client_info, allowed_uid);
+                        }
+                        else
+                        {
+                            std::lock_guard lock(mutex);
+                            video = std::move(assembly);
+                            video_time = Clock::now();
+                        }
                         assembly.clear();
                     }
                 }
@@ -183,7 +410,12 @@ public:
         }
         linked = false;
         close(fd);
+        if (server)
+        {
+            unlink(lock_path.c_str());
+        }
         std::lock_guard lock(mutex);
+        client_info = {};
         audio.clear(); video.clear(); input_time = {}; input_pending = false;
         if (server) { active = false; heartbeat = {}; }
     }
@@ -193,19 +425,40 @@ public:
         while (!stopping)
         {
             int fd = -1;
+            ucred cred{};
             if (server)
             {
                 pollfd p{listener, POLLIN, 0}; poll(&p, 1, 100);
                 if (p.revents & POLLIN) fd = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
                 if (fd >= 0)
                 {
-                    ucred cred{}; socklen_t size = sizeof(cred);
+                    socklen_t size = sizeof(cred);
                     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &size) != 0 ||
                         (cred.uid != allowed_uid && cred.uid != 0)) { close(fd); fd = -1; }
+                    else
+                    {
+                        const std::string lock_path = path + ".lock";
+                        check_and_clean_stale_lock(lock_path);
+                        AppHook::ConnectedAppInfo lock_info{};
+                        if (read_lock_file(lock_path, lock_info))
+                        {
+                            std::string reason = "Busy: already connected to " + (lock_info.name.empty() ? "another app" : lock_info.name) + " (PID " + std::to_string(lock_info.pid) + ")";
+                            send_packet(fd, Reject, 0, 0, std::span(reinterpret_cast<const uint8_t*>(reason.data()), reason.size()));
+                            close(fd);
+                            fd = -1;
+                        }
+                    }
                 }
             }
             else
             {
+                check_and_clean_stale_lock(path + ".lock");
+                AppHook::ConnectedAppInfo lock_info{};
+                if (read_lock_file(path + ".lock", lock_info) && lock_info.pid != static_cast<uint32_t>(getpid()))
+                {
+                    std::lock_guard lock(mutex);
+                    rejection_message = "Busy: already connected to " + (lock_info.name.empty() ? "another app" : lock_info.name) + " (PID " + std::to_string(lock_info.pid) + ")";
+                }
                 fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
                 sockaddr_un address{}; address.sun_family = AF_UNIX;
                 std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
@@ -213,7 +466,13 @@ public:
                 { close(fd); fd = -1; }
                 if (fd < 0) std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            if (fd >= 0) session(fd);
+            if (fd >= 0)
+            {
+                int buf_size = 2 * 1024 * 1024;
+                setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
+                setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
+                session(fd, cred);
+            }
         }
     }
 };
@@ -227,6 +486,7 @@ bool AppHook::start(const std::string& path, std::string& error)
     auto& s = *m_impl; s.path = path; s.stopping = false;
     if (s.server)
     {
+        check_and_clean_stale_lock(path + ".lock");
         // Never unlink a pre-existing endpoint: another daemon may own it.
         s.listener = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
         sockaddr_un address{}; address.sun_family = AF_UNIX;
@@ -261,6 +521,8 @@ void AppHook::stop()
     if (s.listener >= 0)
     {
         close(s.listener); s.listener = -1;
+        unlink((s.path + ".lock").c_str());
+        unlink((s.path + ".idle.i420").c_str());
         struct stat info{};
         if (lstat(s.path.c_str(), &info) == 0 && info.st_dev == s.socket_dev && info.st_ino == s.socket_ino)
             unlink(s.path.c_str());
@@ -354,5 +616,26 @@ std::vector<uint8_t> AppHook::rgb_to_i420(std::span<const uint8_t> rgb, unsigned
             out[Width * Height * 5 / 4 + chroma] = std::clamp(((112*r - 94*g - 18*b + 128) >> 8) + 128, 16, 240);
         }
     return out;
+}
+AppHook::ConnectedAppInfo AppHook::connected_app() const
+{
+    std::lock_guard lock(m_impl->mutex);
+    return m_impl->client_info;
+}
+std::string AppHook::rejection_reason() const
+{
+    std::lock_guard lock(m_impl->mutex);
+    return m_impl->rejection_message;
+}
+uint64_t AppHook::idle_revision() const
+{
+    std::lock_guard lock(m_impl->mutex);
+    return m_impl->idle_revision;
+}
+bool AppHook::read_app_lock(const std::string& socket_path, ConnectedAppInfo& info)
+{
+    std::string lock_path = socket_path + ".lock";
+    check_and_clean_stale_lock(lock_path);
+    return read_lock_file(lock_path, info);
 }
 }

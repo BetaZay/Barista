@@ -801,6 +801,7 @@ void MediaStreamer::video_loop()
 	bool artifact_dumped = false;
 	bool external_active = false;
 	bool external_connected = false;
+	uint64_t external_idle_revision = 0;
 	uint64_t encode_failures = 0;
 	uint64_t late_video_starts = 0; // Serial sender only.
 	uint64_t interval_encode_us = 0;
@@ -873,13 +874,18 @@ void MediaStreamer::video_loop()
 			if (connected != external_connected)
 			{
 				external_connected = connected;
-				m_transport.report_status(connected ? "MUG AppHook client connected" : "MUG AppHook client disconnected");
+				const auto app = m_bridge->connected_app();
+				const std::string desc = app.name.empty() ? "" : (": " + app.name + " (PID " + std::to_string(app.pid) + ")");
+				m_transport.report_status(connected ? ("MUG AppHook client connected" + desc) : "MUG AppHook client disconnected");
 			}
 			bool active = false;
 			m_bridge->read_video(frame, active);
-			if (active != external_active)
+			const uint64_t current_idle_rev = m_bridge->idle_revision();
+			if (active != external_active || current_idle_rev != external_idle_revision)
 			{
-				force_idr = true; external_active = active;
+				force_idr = true;
+				external_active = active;
+				external_idle_revision = current_idle_rev;
 				m_transport.report_status(active ? "AppHook source: active" : "AppHook source: idle");
 			}
 		}

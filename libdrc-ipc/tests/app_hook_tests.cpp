@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <fstream>
 
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 template<class F> void wait_for(F f)
@@ -95,11 +96,45 @@ int main()
         client.set_active(true);
         client.submit_rgb(white,6,6);
         wait_for([&] { return server.read_video(frame,active) && active && frame[0] == 235; });
+        // Test single connected app, .sock.lock file, and rejection of 2nd client:
+        drc_ipc::AppHook::ConnectedAppInfo lock_info{};
+        check(drc_ipc::AppHook::read_app_lock(path, lock_info), "lock file exists while connected");
+        check(lock_info.connected && lock_info.pid == static_cast<uint32_t>(getpid()), "lock file has client pid");
+        check(!lock_info.name.empty(), "lock file has process name");
+        check(lock_info.idle_logo.find(".idle.i420") != std::string::npos, "lock file has idle logo path");
+        check(access((path + ".idle.i420").c_str(), F_OK) == 0, "idle logo file saved next to socket");
+        check(server.idle_revision() > 0, "idle_revision updated");
+        check(server.connected_app().pid == static_cast<uint32_t>(getpid()), "server reports connected app");
+
+        // A second client must be rejected with an explanation:
+        drc_ipc::AppHook client2(false);
+        std::string client2_err;
+        client2.start(path, client2_err);
+        wait_for([&] { return !client2.rejection_reason().empty(); });
+        check(client2.rejection_reason().find("Busy: already connected to") != std::string::npos, "client2 receives rejection reason");
+        check(server.connected(), "first client remains connected");
+        client2.stop();
+
         client.stop();
         wait_for([&] { return !server.connected(); });
+        check(!drc_ipc::AppHook::read_app_lock(path, lock_info), "lock file cleaned up on disconnect");
+        check(access((path + ".idle.i420").c_str(), F_OK) == 0, "idle logo file preserved for daemon access");
         check(server.read_video(frame,active) && !active && frame == logo, "service logo replaces last game frame on disconnect");
+
+        // Test auto-destroying stale lock files:
+        const std::string lock_path = path + ".lock";
+        {
+            std::ofstream f(lock_path);
+            f << "pid=99999999\nuid=" << geteuid() << "\napp=ghost\nconnected_at=1000\nlast_seen=1000\n";
+        }
+        check(access(lock_path.c_str(), F_OK) == 0, "stale lock created");
+        check(!drc_ipc::AppHook::read_app_lock(path, lock_info), "stale lock auto-destroyed on read");
+        check(access(lock_path.c_str(), F_OK) != 0, "stale lock unlinked");
+
         server.stop();
         check(access(path.c_str(), F_OK) != 0, "socket cleanup");
+        check(access(lock_path.c_str(), F_OK) != 0, "lock file cleanup on server stop");
+        check(access((path + ".idle.i420").c_str(), F_OK) != 0, "idle logo cleanup on server stop");
         rmdir(directory);
         std::cout << "AppHook tests passed\n";
     }
