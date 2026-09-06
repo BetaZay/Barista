@@ -901,8 +901,8 @@ private:
 			return Fail("failed to start DRC protocol transport: " + error);
 		}
 		Log("runtime-protocol: transport started");
-		const char* cemu_socket = std::getenv("DRCD_CEMU_SOCKET");
-		if (!m_test_media_path.empty() || m_test_black_frames || (cemu_socket && *cemu_socket))
+		const char* app_hook_socket = std::getenv("BARISTA_MUG_SOCKET");
+		if (!m_test_media_path.empty() || m_test_black_frames || (app_hook_socket && *app_hook_socket))
 		{
 			m_media_streamer = std::make_unique<MediaStreamer>(*m_runtime_transport,
 				m_test_media_path, m_test_black_frames);
@@ -970,8 +970,8 @@ public:
 			std::string error;
 			if (m_media_streamer->start(error))
 			{
-				const std::string source = std::getenv("DRCD_CEMU_SOCKET")
-					? "Cemu local media bridge" : (m_test_black_frames
+				const std::string source = std::getenv("BARISTA_MUG_SOCKET")
+					? "MUG AppHook" : (m_test_black_frames
 					? "built-in generated frames" : m_test_media_path);
 				Log("media: streaming " + source);
 				QueueStatus("Streaming media to GamePad: " + source);

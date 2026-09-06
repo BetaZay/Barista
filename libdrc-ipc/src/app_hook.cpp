@@ -1,4 +1,4 @@
-#include "drc_ipc/media_bridge.h"
+#include "drc_ipc/app_hook.h"
 
 #include <algorithm>
 #include <atomic>
@@ -32,7 +32,7 @@ uint32_t get(const uint8_t* p)
 struct Rgb { std::vector<uint8_t> bytes; unsigned width = 0, height = 0; };
 }
 
-class MediaBridge::Impl
+class AppHook::Impl
 {
 public:
     explicit Impl(bool server) : server(server) {}
@@ -41,7 +41,7 @@ public:
     std::thread worker;
     mutable std::mutex mutex;
     Rgb pending, idle_rgb;
-    std::vector<uint8_t> video, idle;
+    std::vector<uint8_t> video, idle, server_idle;
     std::deque<int16_t> audio;
     std::array<uint8_t, 128> input{};
     Clock::time_point input_time{}, video_time{}, heartbeat{};
@@ -57,7 +57,7 @@ public:
     {
         std::array<uint8_t, 16 + Chunk> packet{};
         if (payload.size() > Chunk) return false;
-        put(packet.data(), 0x314d5244); // DRM1
+        put(packet.data(), 0x3147554d); // MUG1
         put(packet.data() + 4, type); put(packet.data() + 8, id); put(packet.data() + 12, offset);
         std::copy(payload.begin(), payload.end(), packet.begin() + 16);
         const auto deadline = Clock::now() + std::chrono::milliseconds(100);
@@ -112,9 +112,9 @@ public:
                     next_heartbeat = Clock::now() + std::chrono::milliseconds(100);
                 }
                 if (!logo.bytes.empty() && !send_frame(fd, Idle, ++frame_id,
-                    MediaBridge::rgb_to_i420(logo.bytes, logo.width, logo.height))) break;
+                    AppHook::rgb_to_i420(logo.bytes, logo.width, logo.height))) break;
                 if (!frame.bytes.empty() && !send_frame(fd, Video, ++frame_id,
-                    MediaBridge::rgb_to_i420(frame.bytes, frame.width, frame.height))) break;
+                    AppHook::rgb_to_i420(frame.bytes, frame.width, frame.height))) break;
                 if (!pcm.empty() && !send_packet(fd, Pcm, 0, 0, pcm)) break;
             }
             else
@@ -139,7 +139,7 @@ public:
                 std::array<uint8_t, 16 + Chunk> packet;
                 const auto n = recv(fd, packet.data(), packet.size(), MSG_DONTWAIT | MSG_TRUNC);
                 if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) break;
-                if (n < 16 || n > static_cast<ssize_t>(packet.size()) || get(packet.data()) != 0x314d5244)
+                if (n < 16 || n > static_cast<ssize_t>(packet.size()) || get(packet.data()) != 0x3147554d)
                 { valid = false; break; }
                 last_received = Clock::now();
                 const auto type = get(packet.data() + 4), id = get(packet.data() + 8), offset = get(packet.data() + 12);
@@ -218,11 +218,11 @@ public:
     }
 };
 
-MediaBridge::MediaBridge(bool server) : m_impl(std::make_unique<Impl>(server)) {}
-MediaBridge::~MediaBridge() { stop(); }
-bool MediaBridge::start(const std::string& path, std::string& error)
+AppHook::AppHook(bool server) : m_impl(std::make_unique<Impl>(server)) {}
+AppHook::~AppHook() { stop(); }
+bool AppHook::start(const std::string& path, std::string& error)
 {
-    if (m_impl->worker.joinable()) { error = "media bridge already started"; return false; }
+    if (m_impl->worker.joinable()) { error = "AppHook already started"; return false; }
     if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path)) { error = "invalid media socket path"; return false; }
     auto& s = *m_impl; s.path = path; s.stopping = false;
     if (s.server)
@@ -239,18 +239,22 @@ bool MediaBridge::start(const std::string& path, std::string& error)
         }
         struct stat info{}; lstat(path.c_str(), &info); s.socket_dev = info.st_dev; s.socket_ino = info.st_ino;
         if (geteuid() == 0)
-            if (const char* uid = std::getenv("SUDO_UID"))
+        {
+            const char* uid = std::getenv("BARISTA_CLIENT_UID");
+            if (!uid) uid = std::getenv("SUDO_UID");
+            if (uid)
             {
                 char* end = nullptr; const auto value = std::strtoul(uid, &end, 10);
                 if (*uid && end && !*end && value <= UINT32_MAX) s.allowed_uid = static_cast<uid_t>(value);
             }
+        }
         if (chown(path.c_str(), s.allowed_uid, static_cast<gid_t>(-1)) != 0 || chmod(path.c_str(), 0600) != 0 || listen(s.listener, 1) != 0)
         { error = "media socket permissions/listen: " + std::string(std::strerror(errno)); stop(); return false; }
     }
     s.worker = std::thread([&s] { s.run(); });
     return true;
 }
-void MediaBridge::stop()
+void AppHook::stop()
 {
     auto& s = *m_impl; s.stopping = true;
     if (s.worker.joinable()) s.worker.join();
@@ -262,13 +266,20 @@ void MediaBridge::stop()
             unlink(s.path.c_str());
     }
 }
-bool MediaBridge::connected() const { return m_impl->linked; }
-void MediaBridge::set_active(bool active)
+bool AppHook::connected() const { return m_impl->linked; }
+void AppHook::set_active(bool active)
 {
     std::lock_guard lock(m_impl->mutex); m_impl->active = active;
     if (!active) { m_impl->audio.clear(); m_impl->pending = {}; }
 }
-void MediaBridge::submit_rgb(std::vector<uint8_t> rgb, unsigned width, unsigned height, bool idle)
+bool AppHook::set_idle_frame(std::span<const uint8_t> i420)
+{
+    if (!i420.empty() && i420.size() != FrameBytes) return false;
+    std::lock_guard lock(m_impl->mutex);
+    m_impl->server_idle.assign(i420.begin(), i420.end());
+    return true;
+}
+void AppHook::submit_rgb(std::vector<uint8_t> rgb, unsigned width, unsigned height, bool idle)
 {
     if (!width || !height || width > 8192 || height > 8192 || rgb.size() != size_t(width) * height * 3) return;
     std::unique_lock lock(m_impl->mutex, std::try_to_lock);
@@ -276,7 +287,7 @@ void MediaBridge::submit_rgb(std::vector<uint8_t> rgb, unsigned width, unsigned 
     if (idle) { m_impl->idle_rgb = {std::move(rgb), width, height}; ++m_impl->idle_revision; }
     else m_impl->pending = {std::move(rgb), width, height};
 }
-void MediaBridge::submit_pcm(std::span<const int16_t> stereo)
+void AppHook::submit_pcm(std::span<const int16_t> stereo)
 {
     if (stereo.size() % 2 || stereo.size() > MaxAudioSamples) return;
     std::unique_lock lock(m_impl->mutex, std::try_to_lock);
@@ -284,28 +295,29 @@ void MediaBridge::submit_pcm(std::span<const int16_t> stereo)
     m_impl->audio.insert(m_impl->audio.end(), stereo.begin(), stereo.end());
     while (m_impl->audio.size() > MaxAudioSamples) m_impl->audio.pop_front();
 }
-void MediaBridge::submit_input(std::span<const uint8_t> report)
+void AppHook::submit_input(std::span<const uint8_t> report)
 {
     if (report.size() != 128) return;
     std::lock_guard lock(m_impl->mutex);
     std::copy(report.begin(), report.end(), m_impl->input.begin()); m_impl->input_pending = true;
 }
-bool MediaBridge::read_input(std::array<uint8_t, 128>& report) const
+bool AppHook::read_input(std::array<uint8_t, 128>& report) const
 {
     std::lock_guard lock(m_impl->mutex);
     if (!m_impl->linked || Clock::now() - m_impl->input_time > std::chrono::milliseconds(500)) return false;
     report = m_impl->input; return true;
 }
-bool MediaBridge::read_video(std::span<uint8_t> i420, bool& active)
+bool AppHook::read_video(std::span<uint8_t> i420, bool& active)
 {
     if (i420.size() != FrameBytes) return false;
     std::lock_guard lock(m_impl->mutex);
     active = m_impl->linked && m_impl->active && Clock::now() - m_impl->heartbeat < std::chrono::seconds(1);
-    const auto& frame = active && !m_impl->video.empty() ? m_impl->video : m_impl->idle;
+    const auto& idle = m_impl->server_idle.empty() ? m_impl->idle : m_impl->server_idle;
+    const auto& frame = active && !m_impl->video.empty() ? m_impl->video : idle;
     if (frame.size() != FrameBytes) return false;
     std::copy(frame.begin(), frame.end(), i420.begin()); return true;
 }
-void MediaBridge::read_pcm(std::span<uint8_t> output)
+void AppHook::read_pcm(std::span<uint8_t> output)
 {
     std::fill(output.begin(), output.end(), 0);
     std::lock_guard lock(m_impl->mutex);
@@ -318,7 +330,7 @@ void MediaBridge::read_pcm(std::span<uint8_t> output)
             output[i + channel * 2] = v; output[i + channel * 2 + 1] = v >> 8;
         }
 }
-std::vector<uint8_t> MediaBridge::rgb_to_i420(std::span<const uint8_t> rgb, unsigned width, unsigned height)
+std::vector<uint8_t> AppHook::rgb_to_i420(std::span<const uint8_t> rgb, unsigned width, unsigned height)
 {
     if (!width || !height || width > 8192 || height > 8192 || rgb.size() != size_t(width) * height * 3) return {};
     std::vector<uint8_t> out(FrameBytes, 128);

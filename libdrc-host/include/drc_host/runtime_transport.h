@@ -59,7 +59,7 @@ struct RuntimeTransportStats
 
 // Owns the network-facing Wii U side of the DRC application protocol.  The
 // AP, WPA and DHCP layers must already be active before start() is called.
-// Applications such as Cemu consume received packets and submit encoded
+// AppHook clients consume received packets and submit encoded
 // video/audio through this API; they do not need direct access to wlan0.
 class RuntimeTransport
 {

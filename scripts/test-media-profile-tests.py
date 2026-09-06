@@ -15,18 +15,18 @@ class Profiles(unittest.TestCase):
             env={**os.environ, "DRCD_TEST_DRY_RUN": "1", "DRCD_AP_TSF_CLOCK": "0",
                  "DRCD_ALL_IDR": "1", "DRCD_REFERENCE_AUDIO_TIME": "1",
                  "DRCD_LEGACY_ENCODER_QUALITY": "1",
-                 "DRCD_INTRA_REFRESH": "0", "DRCD_CEMU_SOCKET": "/old.sock"},
+                 "DRCD_INTRA_REFRESH": "0", "BARISTA_MUG_SOCKET": "/old.sock"},
             check=False,
         )
 
     def test_matrix(self):
         for profile in ("baseline", "all-idr", "audio-time", "combined", "burst"):
-            for source in ("cemu", "generated"):
+            for source in ("apphook", "generated"):
                 with self.subTest(profile=profile, source=source):
                     result = self.run_profile(profile, source, "/tmp/profile test.pcap")
                     self.assertEqual(result.returncode, 0, result.stderr)
                     command = shlex.split(result.stdout.splitlines()[-1])
-                    self.assertEqual(command[:3], ["env", "-u", "DRCD_CEMU_SOCKET"])
+                    self.assertEqual(command[:3], ["env", "-u", "BARISTA_MUG_SOCKET"])
                     self.assertIn("DRCD_REAL_REPLAY", command[:5])
                     settings = dict(item.split("=", 1) for item in command[3:] if item.startswith("DRCD_") and "=" in item)
                     self.assertEqual(settings["DRCD_AP_TSF_CLOCK"], "1")
@@ -39,13 +39,13 @@ class Profiles(unittest.TestCase):
                     self.assertEqual(settings["DRCD_REFERENCE_AUDIO_TIME"], str(int(profile in ("audio-time", "combined"))))
                     self.assertEqual(settings["DRCD_CHUNK_PACING"], str(int(profile != "burst")))
                     self.assertEqual(settings["DRCD_GENERATED_AV"], str(int(source == "generated")))
-                    self.assertEqual("DRCD_CEMU_SOCKET" in settings, source == "cemu")
+                    self.assertEqual("BARISTA_MUG_SOCKET" in settings, source == "apphook")
                     self.assertEqual("--black" in command, source == "generated")
                     self.assertIn("/tmp/profile test.pcap", command)
                     self.assertEqual(settings["DRCD_LOG_FILE"], "/tmp/profile test.log")
 
     def test_bad_arguments(self):
-        for args in (("typo",), ("baseline", "typo"), ("baseline", "cemu", "a", "extra")):
+        for args in (("typo",), ("baseline", "typo"), ("baseline", "apphook", "a", "extra")):
             self.assertEqual(self.run_profile(*args).returncode, 2)
 
 

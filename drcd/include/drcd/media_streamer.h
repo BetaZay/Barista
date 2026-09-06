@@ -8,7 +8,7 @@
 #include <iosfwd>
 
 namespace drc_host { class RuntimeTransport; }
-namespace drc_ipc { class MediaBridge; }
+namespace drc_ipc { class AppHook; }
 
 namespace drcd
 {
@@ -38,7 +38,7 @@ private:
 	std::string m_path;
 	bool m_black_frames = false;
 	bool m_generated_pattern = false;
-	std::unique_ptr<drc_ipc::MediaBridge> m_bridge;
+	std::unique_ptr<drc_ipc::AppHook> m_bridge;
 	std::unique_ptr<VideoEncoder> m_encoder;
 	std::thread m_video_thread;
 	std::thread m_audio_thread;

@@ -1,5 +1,5 @@
 From 3130303030303030303030303030303030303030 Mon Sep 17 00:00:00 2001
-From: drc-project <drc-project@example.invalid>
+From: Barista <barista@example.invalid>
 Date: Thu, 3 Sep 2026 18:30:00 -0600
 Subject: [PATCH] nl80211: retry Tendonin initial group key
 

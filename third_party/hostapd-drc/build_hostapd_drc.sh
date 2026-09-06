@@ -20,7 +20,7 @@ if [[ ! -d "$src_dir/.git" ]]; then
 fi
 
 patch_hash="$({ printf '%s\0' "$tag"; sha256sum "$hostapd_config" "$patch_dir"/*.patch; } | sha256sum | cut -d' ' -f1)"
-patch_marker="$src_dir/.drc-project-patchset"
+patch_marker="$src_dir/.barista-patchset"
 current_hash=""
 if [[ -f "$patch_marker" ]]; then
 	current_hash="$(<"$patch_marker")"

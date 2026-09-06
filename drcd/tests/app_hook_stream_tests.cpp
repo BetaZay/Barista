@@ -1,6 +1,6 @@
 #include "drcd/media_streamer.h"
 #include "drc_host/runtime_transport.h"
-#include "drc_ipc/media_bridge.h"
+#include "drc_ipc/app_hook.h"
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
 #include <map>
 #include <thread>
 
@@ -17,7 +18,7 @@ int main()
     char directory[] = "/tmp/drc-stream-test-XXXXXX";
     if (!mkdtemp(directory)) return 1;
     const std::string path = std::string(directory) + "/media.sock";
-    setenv("DRCD_CEMU_SOCKET", path.c_str(), 1);
+    setenv("BARISTA_MUG_SOCKET", path.c_str(), 1);
     setenv("DRCD_MEDIA_DUMP_DIR", directory, 1);
     int video = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
     int audio = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
@@ -32,8 +33,22 @@ int main()
     if (!transport.start({.console_address="127.0.0.1", .gamepad_address="127.0.0.2"}, error))
     { std::cerr << error; return 1; }
     drcd::MediaStreamer media(transport, "");
+    // Exercise the service-to-engine idle surface handoff without changing
+    // the codec/packet/timing assertions below. Malformed input fails closed.
+    const auto idle_path = std::string(directory) + "/idle.i420";
+    setenv("BARISTA_IDLE_I420", idle_path.c_str(), 1);
+    if (media.start(error)) { std::cerr << "missing idle file accepted"; return 1; }
+    auto write_idle = [&](size_t bytes) {
+        std::ofstream file(idle_path, std::ios::binary | std::ios::trunc);
+        const std::vector<uint8_t> idle(bytes,128);
+        file.write(reinterpret_cast<const char*>(idle.data()), idle.size());
+        return bool(file);
+    };
+    if (!write_idle(1) || media.start(error)) { std::cerr << "short idle file accepted"; return 1; }
+    if (!write_idle(drc_ipc::FrameBytes+1) || media.start(error)) { std::cerr << "oversized idle file accepted"; return 1; }
+    if (!write_idle(drc_ipc::FrameBytes)) return 1;
     if (!media.start(error)) { std::cerr << error; return 1; }
-    drc_ipc::MediaBridge client(false);
+    drc_ipc::AppHook client(false);
     client.submit_rgb(std::vector<uint8_t>(12, 32), 2, 2, true);
     if (!client.start(path, error)) return 1;
     using Clock = std::chrono::steady_clock;

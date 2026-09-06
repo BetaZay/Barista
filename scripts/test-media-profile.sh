@@ -2,13 +2,13 @@
 # Each invocation is one manually observed hardware test, never a channel scan.
 set -euo pipefail
 usage() {
-    echo "Usage: sudo bash scripts/test-media-profile.sh PROFILE [cemu|generated] [output.pcap]"
+    echo "Usage: sudo bash scripts/test-media-profile.sh PROFILE [apphook|generated] [output.pcap]"
     echo "Profiles: baseline, all-idr, audio-time, combined, burst"
     echo "Optional DRCD_TEST_DRY_RUN=1 prints the command without starting hardware."
 }
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
 profile=${1:-baseline}
-source_mode=${2:-cemu}
+source_mode=${2:-apphook}
 output=${3:-/tmp/drcd-${profile}-${source_mode}-$(date +%Y%m%d-%H%M%S).pcap}
 run_log=${output%.pcap}.log
 run_dump=${output%.pcap}-artifacts
@@ -32,11 +32,11 @@ case "$profile" in
 esac
 arguments=(--np)
 case "$source_mode" in
-    cemu) settings+=(DRCD_CEMU_SOCKET=/tmp/drcd-media.sock) ;;
+    apphook) settings+=(BARISTA_MUG_SOCKET=/tmp/drcd-media.sock) ;;
     generated) settings+=(DRCD_GENERATED_AV=1); arguments+=(--black) ;;
     *) usage >&2; exit 2 ;;
 esac
-command=(env -u DRCD_CEMU_SOCKET -u DRCD_REAL_REPLAY "${settings[@]}" bash "$project_dir/scripts/capture-drcd-session.sh" "$output" "${arguments[@]}")
+command=(env -u BARISTA_MUG_SOCKET -u DRCD_REAL_REPLAY "${settings[@]}" bash "$project_dir/scripts/capture-drcd-session.sh" "$output" "${arguments[@]}")
 printf 'Profile=%s source=%s; AP TSF required; Ctrl-C after 45-60 seconds of the same scene.\n' "$profile" "$source_mode"
 printf '%q ' "${command[@]}"; printf '\n'
 if [[ ${DRCD_TEST_DRY_RUN:-0} == 1 ]]; then exit 0; fi

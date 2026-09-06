@@ -1,5 +1,5 @@
 From 3f667e76cd0afc4ea2e8f7be7015309cc0cf2041 Mon Sep 17 00:00:00 2001
-From: Cemu <cemu@example.invalid>
+From: Barista <barista@example.invalid>
 Date: Wed, 2 Sep 2026 20:45:00 -0600
 Subject: [PATCH 5/5] wps: use Nintendo vendor type and WPS 1.0 IEs
 

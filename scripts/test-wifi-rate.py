@@ -65,7 +65,7 @@ def valid_link(info, station):
 
 def commands(args):
     launcher = Path(__file__).with_name("test-media-profile.sh")
-    return (["bash", str(launcher), "baseline", "cemu", str(args.output)],
+    return (["bash", str(launcher), "baseline", "apphook", str(args.output)],
             rate_command(args.interface, args.mcs))
 
 

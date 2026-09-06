@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Barista
+Comment=Connect and manage your Wii U GamePad
+Exec=barista
+Icon=org.barista.Barista
+Terminal=false
+Categories=Settings;HardwareSettings;

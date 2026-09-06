@@ -1,0 +1,117 @@
+name: Continuous
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Linux build and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build git python3 ffmpeg nasm pkg-config \
+            qt6-base-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  deb:
+    name: Debian package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build git python3 nasm pkg-config \
+            qt6-base-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+      - name: Build package
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+          cpack --config build/CPackConfig.cmake -G DEB -B dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  rpm:
+    name: RPM package
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          dnf -y install cmake ninja-build git python3 nasm gcc gcc-c++ make \
+            qt6-qtbase-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd
+      - name: Build package
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+          cpack --config build/CPackConfig.cmake -G RPM -B dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  arch:
+    name: Arch package
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed base-devel cmake ninja git python ffmpeg \
+            nasm qt6-base openssl libnl systemd
+      - name: Build package
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder -s /bin/bash -c "cd '$GITHUB_WORKSPACE' && BARISTA_SOURCE_DIR='$GITHUB_WORKSPACE' makepkg --noconfirm --force --nodeps -p packaging/arch/PKGBUILD"
+          mkdir -p dist
+          find . -maxdepth 1 -name 'barista-*.pkg.tar.*' -exec cp {} dist/ \;
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: dist/*.pkg.tar.*
+          if-no-files-found: error
+
+  release:
+    name: Update Continuous release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, deb, rpm, arch]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Replace rolling prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh release delete continuous --yes --cleanup-tag 2>/dev/null || true
+          gh release create continuous dist/* \
+            --target "$SHA" \
+            --title 'Continuous' \
+            --notes "Automated build from $SHA" \
+            --prerelease

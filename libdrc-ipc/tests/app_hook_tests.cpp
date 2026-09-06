@@ -1,4 +1,4 @@
-#include "drc_ipc/media_bridge.h"
+#include "drc_ipc/app_hook.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -24,13 +24,20 @@ int main()
     try
     {
         std::vector<uint8_t> black(6 * 6 * 3, 0), white(6 * 6 * 3, 255);
-        auto converted = drc_ipc::MediaBridge::rgb_to_i420(black, 6, 6);
+        auto converted = drc_ipc::AppHook::rgb_to_i420(black, 6, 6);
         check(converted.size() == drc_ipc::FrameBytes && converted[0] == 16 && converted.back() == 128, "black conversion");
-        check(drc_ipc::MediaBridge::rgb_to_i420({}, 0, 0).empty(), "invalid conversion");
-        drc_ipc::MediaBridge server(true), client(false), duplicate(true);
+        check(drc_ipc::AppHook::rgb_to_i420({}, 0, 0).empty(), "invalid conversion");
+        drc_ipc::AppHook server(true), client(false), duplicate(true);
         std::string error;
         check(server.start(path, error), error.c_str());
         check(!duplicate.start(path, error), "must not replace existing socket");
+        bool idleActive = true;
+        std::vector<uint8_t> idleFrame(drc_ipc::FrameBytes);
+        check(!server.set_idle_frame({converted.data(), 12}), "reject malformed fallback");
+        check(server.set_idle_frame(converted), "set server fallback");
+        check(server.read_video(idleFrame, idleActive) && !idleActive && idleFrame == converted,
+            "server fallback before any connector");
+        check(server.set_idle_frame({}), "clear server fallback for legacy behavior");
         client.submit_rgb(black, 6, 6, true);
         check(client.start(path, error), error.c_str());
         wait_for([&] { return server.connected() && client.connected(); });
@@ -67,10 +74,35 @@ int main()
         wait_for([&] { return !server.connected(); });
         close(raw);
         check(server.read_video(frame, active) && !active && frame[0] == 16, "idle survives bad client");
+        // A service-provided logo wins over connector idle art, but not live video.
+        const auto logo = drc_ipc::AppHook::rgb_to_i420(std::vector<uint8_t>(108,100),6,6);
+        check(server.set_idle_frame(logo), "set service logo");
+        check(server.read_video(frame, active) && !active && frame == logo, "logo while disconnected");
+        check(client.start(path, error), "logo test reconnect");
+        wait_for([&] { return server.connected() && client.connected(); });
+        client.submit_rgb(black,6,6,true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        check(server.read_video(frame, active) && !active && frame == logo, "server logo overrides connector idle");
+        client.set_active(true);
+        wait_for([&] { server.read_video(frame,active); return active; });
+        check(frame == logo, "logo until first active frame");
+        client.submit_rgb(white,6,6);
+        wait_for([&] { return server.read_video(frame,active) && active && frame[0] == 235; });
+        // Static/paused active streams must not get replaced merely for being still.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        check(server.read_video(frame,active) && active && frame[0] == 235, "hold active paused frame");
+        client.set_active(false);
+        wait_for([&] { return server.read_video(frame,active) && !active && frame == logo; });
+        client.set_active(true);
+        client.submit_rgb(white,6,6);
+        wait_for([&] { return server.read_video(frame,active) && active && frame[0] == 235; });
+        client.stop();
+        wait_for([&] { return !server.connected(); });
+        check(server.read_video(frame,active) && !active && frame == logo, "logo replaces last game frame on disconnect");
         server.stop();
         check(access(path.c_str(), F_OK) != 0, "socket cleanup");
         rmdir(directory);
-        std::cout << "media bridge tests passed\n";
+        std::cout << "AppHook tests passed\n";
     }
     catch (const std::exception& e) { std::cerr << e.what() << '\n'; rmdir(directory); return 1; }
 }

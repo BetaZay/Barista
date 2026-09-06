@@ -1,90 +1,94 @@
-# drc-project
+# Barista
 
-Split Wii U GamePad host stack with three components:
+<p align="center"><img src="barista-logo.png" width="220" alt="Barista logo"></p>
 
-- `libdrc-host/`: reusable core library (pairing/state/protocol helpers).
-- `drcd/`: privileged daemon for AP lifecycle, hostapd, DHCP, and policy boundary.
-- `drcctl/`: CLI client for control, status, and diagnostics.
+Barista lets a Wii U GamePad act as a wireless second screen, controller, and
+audio device for a desktop application. It owns pairing, the dedicated Wi-Fi
+access point, low-latency media delivery, GamePad input, and a Qt 6 desktop
+application. It is not affiliated with Nintendo.
 
-## Quick Start
+## What it does
 
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
-```
+- Pair and reconnect a real Wii U GamePad from the desktop app.
+- Show Barista's logo while no application is streaming.
+- Run in **Screen + controller** mode: an application sends video/audio to the
+  GamePad and receives its input.
+- Run in **Controller-only** mode: expose standard buttons, sticks, triggers,
+  and D-pad through Linux `uinput`.
+- Keep the privileged radio/service work behind a D-Bus + polkit boundary; the
+  Qt application runs as the regular desktop user.
 
-On Linux, this also builds the patched hostapd owned by this repository at
-`build/third_party/hostapd-drc/bin/drc-hostapd`. `drcd` uses that binary by
-default, so no Cemu checkout or `DRCD_HOSTAPD_BIN` override is required.
+The application connector is **AppHook**, internally nicknamed **MUG** (Media
+User Gateway). It is a Linux-local Unix `SOCK_SEQPACKET` protocol and is not
+Cemu-specific. A client receives its session socket through
+`BARISTA_MUG_SOCKET`, submits RGB video and stereo PCM, and receives GamePad
+input. Cemu is the current working client; other applications can implement the
+same AppHook instead of embedding any radio or pairing logic.
 
-Run the daemon in automatic mode (the default) with the AP identity and sync
-pattern you want to advertise:
+## Wi-Fi requirements
+
+The GamePad uses a dedicated **5 GHz** access point. Barista needs a Linux Wi-Fi
+adapter and driver that can create a 5 GHz AP using `nl80211`/hostapd, remain
+stable at the selected channel, and support the GamePad's required association
+and encryption behavior. This is not ordinary home Wi-Fi: starting a session
+temporarily takes over the selected adapter from NetworkManager.
+
+Use wired Ethernet or a second Wi-Fi adapter if the machine needs Internet
+access while Barista is active. Keep the GamePad close to the adapter while
+testing; radio conditions still directly affect video quality and latency.
+
+Development and physical GamePad streaming were tested with the Realtek
+**RTL8852BE** (`rtw89_8852be`) on Linux. That proves this adapter/driver can
+work; it is not a guarantee for every firmware, kernel, access-point channel,
+or adapter. macOS and Windows currently provide the portable UI/core only—the
+real GamePad radio backend is Linux-only.
+
+## Use
+
+Install Barista, then open it normally from the desktop launcher. The system
+service is activated on demand; use **Start** to authorize the Wi-Fi takeover.
+Use **Pair GamePad** only when pairing is needed. Closing the window keeps it in
+the tray by default.
+
+The Advanced page displays the automatically managed AppHook endpoint and can
+copy this launch prefix for a client application:
 
 ```sh
-sudo ./build/drcd/drcd --interface wlan0 --ap-mac 40:d2:8a:bf:fc:a8 --pair-code 2220
+env BARISTA_MUG_SOCKET=/run/barista/media-<uid>.sock your-app
 ```
 
-It first checks for an already paired GamePad for 5 seconds, advertises the
-pairing network for 20 seconds, and repeats until a GamePad connects. After a
-successful WPS exchange it saves the runtime credential in
-`/var/lib/drcd/credentials.conf`, suppresses pairing for 60 seconds while the
-GamePad restarts, and keeps offering only the saved runtime network during that
-grace period. Later runs automatically reuse its AP MAC.
-The concise terminal status is backed by a complete log at `/tmp/drcd.log`,
-which is replaced once when `drcd` starts and retained across every phase in
-that run. Set `DRCD_LOG_STDERR=1` for verbose terminal diagnostics, or pass
-`--np` to keep checking the saved runtime network without entering pairing
-mode. Pass `--manual` to retain explicit `drcctl pair-start` operation.
+The endpoint exists only while a Screen + controller session is active. It is
+owned and permissioned for the desktop user; applications must not run as root.
 
-To passively locate traffic transmitted by a GamePad without creating an
-access point, run:
+## Build and install
 
-```sh
-sudo ./scripts/watch-gamepad-probes.sh wlan0 40:d2:8a:ab:90:00
-```
+See [COMPILING.md](COMPILING.md) for dependencies, a development build, tests,
+and system installation.
 
-The watcher switches the interface to monitor mode, revisits all non-DFS Wii U
-5 GHz candidate channels every 2.25 seconds, captures every frame whose
-transmitter is the requested GamePad, writes a radiotap pcap under `/tmp`, and
-restores the previous interface type when stopped with Ctrl-C.
+## Status
 
-To capture a complete real Wii U-to-GamePad session for packet timing and
-802.11 delivery comparison, use:
+Barista is active development software. The primary Linux pairing, streaming,
+and AppHook paths have been exercised with real hardware, but adapter/driver
+compatibility and media recovery still need broader hardware testing.
 
-```sh
-sudo ./scripts/capture-wiiu-session.sh wlan0 40:d2:8a:ab:90:00 auto
-```
+### What's working
 
-Auto mode discovers and prints the active channel. For the best trace, stop it
-after discovery and rerun with that fixed channel before powering on the
-GamePad. The saved pcap is deliberately unfiltered so that 802.11 ACK and
-BlockAck frames are retained; the console's runtime data payload remains
-encrypted unless its separate runtime key is available.
+- Pairing
+- Basic A/V streaming
+- Inputs from buttons and sticks
+- AppHook for third-party apps
 
-## Implemented
+### Needs work
 
-- `libdrc-host` exposes:
-  - MAC address parse/format helpers.
-  - Pairing symbol mapping (`♠=0, ♥=1, ♦=2, ♣=3`), PIN byte conversion, and pairing SSID generation.
-  - A small pairing/runtime state machine.
-- `drcd` exposes a Unix socket control API on `/tmp/drcd.sock`.
-- `drcd` Linux backend now performs real AP lifecycle steps with hostapd:
-  - pairing config + runtime config generation
-  - WPS credential blob generation
-  - hostapd process lifecycle + control-socket `WPS_PIN`
-  - temporary NetworkManager exclusion while the AP owns the interface
-  - `192.168.1.10/24`, MTU 1800, and a DHCP lease at `192.168.1.11`
-  - deterministic cleanup on stop/shutdown
-- `drcctl` can send control commands to `drcd`.
-- Unit tests:
-  - `drc_host_tests`
-  - `drcd_core_tests`
-  - `drcctl_core_tests`
+- Video still has artifacts and can get behind and stutter.
+- Audio occasionally stutters.
+- The GamePad still requests recovery much more often than it does with a real
+  Wii U connection.
 
-Protocol reference: `docs/control-protocol.md`.
+### Not started
 
-## Roadmap
-
-1. Add native AP/interface orchestration to reduce external process coupling further.
-2. Add integration tests that exercise `drcctl <-> drcd` over a real socket outside restricted sandboxes.
+- Touch
+- Camera
+- Microphone
+- Gyro
+- NFC

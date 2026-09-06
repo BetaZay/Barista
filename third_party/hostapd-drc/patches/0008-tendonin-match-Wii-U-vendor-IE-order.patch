@@ -1,5 +1,5 @@
 From 5b22e1a499cc67f87f13b798dce2f4ce11100008 Mon Sep 17 00:00:00 2001
-From: Cemu <cemu@example.invalid>
+From: Barista <barista@example.invalid>
 Date: Wed, 2 Sep 2026 21:15:00 -0600
 Subject: [PATCH 8/8] ap: match Wii U vendor IE ordering
 

@@ -1,0 +1,24 @@
+[Unit]
+Description=Barista GamePad service
+After=NetworkManager.service
+
+[Service]
+Type=dbus
+BusName=org.barista.Service1
+ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/barista/barista-service
+User=root
+RuntimeDirectory=barista
+RuntimeDirectoryMode=0755
+StateDirectory=barista
+StateDirectoryMode=0700
+LogsDirectory=barista
+LogsDirectoryMode=0700
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=30
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

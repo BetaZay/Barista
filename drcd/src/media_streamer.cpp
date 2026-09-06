@@ -5,7 +5,7 @@
 #include "video_packet_schedule.h"
 
 #include "drc_host/runtime_transport.h"
-#include "drc_ipc/media_bridge.h"
+#include "drc_ipc/app_hook.h"
 
 #include <algorithm>
 #include <array>
@@ -489,7 +489,7 @@ bool MediaStreamer::start(std::string& error)
 {
 	if (m_running.exchange(true))
 		return true;
-	const char* media_socket = std::getenv("DRCD_CEMU_SOCKET");
+	const char* media_socket = std::getenv("BARISTA_MUG_SOCKET");
 	const bool external_media = media_socket && *media_socket;
 	const char* replay_path = std::getenv("DRCD_REAL_REPLAY");
 	if (replay_path && *replay_path)
@@ -497,7 +497,7 @@ bool MediaStreamer::start(std::string& error)
 		if (!m_black_frames || external_media || !m_path.empty())
 		{
 			m_running.store(false);
-			error = "DRCD_REAL_REPLAY requires --black without Cemu/file input";
+			error = "DRCD_REAL_REPLAY requires --black without AppHook/file input";
 			return false;
 		}
 		try
@@ -562,7 +562,7 @@ bool MediaStreamer::start(std::string& error)
 	if (external_media && (!m_path.empty() || m_black_frames))
 	{
 		m_running.store(false);
-		error = "DRCD_CEMU_SOCKET cannot be combined with file/black test modes";
+		error = "BARISTA_MUG_SOCKET cannot be combined with file/black test modes";
 		return false;
 	}
 	if (!external_media && !m_black_frames && !std::filesystem::is_regular_file(m_path))
@@ -583,13 +583,27 @@ bool MediaStreamer::start(std::string& error)
 	m_audio_packets.store(0);
 	if (external_media)
 	{
-		m_bridge = std::make_unique<drc_ipc::MediaBridge>(true);
+		m_bridge = std::make_unique<drc_ipc::AppHook>(true);
+		// The desktop service supplies a fixed-size surface, not a competing
+		// media client. Keep Qt/image decoding outside the streaming engine.
+		if (const char* idle_path = std::getenv("BARISTA_IDLE_I420"))
+		{
+			std::ifstream idle_file(idle_path, std::ios::binary);
+			std::vector<uint8_t> idle(drc_ipc::FrameBytes);
+			if (!idle_file.read(reinterpret_cast<char*>(idle.data()), idle.size()) ||
+				idle_file.peek() != std::char_traits<char>::eof() || !m_bridge->set_idle_frame(idle))
+			{
+				error = "could not load Barista idle screen (expected 864x480 I420)";
+				m_bridge.reset(); m_encoder.reset(); m_running.store(false);
+				return false;
+			}
+		}
 		if (!m_bridge->start(media_socket, error))
 		{
 			m_bridge.reset(); m_encoder.reset(); m_running.store(false);
 			return false;
 		}
-		m_transport.report_status("Cemu media bridge listening at " + std::string(media_socket));
+		m_transport.report_status("MUG AppHook listening at " + std::string(media_socket));
 	}
 	const char* generated = std::getenv("DRCD_GENERATED_AV");
 	m_generated_pattern = m_black_frames && generated && std::strcmp(generated, "1") == 0;
@@ -859,14 +873,14 @@ void MediaStreamer::video_loop()
 			if (connected != external_connected)
 			{
 				external_connected = connected;
-				m_transport.report_status(connected ? "Cemu IPC client connected" : "Cemu IPC client disconnected");
+				m_transport.report_status(connected ? "MUG AppHook client connected" : "MUG AppHook client disconnected");
 			}
 			bool active = false;
 			m_bridge->read_video(frame, active);
 			if (active != external_active)
 			{
 				force_idr = true; external_active = active;
-				m_transport.report_status(active ? "Cemu source: game" : "Cemu source: idle logo");
+				m_transport.report_status(active ? "AppHook source: active" : "AppHook source: idle");
 			}
 		}
 		if (m_generated_pattern)
@@ -1109,7 +1123,7 @@ void MediaStreamer::video_loop()
 void MediaStreamer::input_loop()
 {
 	// Input must not wait for the next encoded frame (IDRs can take >60ms).
-	m_transport.report_status("Cemu input forwarding: independent 1ms worker");
+	m_transport.report_status("AppHook input forwarding: independent 1ms worker");
 	while (!m_stop.load())
 	{
 		// Bound the batch so shutdown cannot be starved by incoming traffic.

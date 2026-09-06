@@ -1,5 +1,5 @@
 From 07b4339241fa4132adcb76dc2f3a6e7e6e7d55aa Mon Sep 17 00:00:00 2001
-From: Cemu <cemu@example.invalid>
+From: Barista <barista@example.invalid>
 Date: Tue, 12 May 2026 19:28:53 -0600
 Subject: [PATCH 2/3] wpa: add Tendonin RSN selectors and PTK rot3
 

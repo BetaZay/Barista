@@ -14,7 +14,7 @@
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     const auto replay = drcd::RealReplay::Load(argv[1]);
-    unsetenv("DRCD_CEMU_SOCKET"); unsetenv("DRCD_AP_TSF_CLOCK");
+    unsetenv("BARISTA_MUG_SOCKET"); unsetenv("DRCD_AP_TSF_CLOCK");
     setenv("DRCD_REAL_REPLAY", argv[1], 1);
     std::array<int,2> sockets{};
     for (size_t i=0; i<2; ++i) {

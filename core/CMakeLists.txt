@@ -1,0 +1,8 @@
+add_library(barista_core INTERFACE)
+target_include_directories(barista_core INTERFACE include)
+target_compile_features(barista_core INTERFACE cxx_std_20)
+if(BUILD_TESTING)
+    add_executable(barista_core_tests tests/core_tests.cpp)
+    target_link_libraries(barista_core_tests PRIVATE barista_core)
+    add_test(NAME barista_core_tests COMMAND barista_core_tests)
+endif()

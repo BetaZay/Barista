@@ -1,5 +1,5 @@
 From 67a7bc8b23928de8ab436d39a4485d25fd459896 Mon Sep 17 00:00:00 2001
-From: Cemu <cemu@example.invalid>
+From: Barista <barista@example.invalid>
 Date: Wed, 2 Sep 2026 12:00:00 -0600
 Subject: [PATCH 4/4] nl80211: use standard CCMP selector for Tendonin driver
  keys

@@ -1,5 +1,5 @@
 From 1313131313131313131313131313131313131313 Mon Sep 17 00:00:00 2001
-From: drc-project <drc-project@example.invalid>
+From: Barista <barista@example.invalid>
 Date: Thu, 3 Sep 2026 20:30:00 -0600
 Subject: [PATCH] AP: reassert Tendonin station state after association ACK
 

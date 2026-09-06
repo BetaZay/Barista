@@ -1,5 +1,5 @@
 From fda1462e9e64e8091dd3b41153941baf5b805918 Mon Sep 17 00:00:00 2001
-From: Cemu <cemu@example.invalid>
+From: Barista <barista@example.invalid>
 Date: Tue, 12 May 2026 19:28:53 -0600
 Subject: [PATCH 3/3] wps: add Tendonin KDK rot3 support
 

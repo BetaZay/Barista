@@ -3,6 +3,10 @@ set(DRC_X264_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/build")
 set(DRC_X264_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/install")
 set(DRC_X264_LIBRARY "${DRC_X264_INSTALL_DIR}/lib/libx264.a")
 set(DRC_X264_HEADER "${DRC_X264_INSTALL_DIR}/include/x264.h")
+# CMake validates imported target include paths while configuring.  The wrapper
+# creates this prefix later, but a clean Barista checkout must still configure
+# before the x264 custom build has run.
+file(MAKE_DIRECTORY "${DRC_X264_INSTALL_DIR}/include" "${DRC_X264_INSTALL_DIR}/lib")
 file(GLOB_RECURSE DRC_X264_BUILD_INPUTS CONFIGURE_DEPENDS
     "${DRC_X264_SOURCE_DIR}/*.c" "${DRC_X264_SOURCE_DIR}/*.h"
     "${DRC_X264_SOURCE_DIR}/*.asm" "${DRC_X264_SOURCE_DIR}/*.S")

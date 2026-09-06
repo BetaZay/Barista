@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.barista.Service1
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/barista/barista-service
+User=root
+SystemdService=barista.service

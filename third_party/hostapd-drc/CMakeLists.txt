@@ -1,7 +1,7 @@
 set(DRC_HOSTAPD_REPOSITORY "https://git.w1.fi/hostap.git" CACHE STRING
     "Git repository used for the standalone patched hostapd build")
 set(DRC_HOSTAPD_TAG "hostap_2_11" CACHE STRING
-    "Upstream hostapd tag used by drc-project")
+    "Upstream hostapd tag used by Barista")
 
 set(drc_hostapd_root "${CMAKE_CURRENT_BINARY_DIR}")
 set(drc_hostapd_source "${drc_hostapd_root}/src")
@@ -24,7 +24,7 @@ add_custom_command(
         "${CMAKE_CURRENT_SOURCE_DIR}/build_hostapd_drc.sh"
         "${CMAKE_CURRENT_SOURCE_DIR}/hostapd.config"
         ${drc_hostapd_patches}
-    COMMENT "Building drc-project's patched hostapd"
+    COMMENT "Building Barista's patched hostapd"
     VERBATIM
     USES_TERMINAL
 )

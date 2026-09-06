@@ -1,0 +1,34 @@
+# Maintainer: Barista maintainers
+pkgname=barista
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Wii U GamePad desktop bridge'
+arch=('x86_64')
+license=('custom')
+depends=('qt6-base' 'networkmanager' 'polkit' 'kmod' 'iw' 'iproute2' 'openssl' 'libnl')
+makedepends=('cmake' 'ninja' 'git' 'python' 'nasm' 'make' 'gcc')
+source=()
+sha256sums=()
+
+# Build from a checkout.  CI sets BARISTA_SOURCE_DIR explicitly; local users
+# can run `BARISTA_SOURCE_DIR="$PWD" makepkg -f` from the repository root.
+_barista_source() {
+    printf '%s\n' "${BARISTA_SOURCE_DIR:-${startdir}/../..}"
+}
+
+build() {
+    local source_dir
+    source_dir="$(_barista_source)"
+    cmake -S "$source_dir" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build --parallel
+}
+
+check() {
+    ctest --test-dir build --output-on-failure
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build --prefix /usr
+}
