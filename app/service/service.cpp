@@ -6,22 +6,67 @@
 #include <QDBusReply>
 #include <QDBusServiceWatcher>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
+#include <algorithm>
 
 namespace {
 constexpr auto ControlSocket = "/run/barista/worker.sock";
+constexpr auto CredentialsFile = "/var/lib/drcd/credentials.conf";
 constexpr int GamePadBatteryFull = 176;
 
 int BatteryPercent(int raw)
 {
     return qBound(0, (raw * 100 + GamePadBatteryFull / 2) / GamePadBatteryFull, 100);
 }
+}
 
+QVariantList Service::SavedGamePads()
+{
+    QVariantList result;
+    QFile file(CredentialsFile);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return result;
+    QHash<QString,QString> names;
+    QStringList macs;
+    while (!file.atEnd()) {
+        const QString line = QString::fromUtf8(file.readLine()).trimmed();
+        if (line.startsWith("gamepad_name_")) names.insert(line.mid(13,line.indexOf('=') - 13),line.mid(line.indexOf('=') + 1));
+        else if (line.startsWith("gamepad_mac=")) macs.append(line.mid(12));
+    }
+    macs.removeDuplicates();
+    for (const auto& mac : macs) result.append(QVariantMap{{"mac",mac},{"name",names.value(mac)}});
+    return result;
+}
+
+void Service::RenameGamePad(const QString& mac, const QString& name)
+{
+    QFile input(CredentialsFile);
+    if (!input.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    QStringList lines = QString::fromUtf8(input.readAll()).split('\n',Qt::SkipEmptyParts);
+    bool found = false;
+    for (auto& line : lines) if (line.startsWith("gamepad_name_" + mac + "=")) { line = "gamepad_name_" + mac + "=" + name; found = true; }
+    if (!found) lines.append("gamepad_name_" + mac + "=" + name);
+    QSaveFile output(CredentialsFile); if (!output.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    output.write((lines.join('\n') + '\n').toUtf8()); output.commit();
+}
+
+void Service::RemoveGamePad(const QString& mac)
+{
+    QFile input(CredentialsFile);
+    if (!input.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    QStringList lines = QString::fromUtf8(input.readAll()).split('\n',Qt::SkipEmptyParts);
+    lines.erase(std::remove_if(lines.begin(),lines.end(),[&](const QString& line) { return line == "gamepad_mac=" + mac || line.startsWith("gamepad_name_" + mac + "="); }),lines.end());
+    QSaveFile output(CredentialsFile); if (!output.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    output.write((lines.join('\n') + '\n').toUtf8()); output.commit();
+}
+
+namespace {
 bool BusServiceRunning(const QString& name)
 {
     const QDBusReply<bool> reply = QDBusConnection::systemBus().interface()->isServiceRegistered(name);

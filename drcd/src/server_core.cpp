@@ -263,6 +263,15 @@ void ServerCore::process_backend_events()
 		if (m_state_machine.state().phase == drc_host::SessionPhase::Runtime)
 			(void)m_state_machine.mark_gamepad_connected(true);
 	}
+	if (m_backend->consume_gamepad_associated_event() && m_automatic.has_value() &&
+		m_state_machine.state().phase == drc_host::SessionPhase::Runtime)
+	{
+		// WPA/DHCP commonly finish just after the short discovery check. Keep
+		// the AP available long enough for the GamePad's DRC sockets to start.
+		m_phase_deadline = std::max(m_phase_deadline,
+			std::chrono::steady_clock::now() + std::chrono::seconds(20));
+		std::cout << "GamePad associated; extending protocol startup grace period" << std::endl;
+	}
 	if (m_backend->consume_gamepad_disconnected_event() &&
 		m_state_machine.state().phase == drc_host::SessionPhase::Runtime)
 	{

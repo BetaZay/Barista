@@ -48,6 +48,9 @@ public:
 	virtual BackendSnapshot snapshot() const = 0;
 	virtual bool consume_pairing_complete_event() { return false; }
 	virtual bool consume_gamepad_connected_event() { return false; }
+	// Link association is progress, but is not enough to declare the DRC
+	// protocol connected. Automatic mode uses it to keep the AP alive.
+	virtual bool consume_gamepad_associated_event() { return false; }
 	virtual bool consume_gamepad_disconnected_event() { return false; }
 	virtual std::optional<std::string> consume_status_event() { return std::nullopt; }
 };

@@ -4,6 +4,7 @@
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
 class QCheckBox;
@@ -25,6 +26,7 @@ private slots:
 private:
     bool ConfirmWifi(bool pairing, const QString& interface);
     QString Mode() const;
+    void RefreshSavedGamePads();
     ControlClient m_client;
     QTabWidget* m_tabs;
     QComboBox *m_interface, *m_pairInterface, *m_mode;
@@ -37,11 +39,13 @@ private:
     QCheckBox* m_background;
     QSystemTrayIcon* m_tray;
     QAction *m_trayStart, *m_trayStop;
+    QListWidget* m_savedGamePads;
     QMap<QString,QLabel*> m_health;
     QVariantMap m_lastStatus;
     QString m_operationError;
     QString m_appLogoSource;
     bool m_pending = false;
+    bool m_pairingRequested = false;
     bool m_smokeTest = false, m_backgroundNotice = false;
     bool m_quitting = false;
 };

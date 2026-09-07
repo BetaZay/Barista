@@ -12,6 +12,11 @@
 #include <QDateTime>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QInputDialog>
+#include <QDBusInterface>
+#include <QDBusArgument>
+#include <QDBusReply>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -21,11 +26,13 @@
 #include <QImage>
 #include <QPushButton>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QSystemTrayIcon>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QDir>
 #include <array>
 #include <QFile>
 #include <QFileInfo>
@@ -77,6 +84,42 @@ void ConfigureForm(QFormLayout* form)
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     form->setHorizontalSpacing(12);
     form->setVerticalSpacing(10);
+}
+
+QString SavedGamePadsFile()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/barista-wiiu/gamepads.ini";
+}
+
+QMap<QString,QString> LoadSavedGamePadsCache()
+{
+    QMap<QString,QString> records;
+    QSettings settings(SavedGamePadsFile(),QSettings::IniFormat);
+    const int count = settings.beginReadArray("gamepads");
+    for (int i = 0; i < count; ++i) {
+        settings.setArrayIndex(i);
+        const QString mac = settings.value("mac").toString();
+        if (!mac.isEmpty()) records.insert(mac,settings.value("name").toString());
+    }
+    settings.endArray();
+    return records;
+}
+
+void SaveSavedGamePadsCache(const QMap<QString,QString>& records)
+{
+    const QFileInfo file(SavedGamePadsFile());
+    QDir().mkpath(file.absolutePath());
+    QSettings settings(file.absoluteFilePath(),QSettings::IniFormat);
+    settings.remove("gamepads");
+    settings.beginWriteArray("gamepads");
+    int index = 0;
+    for (auto it = records.cbegin(); it != records.cend(); ++it) {
+        settings.setArrayIndex(index++);
+        settings.setValue("mac",it.key());
+        settings.setValue("name",it.value());
+    }
+    settings.endArray();
+    settings.sync();
 }
 
 QLabel* FormHint(const QString& text, QWidget* parent)
@@ -308,6 +351,39 @@ Window::Window(bool smokeTest)
     m_pair = new QPushButton("Start pairing",pairing);
     m_pair->setObjectName("pairButton");
     pairingLayout->addWidget(m_pair,0,Qt::AlignLeft);
+    auto* savedPairs = new QGroupBox("Saved GamePads",pairing);
+    auto* savedLayout = new QVBoxLayout(savedPairs);
+    m_savedGamePads = new QListWidget(savedPairs);
+    m_savedGamePads->setObjectName("savedGamePads");
+    savedLayout->addWidget(m_savedGamePads);
+    auto* savedButtons = new QHBoxLayout;
+    auto* renamePair = new QPushButton("Rename",savedPairs);
+    auto* removePair = new QPushButton("Remove",savedPairs);
+    savedButtons->addWidget(renamePair); savedButtons->addWidget(removePair); savedButtons->addStretch();
+    savedLayout->addLayout(savedButtons);
+    connect(renamePair,&QPushButton::clicked,this,[this] {
+        auto* item = m_savedGamePads->currentItem(); if (!item) return;
+        const QString mac = item->data(Qt::UserRole).toString();
+        bool ok = false; const QString name = QInputDialog::getText(this,"Rename GamePad","Name:",QLineEdit::Normal,item->text().section(" — ",0,0),&ok);
+        if (!ok) return;
+#ifdef BARISTA_LINUX_CONTROL
+        QDBusInterface("org.barista.Service1","/org/barista/Service1","org.barista.Service1",QDBusConnection::systemBus()).call("RenameGamePad",mac,name);
+#endif
+    auto records = LoadSavedGamePadsCache(); records.insert(mac,name); SaveSavedGamePadsCache(records);
+        RefreshSavedGamePads();
+    });
+    connect(removePair,&QPushButton::clicked,this,[this] {
+        auto* item = m_savedGamePads->currentItem(); if (!item) return;
+        const QString mac = item->data(Qt::UserRole).toString();
+        if (QMessageBox::question(this,"Remove saved GamePad?",QString("Remove %1? It will need to be paired again.").arg(item->text())) != QMessageBox::Yes) return;
+#ifdef BARISTA_LINUX_CONTROL
+        QDBusInterface("org.barista.Service1","/org/barista/Service1","org.barista.Service1",QDBusConnection::systemBus()).call("RemoveGamePad",mac);
+#endif
+    auto records = LoadSavedGamePadsCache(); records.remove(mac); SaveSavedGamePadsCache(records);
+        RefreshSavedGamePads();
+    });
+    QTimer::singleShot(0,this,&Window::RefreshSavedGamePads);
+    pairingLayout->addWidget(savedPairs);
     pairingLayout->addStretch();
     m_tabs->addTab(pairing,"Pair GamePad");
 
@@ -422,6 +498,7 @@ Window::Window(bool smokeTest)
         settings.setValue("interface",interface);
         settings.setValue("pairInterface",interface);
         m_message->hide();
+        m_pairingRequested = true;
         m_client.Pair(interface,m_code->text(),Mode());
     });
     connect(m_copy,&QPushButton::clicked,this,[this] {
@@ -447,6 +524,7 @@ Window::Window(bool smokeTest)
 
     connect(&m_client,&ControlClient::Status,this,&Window::ApplyStatus);
     connect(&m_client,&ControlClient::Error,this,[this](const QString& error) {
+        m_pairingRequested = false;
         if (!isVisible()) ShowWindow();
         m_operationError = error;
         m_message->setText("That didn't complete. See Advanced for details.");
@@ -528,8 +606,33 @@ bool Window::ConfirmWifi(bool pairing, const QString& interface)
     return warning.clickedButton() == proceed;
 }
 QString Window::Mode() const { return m_mode->currentData().toString(); }
+void Window::RefreshSavedGamePads()
+{
+    auto records = LoadSavedGamePadsCache();
+#ifdef BARISTA_LINUX_CONTROL
+    QDBusInterface service("org.barista.Service1","/org/barista/Service1","org.barista.Service1",QDBusConnection::systemBus());
+    const QDBusReply<QVariantList> reply = service.call("SavedGamePads");
+    if (reply.isValid()) for (const auto& value : reply.value()) {
+        QVariantMap record = value.toMap();
+        if (record.isEmpty() && value.canConvert<QDBusArgument>()) {
+            auto argument = qvariant_cast<QDBusArgument>(value);
+            argument >> record;
+        }
+        const QString mac = record.value("mac").toString();
+        if (!mac.isEmpty()) records.insert(mac,record.value("name").toString());
+    }
+#endif
+    SaveSavedGamePadsCache(records);
+    m_savedGamePads->clear();
+    for (auto it = records.cbegin(); it != records.cend(); ++it) {
+        const QString name = it.value();
+        auto* item = new QListWidgetItem(name.isEmpty() ? it.key() : name + " — " + it.key(),m_savedGamePads);
+        item->setData(Qt::UserRole,it.key());
+    }
+}
 void Window::ApplyStatus(const QVariantMap& status)
 {
+    const QString previousPhase = m_lastStatus.value("phase").toString();
     m_lastStatus = status;
     const bool available = status.value("available").toBool();
     const bool running = status.value("running").toBool();
@@ -537,6 +640,17 @@ void Window::ApplyStatus(const QVariantMap& status)
     const bool owned = status.value("ownedByCaller").toBool();
     const bool connected = status.value("connected").toBool();
     const auto phase = status.value("phase").toString();
+    if (m_pairingRequested && phase == "runtime" && previousPhase != "runtime") {
+        RefreshSavedGamePads();
+        m_pairingRequested = false;
+        m_tabs->setCurrentIndex(0);
+        m_message->setText("GamePad paired successfully. A session is now running.");
+        m_message->show();
+        QTimer::singleShot(6000,this,[this] {
+            if (m_message->text() == "GamePad paired successfully. A session is now running.")
+                m_message->hide();
+        });
+    }
     const bool activating = status.value("activating").toBool();
     Tone sessionTone = Tone::Neutral;
     QString sessionText;

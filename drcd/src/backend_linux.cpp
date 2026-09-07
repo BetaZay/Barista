@@ -30,6 +30,7 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <iostream>
 
@@ -721,8 +722,21 @@ public:
 		m_pairing_code = request.pairing_code;
 		m_test_media_path = request.test_media_path;
 		m_test_black_frames = request.test_black_frames;
-		m_runtime_ssid = "WiiU" + m_ap_mac.to_hex_no_separator();
-		m_psk_hex = GeneratePskHex();
+		// Vanilla stores a console by AP BSSID and deliberately retains its
+		// existing PSK on a repeated sync. Keep an AP's PSK stable so a new
+		// GamePad enrolment cannot invalidate an already paired GamePad.
+		if (!LoadCredentials())
+		{
+			m_runtime_ssid = "WiiU" + m_ap_mac.to_hex_no_separator();
+			m_psk_hex = GeneratePskHex();
+			std::lock_guard lock(m_credentials_mutex);
+			m_paired_gamepad_macs.clear();
+			Log("credentials: creating new credential set for AP " + m_ap_mac.to_string());
+		}
+		else
+		{
+			Log("credentials: reusing saved credential set for AP " + m_ap_mac.to_string());
+		}
 		m_probe_seen.clear();
 		m_targeted_wps_pin_at.clear();
 		m_pairing_activity_seen.store(false);
@@ -1029,6 +1043,7 @@ public:
 		m_ap_interface.clear();
 		m_runtime_ssid.clear();
 		m_psk_hex.clear();
+		m_paired_gamepad_macs.clear();
 		m_snapshot = {};
 		return {true, "session stopped"};
 	}
@@ -1072,6 +1087,11 @@ public:
 			}
 		}
 		return true;
+	}
+
+	bool consume_gamepad_associated_event() override
+	{
+		return m_gamepad_associated_requested.exchange(false);
 	}
 
 	bool consume_gamepad_disconnected_event() override
@@ -1494,6 +1514,9 @@ private:
 			<< "ssid=" << m_runtime_ssid << '\n'
 			<< "psk=" << m_psk_hex << '\n'
 			<< "channel=" << m_channel << '\n';
+		std::lock_guard lock(m_credentials_mutex);
+		for (const auto& gamepad_mac : m_paired_gamepad_macs)
+			output << "gamepad_mac=" << gamepad_mac << '\n';
 		output.close();
 		(void)::chmod(path.c_str(), static_cast<mode_t>(0600));
 		Log("credentials: saved " + m_credentials_path);
@@ -1509,6 +1532,7 @@ private:
 		std::string saved_ssid;
 		std::string saved_psk;
 		int saved_channel = 0;
+		std::unordered_set<std::string> saved_gamepad_macs;
 		std::string line;
 		while (std::getline(input, line))
 		{
@@ -1524,6 +1548,12 @@ private:
 			{
 				try { saved_channel = std::stoi(value); } catch (...) { return false; }
 			}
+			else if (key == "gamepad_mac")
+			{
+				const auto parsed_gamepad_mac = drc_host::MacAddress::parse(value);
+				if (parsed_gamepad_mac.has_value())
+					saved_gamepad_macs.insert(parsed_gamepad_mac->to_string());
+			}
 		}
 		const auto parsed_mac = drc_host::MacAddress::parse(saved_mac);
 		if (!parsed_mac.has_value() || *parsed_mac != m_ap_mac ||
@@ -1533,6 +1563,10 @@ private:
 		m_runtime_ssid = std::move(saved_ssid);
 		m_psk_hex = std::move(saved_psk);
 		m_channel = saved_channel;
+		{
+			std::lock_guard lock(m_credentials_mutex);
+			m_paired_gamepad_macs = std::move(saved_gamepad_macs);
+		}
 		Log("credentials: loaded " + m_credentials_path);
 		return true;
 	}
@@ -1853,6 +1887,7 @@ private:
 		m_ap_interface.clear();
 		m_runtime_ssid.clear();
 		m_psk_hex.clear();
+		m_paired_gamepad_macs.clear();
 		m_targeted_wps_pin_at.clear();
 		m_snapshot.phase = "idle";
 		m_snapshot.base_interface.clear();
@@ -2542,6 +2577,15 @@ private:
 		return mac;
 	}
 
+	static std::optional<std::string> ExtractMacAddress(std::string_view line)
+	{
+		static const std::regex mac_pattern(R"(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})");
+		std::cmatch match;
+		if (!std::regex_search(line.begin(), line.end(), match, mac_pattern))
+			return std::nullopt;
+		return std::string(match[0].first, match[0].second);
+	}
+
 	void MaybeLogProbeSourceMac(std::string_view phase, std::string_view line)
 	{
 		const auto mac = ExtractProbeSourceMac(line);
@@ -2583,11 +2627,35 @@ private:
 			Log("pairing-complete: WPS succeeded; scheduling automatic runtime transition");
 			m_pairing_complete_requested.store(true);
 		}
+		if (phase == "pairing" && line.find("WPS-REG-SUCCESS") != std::string::npos)
+		{
+			const size_t mac_start = line.find("WPS-REG-SUCCESS") + std::string_view("WPS-REG-SUCCESS").size();
+			const auto enrollee = ExtractMacAddress(line.substr(mac_start));
+			if (enrollee.has_value())
+			{
+				std::lock_guard lock(m_credentials_mutex);
+				m_paired_gamepad_macs.insert(*enrollee);
+				Log("credentials: recorded paired GamePad " + *enrollee);
+			}
+		}
+		if (phase == "pairing" && line.find("AP-STA-CONNECTED") != std::string::npos)
+		{
+			const size_t mac_start = line.find("AP-STA-CONNECTED") + std::string_view("AP-STA-CONNECTED").size();
+			const auto gamepad_mac = ExtractMacAddress(line.substr(mac_start));
+			if (gamepad_mac.has_value())
+			{
+				std::lock_guard lock(m_credentials_mutex);
+				m_paired_gamepad_macs.insert(*gamepad_mac);
+				Log("credentials: recorded paired GamePad " + *gamepad_mac);
+			}
+		}
 		// Association is only link-layer readiness. Do not call the GamePad
 		// connected until the DRC command/HID protocol produces valid traffic.
 		if (line.find("AP-STA-DISCONNECTED") != std::string::npos &&
 			m_runtime_transport && m_runtime_transport->stats().protocol_ready)
 			m_gamepad_disconnected_requested.store(true);
+		if (phase == "runtime" && line.find("AP-STA-CONNECTED") != std::string::npos)
+			m_gamepad_associated_requested.store(true);
 		if (line.find("INTERFACE_UNAVAILABLE") != std::string::npos ||
 			line.find("is unavailable -- stopped") != std::string::npos)
 			QueueStatus("Wi-Fi AP was stopped externally; see " + m_log_path);
@@ -2631,6 +2699,7 @@ private:
 	std::atomic_bool m_pairing_activity_seen{false};
 	std::atomic_bool m_pairing_complete_requested{false};
 	std::atomic_bool m_gamepad_disconnected_requested{false};
+	std::atomic_bool m_gamepad_associated_requested{false};
 	std::mutex m_status_mutex;
 	std::deque<std::string> m_status_events;
 	std::string m_log_path;
@@ -2658,6 +2727,8 @@ private:
 	drc_host::PairingCode m_pairing_code{};
 	std::string m_runtime_ssid;
 	std::string m_psk_hex;
+	std::mutex m_credentials_mutex;
+	std::unordered_set<std::string> m_paired_gamepad_macs;
 	std::string m_test_media_path;
 	bool m_test_black_frames = false;
 	std::unordered_map<std::string, std::chrono::steady_clock::time_point> m_probe_seen;

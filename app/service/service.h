@@ -19,6 +19,9 @@ public:
     void StopWorker();
 public slots:
     QVariantMap GetStatus();
+    QVariantList SavedGamePads();
+    void RemoveGamePad(const QString& mac);
+    void RenameGamePad(const QString& mac, const QString& name);
     void StartSession(const QString& interface, const QString& mode);
     void Pair(const QString& interface, const QString& code, const QString& mode);
     void StopSession();
