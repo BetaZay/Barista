@@ -1,5 +1,6 @@
 #include "control_client.h"
 #include <QDateTime>
+#include <QTimer>
 #ifdef BARISTA_LINUX_CONTROL
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -11,7 +12,11 @@ void ControlClient::Retry() { m_nextRetry = 0; Refresh(); }
 void ControlClient::Prepare() { Call("PrepareSystem"); }
 void ControlClient::Start(const QString& interface, const QString& mode) { Call("StartSession",{interface,mode}); }
 void ControlClient::Pair(const QString& interface, const QString& code, const QString& mode) { Call("Pair",{interface,code,mode}); }
-void ControlClient::Stop() { Call("StopSession"); }
+void ControlClient::Stop()
+{
+    if (m_operationPending) { m_stopAfterOperation = true; return; }
+    Call("StopSession");
+}
 void ControlClient::Call(const QString& method, const QVariantList& arguments)
 {
 #ifdef BARISTA_LINUX_CONTROL
@@ -25,7 +30,7 @@ void ControlClient::Call(const QString& method, const QVariantList& arguments)
     // Only hardware/setup mutations prompt for polkit authorization.
     message.setAutoStartService(true);
     auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message,poll ? 25000 : 150000),this);
-    connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,poll](auto* completed) {
+    connect(watcher,&QDBusPendingCallWatcher::finished,this,[this,poll,method](auto* completed) {
         if (poll) {
             m_pollPending = false;
             QDBusPendingReply<QVariantMap> reply = *completed;
@@ -36,7 +41,13 @@ void ControlClient::Call(const QString& method, const QVariantList& arguments)
         } else {
             m_operationPending = false; emit Pending(false);
             QDBusPendingReply<> reply = *completed;
-            if (reply.isError()) emit Error(reply.error().message());
+            const bool success = !reply.isError();
+            if (!success) emit Error(reply.error().message());
+            if (method == "StopSession") emit Stopped(success);
+            if (m_stopAfterOperation) {
+                m_stopAfterOperation = false;
+                QTimer::singleShot(0, this, &ControlClient::Stop);
+            }
             Refresh();
         }
         completed->deleteLater();

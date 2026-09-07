@@ -33,6 +33,35 @@
 namespace {
 enum class Tone { Neutral, Good, Warning, Bad };
 
+QString InterfaceName(const QComboBox* combo)
+{
+    if (combo->isEditable() && barista::ValidInterface(combo->currentText().toStdString()))
+        return combo->currentText();
+    if (combo->isEditable() && combo->currentIndex() >= 0 &&
+        combo->currentText() != combo->itemText(combo->currentIndex()))
+        return combo->currentText();
+    const QString data = combo->currentData().toString();
+    return data.isEmpty() ? combo->currentText() : data;
+}
+
+void SelectInterface(QComboBox* combo, const QString& interface)
+{
+    const int index = combo->findData(interface);
+    if (index >= 0) combo->setCurrentIndex(index);
+    else combo->setCurrentText(interface);
+}
+
+QString AdapterLabel(const QString& interface)
+{
+    const QString device = QFileInfo("/sys/class/net/" + interface + "/device").canonicalFilePath();
+    const QString driver = QFileInfo("/sys/class/net/" + interface + "/device/driver").canonicalFilePath();
+    const bool usb = device.contains("/usb",Qt::CaseInsensitive) || driver.contains("8821au",Qt::CaseInsensitive);
+    const QString model = driver.contains("8852be",Qt::CaseInsensitive) ? "Realtek RTL8852BE" :
+        driver.contains("8821au",Qt::CaseInsensitive) || driver.contains("8821a",Qt::CaseInsensitive)
+            ? "Realtek RTL8821AU" : "Wi-Fi adapter";
+    return QString("%1 · %2 (%3)").arg(usb ? "USB" : "Internal",model,interface);
+}
+
 void SetTone(QLabel* label, Tone tone, bool bold = false)
 {
     QString color = "palette(windowText)";
@@ -145,7 +174,7 @@ Window::Window(bool smokeTest)
     m_gamepadState = new QLabel("Session not started", connection);
     m_gamepadPhase = new QLabel("Idle", connection);
     m_gamepadMode = new QLabel("Screen + controller", connection);
-    m_gamepadIface = new QLabel("wlan0", connection);
+    m_gamepadIface = new QLabel("—", connection);
     m_gamepadBattery = new QLabel("—", connection);
     m_gamepadBattery->setObjectName("gamepadBattery");
     gamepadForm->addRow("GamePad:", m_gamepadState);
@@ -199,16 +228,18 @@ Window::Window(bool smokeTest)
     auto* choices = new QFormLayout;
     ConfigureForm(choices);
     m_interface = new QComboBox(connection);
+    m_interface->setObjectName("interfaceCombo");
     m_interface->setEditable(true);
     for (const auto& interface : QNetworkInterface::allInterfaces())
-        if (interface.type() == QNetworkInterface::Wifi) m_interface->addItem(interface.name());
+        if (interface.type() == QNetworkInterface::Wifi)
+            m_interface->addItem(AdapterLabel(interface.name()),interface.name());
     if (!m_interface->count()) m_interface->addItem("wlan0");
     m_mode = new QComboBox(connection);
     m_mode->addItem("Screen + controller","real");
     m_mode->addItem("Controller only","controller");
     if (!smokeTest) {
         QSettings settings;
-        m_interface->setCurrentText(settings.value("interface",m_interface->currentText()).toString());
+        SelectInterface(m_interface,settings.value("interface",InterfaceName(m_interface)).toString());
         m_mode->setCurrentIndex(std::max(0,m_mode->findData(settings.value("mode","real"))));
     }
     choices->addRow("&Wi-Fi adapter:",m_interface);
@@ -236,9 +267,21 @@ Window::Window(bool smokeTest)
     auto* pairingLayout = new QVBoxLayout(pairing);
     pairingLayout->setContentsMargins(12,12,12,12);
     pairingLayout->setSpacing(12);
-    pairingLayout->addWidget(new QLabel("Press SYNC on the back of the GamePad, then select its four symbols below.",pairing));
+    pairingLayout->addWidget(new QLabel("Pair a GamePad to a dedicated Wi-Fi adapter. This can be different from the adapter used by General.",pairing));
+    m_pairStatus = new QLabel(pairing);
+    m_pairStatus->setObjectName("pairingStatus");
+    m_pairStatus->setWordWrap(true);
+    pairingLayout->addWidget(m_pairStatus);
     auto* pairingForm = new QFormLayout;
     ConfigureForm(pairingForm);
+    m_pairInterface = new QComboBox(pairing);
+    m_pairInterface->setObjectName("pairInterfaceCombo");
+    m_pairInterface->setEditable(true);
+    for (int i = 0; i < m_interface->count(); ++i)
+        m_pairInterface->addItem(m_interface->itemText(i),m_interface->itemData(i));
+    SelectInterface(m_pairInterface,InterfaceName(m_interface));
+    pairingForm->addRow("&Wi-Fi adapter:",m_pairInterface);
+    pairingLayout->addWidget(new QLabel("Choose four symbols below. Once Barista says “Pair now,” press SYNC on the GamePad and enter the same symbols there. The GamePad submits automatically after the fourth symbol.",pairing));
     m_pairSymbols = new QWidget(pairing);
     auto* symbols = new QHBoxLayout(m_pairSymbols);
     symbols->setContentsMargins(0,0,0,0);
@@ -262,12 +305,9 @@ Window::Window(bool smokeTest)
         });
     pairingForm->addRow("Pairing symbols:",m_pairSymbols);
     pairingLayout->addLayout(pairingForm);
-    m_pair = new QPushButton("Pair GamePad…",pairing);
+    m_pair = new QPushButton("Start pairing",pairing);
     m_pair->setObjectName("pairButton");
     pairingLayout->addWidget(m_pair,0,Qt::AlignLeft);
-    m_pairHint = new QLabel(pairing);
-    m_pairHint->setWordWrap(true);
-    pairingLayout->addWidget(m_pairHint);
     pairingLayout->addStretch();
     m_tabs->addTab(pairing,"Pair GamePad");
 
@@ -342,6 +382,22 @@ Window::Window(bool smokeTest)
             : "Buttons and sticks appear as a virtual controller for PC games. The GamePad shows the Barista logo. Touch, motion and rumble are not supported yet.");
     };
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[describe](int) { describe(); });
+    const auto synchronizeInterface = [this](QComboBox* source, QComboBox* destination) {
+        const QString interface = InterfaceName(source);
+        if (interface.isEmpty() || InterfaceName(destination) == interface)
+        {
+            ApplyStatus(m_lastStatus);
+            return;
+        }
+        SelectInterface(destination,interface);
+        ApplyStatus(m_lastStatus);
+    };
+    connect(m_interface,&QComboBox::currentTextChanged,this,[this,synchronizeInterface] {
+        synchronizeInterface(m_interface,m_pairInterface);
+    });
+    connect(m_pairInterface,&QComboBox::currentTextChanged,this,[this,synchronizeInterface] {
+        synchronizeInterface(m_pairInterface,m_interface);
+    });
     describe();
 
     connect(startAction,&QAction::triggered,m_start,&QPushButton::click);
@@ -349,18 +405,24 @@ Window::Window(bool smokeTest)
     connect(pairAction,&QAction::triggered,this,[this] { m_tabs->setCurrentIndex(1); m_pair->setFocus(); });
     connect(m_start,&QPushButton::clicked,this,[this] {
         ShowWindow();
-        if (!ConfirmWifi(false)) return;
+        const QString interface = InterfaceName(m_interface);
+        if (!ConfirmWifi(false,interface)) return;
         QSettings settings;
-        settings.setValue("interface",m_interface->currentText());
+        settings.setValue("interface",interface);
+        settings.setValue("pairInterface",interface);
         settings.setValue("mode",Mode());
         m_message->hide();
-        m_client.Start(m_interface->currentText(),Mode());
+        m_client.Start(interface,Mode());
     });
     connect(m_stop,&QPushButton::clicked,&m_client,&ControlClient::Stop);
     connect(m_pair,&QPushButton::clicked,this,[this] {
-        if (!ConfirmWifi(true)) return;
+        const QString interface = InterfaceName(m_pairInterface);
+        if (!ConfirmWifi(true,interface)) return;
+        QSettings settings;
+        settings.setValue("interface",interface);
+        settings.setValue("pairInterface",interface);
         m_message->hide();
-        m_client.Pair(m_interface->currentText(),m_code->text(),Mode());
+        m_client.Pair(interface,m_code->text(),Mode());
     });
     connect(m_copy,&QPushButton::clicked,this,[this] {
         QApplication::clipboard()->setText("env BARISTA_MUG_SOCKET=" + m_endpoint->text() + " ");
@@ -395,6 +457,9 @@ Window::Window(bool smokeTest)
         m_pending = pending;
         if (pending) m_operationError.clear();
         ApplyStatus(m_lastStatus);
+    });
+    connect(&m_client,&ControlClient::Stopped,this,[this](bool) {
+        if (m_quitting) QApplication::quit();
     });
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int) { ApplyStatus(m_lastStatus); });
     ApplyStatus({{"activating",!smokeTest}});
@@ -437,19 +502,21 @@ void Window::Quit()
         if (QMessageBox::question(this,"Quit Barista?","Quit and stop your GamePad session? The Wi-Fi adapter will be released.",
             QMessageBox::Yes | QMessageBox::Cancel,QMessageBox::Cancel) != QMessageBox::Yes) return;
     }
-    // The service's owner-disconnect watcher stops the engine even on a crash.
-    // Hiding/minimizing keeps that same D-Bus owner alive; quitting does not.
     m_quitting = true;
+    if (m_lastStatus.value("running").toBool() || m_pending) {
+        m_client.Stop();
+        return;
+    }
     QApplication::quit();
 }
-bool Window::ConfirmWifi(bool pairing)
+bool Window::ConfirmWifi(bool pairing, const QString& interface)
 {
-    if (!barista::ValidInterface(m_interface->currentText().toStdString())) {
-        m_message->setText("Choose a valid Wi-Fi adapter in General first."); m_message->show(); return false;
+    if (!barista::ValidInterface(interface.toStdString())) {
+        m_message->setText("Choose a valid Wi-Fi adapter first."); m_message->show(); return false;
     }
     QMessageBox warning(QMessageBox::Warning, pairing ? "Pair your GamePad?" : "Start Barista?",
         QString("Barista will take over Wi-Fi adapter %1 for your GamePad. Internet access through this adapter will be interrupted. Use Ethernet or another Wi-Fi adapter to stay online.")
-            .arg(m_interface->currentText()), QMessageBox::NoButton, this);
+            .arg(interface), QMessageBox::NoButton, this);
     warning.setInformativeText(pairing
         ? "This can replace your saved pairing and disconnect the GamePad from its Wii U. Stop releases the adapter; you may need to reconnect to your Wi-Fi network."
         : "Stop releases the adapter; you may need to reconnect to your Wi-Fi network. Barista starts NetworkManager and loads controller support if needed. Your desktop may ask for permission.");
@@ -508,7 +575,7 @@ void Window::ApplyStatus(const QVariantMap& status)
     const auto ifaceName = status.value("interface").toString();
     m_gamepadPhase->setText(running ? (phase.isEmpty() ? "Running" : phase) : "Idle");
     m_gamepadMode->setText(sessionMode == "controller" ? "Controller only" : "Screen + controller");
-    m_gamepadIface->setText(ifaceName.isEmpty() ? m_interface->currentText() : ifaceName);
+    m_gamepadIface->setText(ifaceName.isEmpty() ? InterfaceName(m_interface) : ifaceName);
     if (status.value("batteryAvailable").toBool())
         m_gamepadBattery->setText(QString("%1%").arg(status.value("battery").toInt()));
     else
@@ -649,12 +716,35 @@ void Window::ApplyStatus(const QVariantMap& status)
     m_interface->setEnabled(!running && !busy);
     m_mode->setEnabled(!running && !busy);
     m_pairSymbols->setEnabled(!running && !busy);
-    m_pairHint->setText(!available ? "Service unavailable — check Advanced." :
-        busy ? "Waiting for setup to finish." :
-        running ? "Stop the current session before pairing." :
-        !supported ? "Controller support is unavailable; choose Screen + controller or check Advanced." : "");
-    m_pairHint->setVisible(!m_pairHint->text().isEmpty());
-    SetTone(m_pairHint,!available || !supported ? Tone::Bad : Tone::Warning);
+    const QString pairInterface = InterfaceName(m_pairInterface);
+    QString pairStatus;
+    Tone pairStatusTone = Tone::Neutral;
+    if (!available) {
+        pairStatus = "Pairing unavailable — check the service status in Advanced.";
+        pairStatusTone = Tone::Bad;
+    } else if (busy || phase == "starting") {
+        pairStatus = QString("Starting pairing on %1… Preparing the Wi-Fi adapter. Wait for “Pair now” before using SYNC.")
+            .arg(pairInterface);
+        pairStatusTone = Tone::Warning;
+    } else if (phase == "pairing") {
+        pairStatus = QString("Pair now — the pairing network is ready on %1. Press SYNC on the GamePad and enter the four symbols selected above. The GamePad submits automatically after the fourth symbol.")
+            .arg(pairInterface);
+        pairStatusTone = Tone::Good;
+    } else if (running) {
+        pairStatus = "Pairing is unavailable while another GamePad session is running.";
+        pairStatusTone = Tone::Warning;
+    } else if (!supported) {
+        pairStatus = "Pairing cannot start in the selected mode. Check Advanced or select Screen + controller.";
+        pairStatusTone = Tone::Bad;
+    } else {
+        pairStatus = QString("Ready to start pairing on %1. Choose four symbols, then select Start pairing.")
+            .arg(pairInterface);
+    }
+    m_pairStatus->setText(pairStatus);
+    SetTone(m_pairStatus,pairStatusTone,true);
+    m_pair->setText(busy || phase == "starting" ? "Starting pairing…" :
+        phase == "pairing" ? "Pairing active" : "Start pairing");
+    m_pairInterface->setEnabled(!running && !busy);
     m_endpoint->setText(status.value("mediaEndpoint").toString());
     m_copy->setEnabled(!m_endpoint->text().isEmpty());
     const auto error = m_operationError.isEmpty() ? status.value("error").toString() : m_operationError;

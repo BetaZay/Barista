@@ -309,7 +309,10 @@ void ServerCore::process_backend_events()
 void ServerCore::start_automatic(AutomaticCycleConfig config)
 {
 	m_automatic = std::move(config);
-	start_check_cycle();
+	if (m_automatic->start_in_pairing)
+		start_pairing_cycle();
+	else
+		start_check_cycle();
 }
 
 void ServerCore::start_pairing_cycle()

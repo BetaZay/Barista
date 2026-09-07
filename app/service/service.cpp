@@ -292,13 +292,15 @@ QString Service::Start(const QString& interface, const QString& mode, const QStr
     env.insert("DRCD_HOSTAPD_BIN",BARISTA_HOSTAPD);
     env.insert("DRCD_CREDENTIALS_FILE","/var/lib/drcd/credentials.conf");
     env.insert("DRCD_LOG_FILE","/var/log/barista/engine.log");
+    // Prefer the known-good non-DFS Wii U pairing channel before the fallback sweep.
+    env.insert("DRCD_AP_CHANNEL","149");
     env.insert("BARISTA_MUG_SOCKET",m_endpoint);
     env.insert("BARISTA_IDLE_I420","/run/barista/idle.i420");
     env.insert("BARISTA_CLIENT_UID",QString::number(mode == "controller" ? 0 : uid));
     env.insert("DRCD_LOG_STDERR","1");
     QStringList args{"--socket",ControlSocket,"--interface",interface};
     if (code.isEmpty()) args << "--np";
-    else args << "--pair-code" << code;
+    else args << "--pair-code" << code << "--pair";
     m_owner = caller; m_stopping = false;
     findChild<QDBusServiceWatcher*>()->addWatchedService(caller);
     m_worker.setProcessEnvironment(env);
@@ -323,7 +325,6 @@ void Service::Poll()
 void Service::ParseStatus()
 {
     m_statusTimeout.stop();
-    m_response += m_statusSocket.readAll();
     if (m_worker.state() != QProcess::Running || m_stopping || m_response.size() > 16384 || !m_response.startsWith("OK ")) return;
     for (const auto& line : m_response.split('\n')) {
         if (line.startsWith("phase=")) m_phase = QString::fromUtf8(line.mid(6));

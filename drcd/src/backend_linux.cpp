@@ -54,7 +54,7 @@ namespace drcd
 {
 namespace
 {
-constexpr std::string_view kHostapdControlPath = "/var/run/hostapd";
+constexpr std::string_view kHostapdControlPath = "/run/barista/hostapd";
 constexpr int kDefaultWpsPinTimeoutSeconds = 600;
 constexpr int kMaxWpsPinTimeoutSeconds = 3600;
 constexpr std::string_view kConsoleIp = "192.168.1.10";
@@ -63,6 +63,10 @@ constexpr std::string_view kBroadcastIp = "192.168.1.255";
 constexpr uint16_t kSessionMtu = 1800;
 constexpr uint32_t kDhcpLeaseSeconds = 3600;
 constexpr std::string_view kTsfMonitorInterface = "drcdtsf";
+// Some USB adapters, notably rtw_8821au, report the PHY as busy briefly after
+// NetworkManager releases a managed connection.  Do not hand the interface to
+// hostapd until that transition has had time to complete.
+constexpr auto kNetworkManagerApSettleDelay = std::chrono::seconds(5);
 
 enum class DhcpMessageType : uint8_t
 {
@@ -674,6 +678,21 @@ public:
 		m_log_stream.open(m_log_path, std::ios::out | std::ios::trunc);
 		if (m_log_stream.good())
 			m_log_stream << "drcd diagnostic log\n";
+		std::error_code control_error;
+		std::filesystem::create_directories(kHostapdControlPath, control_error);
+		if (!control_error)
+		{
+			for (const auto& entry : std::filesystem::directory_iterator(kHostapdControlPath, control_error))
+			{
+				std::error_code remove_error;
+				std::filesystem::remove(entry.path(), remove_error);
+				if (!remove_error)
+					Log("startup-cleanup: removed stale hostapd control " + entry.path().string());
+			}
+		}
+		std::string cleanup_output;
+		if (RunIw({"dev", std::string(kTsfMonitorInterface), "del"}, cleanup_output))
+			Log("startup-cleanup: removed stale " + std::string(kTsfMonitorInterface));
 	}
 
 	~LinuxSessionBackend() override
@@ -690,6 +709,9 @@ public:
 			return Fail("invalid interface name");
 		if (!request.pairing_code.valid())
 			return Fail("invalid pairing code");
+		std::string compatibility_error;
+		if (!CheckAdapterCompatibility(request.interface_name, compatibility_error))
+			return Fail(compatibility_error);
 
 		(void)stop_session();
 
@@ -816,6 +838,9 @@ public:
 			return Fail("operation cancelled");
 		if (!ValidateInterfaceName(request.interface_name))
 			return Fail("invalid interface name");
+		std::string compatibility_error;
+		if (!CheckAdapterCompatibility(request.interface_name, compatibility_error))
+			return Fail(compatibility_error);
 		(void)stop_session();
 		m_base_interface = request.interface_name;
 		m_ap_interface = request.interface_name;
@@ -835,6 +860,63 @@ public:
 	}
 
 private:
+	bool CheckAdapterCompatibility(const std::string& interface_name, std::string& error)
+	{
+		std::error_code ec;
+		const auto driver = std::filesystem::canonical(
+			std::filesystem::path("/sys/class/net") / interface_name / "device/driver", ec);
+		const std::string driver_name = ec ? "unknown" : driver.filename().string();
+
+		std::string interface_info;
+		if (!RunIw({"dev", interface_name, "info"}, interface_info))
+		{
+			error = "could not inspect wireless adapter " + interface_name;
+			return false;
+		}
+		const auto wiphy_marker = interface_info.find("wiphy ");
+		if (wiphy_marker == std::string::npos)
+		{
+			error = "could not determine wireless PHY for " + interface_name;
+			return false;
+		}
+		const size_t wiphy_start = wiphy_marker + 6;
+		const size_t wiphy_end = interface_info.find_first_not_of("0123456789", wiphy_start);
+		const std::string wiphy = interface_info.substr(wiphy_start, wiphy_end - wiphy_start);
+		std::string phy_info;
+		if (!RunIw({"phy", "phy" + wiphy, "info"}, phy_info))
+		{
+			error = "could not inspect capabilities for " + interface_name;
+			return false;
+		}
+		const bool ap = phy_info.find("* AP\n") != std::string::npos ||
+			phy_info.find("* AP\r\n") != std::string::npos;
+		const bool monitor = phy_info.find("* monitor\n") != std::string::npos ||
+			phy_info.find("* monitor\r\n") != std::string::npos;
+		bool five_ghz = false;
+		for (size_t pos = 0; (pos = phy_info.find(" MHz", pos)) != std::string::npos; pos += 4)
+		{
+			const size_t line_start = phy_info.rfind('\n', pos);
+			const size_t value_start = phy_info.find_first_of("0123456789", line_start == std::string::npos ? 0 : line_start + 1);
+			if (value_start != std::string::npos && value_start < pos)
+			{
+				try { five_ghz = std::stod(phy_info.substr(value_start, pos - value_start)) >= 5000.0; }
+				catch (...) {}
+				if (five_ghz) break;
+			}
+		}
+		Log("adapter-check: " + interface_name + " driver=" + driver_name +
+			" phy=phy" + wiphy + " ap=" + (ap ? "yes" : "no") +
+			" monitor=" + (monitor ? "yes" : "no") +
+			" 5ghz=" + (five_ghz ? "yes" : "no") +
+			" wps=runtime-test");
+		if (!ap || !five_ghz)
+		{
+			error = "adapter " + interface_name + " lacks required 5 GHz AP capability";
+			return false;
+		}
+		return true;
+	}
+
 	BackendResult StartRuntimeAp(bool from_pairing)
 	{
 		StopPairChannelSweep();
@@ -1551,9 +1633,11 @@ private:
 		if (ioctl(fd, SIOCGIFMTU, &mtu) == 0)
 			m_saved_interface.mtu = mtu.ifr_mtu;
 
+		bool network_manager_released = false;
 		std::string nm_detail;
 		if (SetNetworkManagerManaged(m_ap_interface, false, nm_detail))
 		{
+			network_manager_released = true;
 			m_network_manager_claimed = true;
 			Log("interface-prep: NetworkManager released " + m_ap_interface);
 			QueueStatus("Wi-Fi interface reserved for GamePad hosting");
@@ -1582,6 +1666,14 @@ private:
 			}
 		}
 
+		ifreq stale_address{};
+		std::snprintf(stale_address.ifr_name, sizeof(stale_address.ifr_name), "%s", m_ap_interface.c_str());
+		auto* stale_value = reinterpret_cast<sockaddr_in*>(&stale_address.ifr_addr);
+		stale_value->sin_family = AF_INET;
+		if (inet_pton(AF_INET, kConsoleIp.data(), &stale_value->sin_addr) == 1 &&
+			ioctl(fd, SIOCDIFADDR, &stale_address) == 0)
+			Log("interface-prep: removed stale session address from " + m_ap_interface);
+
 		if (!SetInterfaceManaged(error))
 		{
 			close(fd);
@@ -1600,6 +1692,22 @@ private:
 
 		close(fd);
 		Log("interface-prep: set " + m_ap_interface + " down with MAC " + m_ap_mac.to_string());
+		if (network_manager_released)
+		{
+			Log("interface-prep: waiting " +
+				std::to_string(kNetworkManagerApSettleDelay.count()) +
+				"s for " + m_ap_interface + " to settle after NetworkManager release");
+			const auto deadline = std::chrono::steady_clock::now() + kNetworkManagerApSettleDelay;
+			while (std::chrono::steady_clock::now() < deadline)
+			{
+				if (is_stop_requested())
+				{
+					error = "operation cancelled";
+					return false;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			}
+		}
 		return true;
 	}
 
@@ -1670,6 +1778,16 @@ private:
 			ifr.ifr_flags = static_cast<short>(ifr.ifr_flags & ~IFF_UP);
 			if (ioctl(fd, SIOCSIFFLAGS, &ifr) != 0)
 				Log("interface-restore: could not bring " + m_base_interface + " down: " + std::strerror(errno));
+		}
+
+		ifreq address{};
+		std::snprintf(address.ifr_name, sizeof(address.ifr_name), "%s", m_base_interface.c_str());
+		auto* address_value = reinterpret_cast<sockaddr_in*>(&address.ifr_addr);
+		address_value->sin_family = AF_INET;
+		if (inet_pton(AF_INET, kConsoleIp.data(), &address_value->sin_addr) == 1 &&
+			ioctl(fd, SIOCDIFADDR, &address) != 0 && errno != EADDRNOTAVAIL)
+		{
+			Log("interface-restore: could not remove session address from " + m_base_interface + ": " + std::strerror(errno));
 		}
 
 		std::string type_error;

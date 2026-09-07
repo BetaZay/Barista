@@ -82,7 +82,11 @@ bool WriteAll(int fd, const std::string& data)
 	size_t offset = 0;
 	while (offset < data.size())
 	{
-		const auto n = ::write(fd, data.data() + offset, data.size() - offset);
+		// The status client can time out while an AP is starting.  A reply to
+		// that closed socket must fail normally, not terminate the radio engine.
+		const auto n = ::send(fd, data.data() + offset, data.size() - offset, MSG_NOSIGNAL);
+		if (n < 0 && errno == EINTR)
+			continue;
 		if (n <= 0)
 			return false;
 		offset += static_cast<size_t>(n);
@@ -146,6 +150,7 @@ int main(int argc, char** argv)
 	int pair_code_value = 2220;
 	bool automatic = true;
 	bool pairing_enabled = true;
+	bool start_in_pairing = false;
 	std::string test_media_path;
 	bool test_black_frames = false;
 	for (int i = 1; i < argc; ++i)
@@ -182,6 +187,11 @@ int main(int argc, char** argv)
 			pairing_enabled = false;
 			continue;
 		}
+		if (arg == "--pair")
+		{
+			start_in_pairing = true;
+			continue;
+		}
 		if (arg == "--play" && (i + 1) < argc)
 		{
 			test_media_path = argv[++i];
@@ -199,6 +209,7 @@ int main(int argc, char** argv)
 				<< "Usage: drcd [--socket <path>] [--interface <iface>] [--ap-mac <mac>]\n"
 				<< "            [--pair-code <digits 0-3>] [--play <media> | --black] [--np] [--manual]\n"
 				<< "  --np            Check for paired GamePads without entering pairing mode\n"
+				<< "  --pair          Enter pairing mode immediately\n"
 				<< "  --play <media>  Loop audio/video to the GamePad after it connects\n"
 				<< "  --black         Stream built-in black video frames without audio\n";
 			return 0;
@@ -284,6 +295,7 @@ int main(int argc, char** argv)
 				.test_black_frames = test_black_frames,
 			},
 			.pairing_enabled = pairing_enabled,
+			.start_in_pairing = start_in_pairing,
 		});
 	}
 	while (!drcd::is_stop_requested())

@@ -5,6 +5,7 @@ int main()
 {
     auto check = [](bool value) { if (!value) throw std::runtime_error("core regression"); };
     check(barista::ValidInterface("wlan0"));
+    check(barista::ValidInterface("wlan1"));
     for (auto value : {"", "../wlan0", "-x", "a b", "a\nb", "abcdefghijklmnop", ".", ".."})
         check(!barista::ValidInterface(value));
     check(barista::ValidPairCode("0123"));

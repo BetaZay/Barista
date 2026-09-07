@@ -17,8 +17,10 @@ signals:
     void Status(const QVariantMap& status);
     void Error(const QString& message);
     void Pending(bool pending);
+    void Stopped(bool success);
 private:
     void Call(const QString& method, const QVariantList& arguments = {});
     bool m_pollPending = false, m_operationPending = false;
+    bool m_stopAfterOperation = false;
     qint64 m_nextRetry = 0;
 };

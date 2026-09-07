@@ -5,6 +5,7 @@
 #include <QTabWidget>
 #include <QTimer>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLineEdit>
 #include <QLabel>
 #include <QToolBar>
@@ -20,8 +21,9 @@ int main(int argc, char** argv)
         auto* start = window.findChild<QPushButton*>("startButton");
         auto* stop = window.findChild<QPushButton*>("stopButton");
         auto* pair = window.findChild<QPushButton*>("pairButton");
+        auto* pairInterface = window.findChild<QComboBox*>("pairInterfaceCombo");
         auto* advanced = window.findChild<QWidget*>("advancedPanel");
-        Check(start && stop && pair && advanced,"required controls");
+        Check(start && stop && pair && pairInterface && advanced,"required controls");
         Check(!window.findChild<QToolBar*>("sessionToolbar"),"session controls are not duplicated in a toolbar");
         Check(!start->isEnabled() && !stop->isEnabled(),"service missing disables actions");
         auto* tabs = window.findChild<QTabWidget*>();
@@ -33,15 +35,34 @@ int main(int argc, char** argv)
         QVariantMap status{{"available",true},{"running",false},{"controllerSupported",true},{"phase","idle"}};
         auto apply = [&] { Check(QMetaObject::invokeMethod(&window,"ApplyStatus",Qt::DirectConnection,Q_ARG(QVariantMap,status)),"apply status"); };
         apply(); Check(start->isEnabled() && pair->isEnabled() && !stop->isEnabled(),"idle actions");
+        auto* pairingStatus = window.findChild<QLabel*>("pairingStatus");
+        Check(pairingStatus && pairingStatus->text().contains("Ready to start pairing"),"pairing is initially ready");
+        status["busy"] = true; status["phase"] = "starting"; apply();
+        Check(pairingStatus->text().contains("Starting pairing") && !pair->isEnabled(),"pairing startup is explained");
+        status["busy"] = false; status["running"] = true; status["phase"] = "pairing"; apply();
+        Check(pairingStatus->text().contains("Pair now") && pairingStatus->text().contains("automatically") &&
+            pair->text() == "Pairing active","pairing readiness is explicit");
+        status["running"] = false; status["phase"] = "idle"; apply();
         status["batteryAvailable"] = true; status["battery"] = 100; apply();
         Check(window.findChild<QLabel*>("gamepadBattery") && window.findChild<QLabel*>("gamepadBattery")->text() == "100%","GamePad battery is shown");
         int operations = 0;
         QObject::connect(window.findChild<ControlClient*>(),&ControlClient::Pending,[&](bool pending) { if (pending) ++operations; });
+        pairInterface->setCurrentText("wlan1");
+        auto* interfaceCombo = window.findChild<QComboBox*>("interfaceCombo");
+        const auto selectedName = [](QComboBox* combo) {
+            return combo->currentText().contains(' ') ? combo->currentData().toString() : combo->currentText();
+        };
+        Check(interfaceCombo && selectedName(interfaceCombo) == "wlan1","pairing adapter updates session adapter");
+        interfaceCombo->setCurrentText("wlan0");
+        Check(selectedName(pairInterface) == "wlan0","session adapter updates pairing adapter");
+        pairInterface->setCurrentText("wlan1");
         for (auto* action : {start,pair}) {
             bool warned = false, safeDefault = false;
+            auto* selectedCombo = action == pair ? pairInterface : interfaceCombo;
+            const auto selectedInterface = selectedName(selectedCombo);
             QTimer::singleShot(0,[&] {
                 if (auto* dialog = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
-                    warned = dialog->text().contains("Internet access") && dialog->text().contains("wlan0");
+                    warned = dialog->text().contains("Internet access") && dialog->text().contains(selectedInterface);
                     safeDefault = dialog->defaultButton() == dialog->button(QMessageBox::Cancel);
                     dialog->reject();
                 }

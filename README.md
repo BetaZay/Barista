@@ -57,6 +57,12 @@ work; it is not a guarantee for every firmware, kernel, access-point channel,
 or adapter. macOS and Windows currently provide the portable UI/core only—the
 real GamePad radio backend is Linux-only.
 
+The [TP-Link Nano AC600](https://www.amazon.com/dp/B07PB1X4CN) USB adapter
+(`rtw_8821au`) is also a recommended tested option. It can take several
+seconds to leave managed Wi-Fi mode and bring up the pairing access point;
+wait for Barista to report that pairing is ready before using SYNC. It was
+stable once the pairing AP was running in our testing.
+
 For additional confirmed and incompatible hardware reports, see
 [Vanilla Wii U's Wireless Compatibility wiki](https://github.com/vanilla-wiiu/vanilla/wiki/Wireless-Compatibility).
 
