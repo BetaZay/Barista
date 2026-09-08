@@ -252,7 +252,7 @@ MediaStreamer::~MediaStreamer() { stop(); }
 
 bool MediaStreamer::reencode_replay(std::istream& input, std::ostream& output, std::string& error)
 {
-	auto encoder = x264::CreateEncoder(x264::OptionsFromEnvironment(true));
+	auto encoder = x264::CreateEncoder(x264::OptionsFromEnvironment());
 	if (!encoder || !encoder->IsValid()) { error = "replay encoder initialization failed"; return false; }
 	std::vector<uint8_t> frame(kRawFrameSize);
 	while (input.peek() != std::char_traits<char>::eof())
@@ -630,23 +630,18 @@ void MediaStreamer::video_loop()
 	m_transport.report_status(send_time_video
 		? "Media sync: format AP TSF-1250us, video 5000us later with identical timestamp; PCM unchanged"
 		: "Video timestamp: baseline before encoding and pacing sleep");
-	m_transport.report_status("DRH encoder contract: effective chroma QP offset=0 (post-psy normalization)");
-	m_transport.report_status("Video quantizer: QP=" +
-		std::to_string(x264::OptionsFromEnvironment().quantizer));
-	const char* legacy_quality = std::getenv("DRCD_LEGACY_ENCODER_QUALITY");
-	m_transport.report_status(legacy_quality && std::strcmp(legacy_quality, "1") == 0
-		? "Encoder quality: legacy psy/fast-P-skip"
-		: "Encoder quality: pixel-fidelity RD; early P-skip disabled");
+	m_transport.report_status("DRH native encoder: fixed QP=32, chroma QP offset=0, continuous CABAC slice");
+	m_transport.report_status(x264::OptionsFromEnvironment().disablePlanarPrediction
+		? "Video planar prediction: disabled for GamePad compatibility"
+		: "Video planar prediction: enabled; GamePad compatibility unverified");
 	const bool reference_options = option_order && std::strcmp(option_order, "1") == 0;
 	m_transport.report_status(reference_options
 		? "Video options: reference console order experiment"
 		: "Video options: baseline order");
 	m_transport.report_status(fast_encode && std::strcmp(fast_encode, "1") == 0
-		? "Video encoder: fast search experiment (dia/subme2/trellis0)"
-		: "Video encoder: baseline slow search");
-	m_transport.report_status(DefaultEnabled("DRCD_INTRA_REFRESH")
-		? "Video cyclic intra-refresh: enabled (baseline)"
-		: "Video cyclic intra-refresh: disabled (compatibility test); requested IDRs retained");
+		? "Video encoder: MiniH264 fast search (preset 9)"
+		: "Video encoder: MiniH264 default search (preset 5)");
+	m_transport.report_status("Video recovery: requested IDRs; cyclic intra-refresh is not implemented");
 	SerialVideoSender sender;
 	FormatSlotScheduler formats([&](std::optional<uint32_t> legacy) {
 		const uint32_t stamp = legacy.value_or(FormatVideoTimestamp(m_transport.timestamp_us()));

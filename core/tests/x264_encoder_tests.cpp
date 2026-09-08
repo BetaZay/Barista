@@ -2,6 +2,7 @@
 #include "drh/encoder/x264/encoder.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -33,6 +34,18 @@ void CheckChunks(const barista::drh::EncodedVideoFrame& frame)
 
 int main()
 {
+    unsetenv("DRCD_FAST_ENCODE");
+    unsetenv("DRCD_DISABLE_PLANAR_PREDICTION");
+    auto configured = barista::drh::x264::OptionsFromEnvironment();
+    Check(!configured.fastSearch && configured.disablePlanarPrediction,
+        "native environment defaults are unsafe");
+    setenv("DRCD_FAST_ENCODE", "1", 1);
+    setenv("DRCD_DISABLE_PLANAR_PREDICTION", "0", 1);
+    configured = barista::drh::x264::OptionsFromEnvironment();
+    Check(configured.fastSearch && !configured.disablePlanarPrediction,
+        "native environment switches were ignored");
+    unsetenv("DRCD_FAST_ENCODE");
+    unsetenv("DRCD_DISABLE_PLANAR_PREDICTION");
     barista::drh::x264::EncoderOptions options;
     auto encoder = barista::drh::x264::CreateEncoder(options);
     Check(encoder && encoder->IsValid(), "could not create x264 encoder backend");

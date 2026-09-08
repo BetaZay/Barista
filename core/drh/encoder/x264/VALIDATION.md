@@ -54,7 +54,9 @@ worker contains the native encoder implementation. A fresh Ninja Debug build
 with `BARISTA_BUILD_ENGINE=OFF` passes all six desktop-only tests (local socket
 access is required for the single-instance test).
 
-The remaining integration cleanup is to remove obsolete x264-only configuration
-knobs and status messages; these must not imply that native fixed-QP encoding
-honors the old quality or intra-refresh options.
+The native configuration exposes only fast search and planar prediction.
+`DRCD_VIDEO_QP`, `DRCD_QP28`, `DRCD_LEGACY_ENCODER_QUALITY`, and
+`DRCD_INTRA_REFRESH` are retired encoder settings and have no effect. QP is fixed
+at 32; recovery uses requested IDRs, not cyclic intra-refresh. Status messages
+report those native behaviors rather than the former x264 policies.
 No GamePad hardware playback or radio timing validation is claimed here.
