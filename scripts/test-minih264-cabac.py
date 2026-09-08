@@ -18,12 +18,12 @@ def main():
         for source in (cavlc, cabac):
             output = source.with_suffix(".yuv")
             subprocess.run([
-                ffmpeg, "-v", "error", "-xerror", "-i", str(source),
-                "-vf", "crop=854:480:0:0", "-pix_fmt", "yuv420p",
+                ffmpeg, "-v", "error", "-xerror", "-apply_cropping", "0", "-i", str(source),
+                "-pix_fmt", "yuv420p",
                 "-f", "rawvideo", str(output),
             ], check=True)
             decoded.append(output.read_bytes())
-        expected = 300 * 854 * 480 * 3 // 2
+        expected = 300 * 864 * 480 * 3 // 2
         if any(len(data) != expected for data in decoded):
             raise RuntimeError("decoder did not produce exactly 300 complete frames")
         if decoded[0] != decoded[1]:

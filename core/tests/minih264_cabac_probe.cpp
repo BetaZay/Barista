@@ -66,10 +66,11 @@ int main(int argc, char** argv)
         throw std::runtime_error("encode failed");
     baseline.write(reinterpret_cast<char*>(coded), size);
     const auto reference = Reconstruction(enc);
-    // Compare the visible region selected by the GamePad's implicit SPS.
+    // Include coded padding hidden by the implicit SPS crop: these pixels
+    // still participate in motion compensation on subsequent pictures.
     for (int plane = 0; plane < 3; ++plane)
     {
-        const int width = plane ? 427 : 854;
+        const int width = plane ? 432 : 864;
         const int height = plane ? 240 : 480;
         for (int row = 0; row < height; ++row)
             reconstructed.write(reinterpret_cast<const char*>(reference.yuv[plane] +

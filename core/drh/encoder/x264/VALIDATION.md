@@ -4,10 +4,12 @@
 
 `drcd_minih264_cabac_reconstruction`, `drcd_minih264_planar_reconstruction`,
 and `drcd_minih264_fast_reconstruction` decode 300 moving I420 pictures with
-FFmpeg. They compare all visible 854x480 pixels with the encoder's internal
+FFmpeg. They compare all coded 864x480 pixels with the encoder's internal
 deblocked reference, check adapter output and chunk metadata, and cover a long
 P-frame sequence, frame-number wrap, and consecutive forced IDRs. The coded
 input is 864x480; the implicit GamePad SPS crops the visible width to 854.
+Decoder cropping is disabled for the test so reference pixels in the right-hand
+padding are verified too.
 
 ## Encoding performance
 
