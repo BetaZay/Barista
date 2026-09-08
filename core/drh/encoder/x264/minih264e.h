@@ -125,6 +125,14 @@ typedef struct H264E_create_param_tag
 
     int sps_id;
 
+    // Wii U GamePad compatibility mode. This fixes the picture geometry and
+    // quantizer contract; DRH packet output is delivered through the callback.
+    int b_drh_mode;
+
+    // If set, do not consider 16x16 planar luma/chroma prediction. The Wii U
+    // GamePad decoder requires this, while standard H.264 users may enable it.
+    int disable_planar_prediction_flag;
+
 #if H264E_SVC_API
     //          SVC extension
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -9684,6 +9692,24 @@ static void intra_choose_16x16(h264e_enc_t *enc, pix_t *left, pix_t *top, int av
         + MUL_LAMBDA(bitsize_ue(enc->mb.i16.pred_mode_luma + 1), g_lambda_q4[enc->rc.qp]) // side-info penalty
         + g_lambda_i16_q4[enc->rc.qp];                                                    // block kind penalty
 
+    if (!enc->param.disable_planar_prediction_flag &&
+        (avail & (AVAIL_T + AVAIL_L + AVAIL_TL)) == (AVAIL_T + AVAIL_L + AVAIL_TL))
+    {
+        int planar_cost;
+        h264e_intra_predict_16x16(enc->ptest, left, top, 3);
+        planar_cost = h264e_sad_mb_unlaign_8x8(enc->scratch->mb_pix_inp, 16, enc->ptest, sad4)
+            + MUL_LAMBDA(bitsize_ue(4), g_lambda_q4[enc->rc.qp])
+            + g_lambda_i16_q4[enc->rc.qp];
+        if (planar_cost < sad)
+        {
+            sad = planar_cost;
+            enc->mb.i16.pred_mode_luma = 3;
+        } else
+        {
+            h264e_intra_predict_16x16(enc->ptest, left, top, enc->mb.i16.pred_mode_luma);
+        }
+    }
+
     if (sad < enc->mb.cost)
     {
         enc->mb.cost = sad;
@@ -11061,7 +11087,8 @@ static int enc_check_create_params(const H264E_create_param_t *par)
         return H264E_STATUS_BAD_PARAMETER;  // non-positive frame size
     }
     if ((unsigned)(par->const_input_flag | par->fine_rate_control_flag |
-        par->vbv_overflow_empty_frame_flag | par->vbv_underflow_stuffing_flag) > 1)
+        par->vbv_overflow_empty_frame_flag | par->vbv_underflow_stuffing_flag |
+        par->b_drh_mode | par->disable_planar_prediction_flag) > 1)
     {
         return H264E_STATUS_BAD_PARAMETER;  // Any flag is not 0 or 1
     }
@@ -11079,6 +11106,22 @@ static int enc_check_create_params(const H264E_create_param_t *par)
         // frame size must be multiple of 16
         return H264E_STATUS_SIZE_NOT_MULTIPLE_16;
     }
+    if (par->b_drh_mode && (par->width != 864 || par->height != 480))
+    {
+        return H264E_STATUS_BAD_PARAMETER;
+    }
+#if H264E_SVC_API
+    if (par->b_drh_mode && par->num_layers != 1)
+    {
+        return H264E_STATUS_BAD_PARAMETER;
+    }
+#endif
+#if H264E_MAX_THREADS
+    if (par->b_drh_mode && par->max_threads > 1)
+    {
+        return H264E_STATUS_BAD_PARAMETER;
+    }
+#endif
     return H264E_STATUS_SUCCESS;
 };
 
@@ -11513,6 +11556,11 @@ int H264E_encode(H264E_persist_t *enc, H264E_scratch_t *scratch, const H264E_run
     {
         enc->run_param.qp_min = MIN_QP;
     }
+    if (enc->param.b_drh_mode)
+    {
+        enc->run_param.qp_min = 32;
+        enc->run_param.qp_max = 32;
+    }
 
     enc->speed.disable_deblock = (opt->encode_speed == 8 || opt->encode_speed == 10);
 
@@ -11565,7 +11613,7 @@ int H264E_encode(H264E_persist_t *enc, H264E_scratch_t *scratch, const H264E_run
     }
     if (frame_type == H264E_FRAME_TYPE_KEY)
     {
-        int pic_init_qp = 30;
+        int pic_init_qp = enc->param.b_drh_mode ? 32 : 30;
         pic_init_qp = MIN(pic_init_qp, enc->run_param.qp_max);
         pic_init_qp = MAX(pic_init_qp, enc->run_param.qp_min);
 

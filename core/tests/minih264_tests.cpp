@@ -147,5 +147,41 @@ int main()
     const std::vector<int> predictedTypes = NalTypes(encoded, encodedSize);
     assert(Contains(predictedTypes, 1));
 
+    H264E_create_param_t invalid = create;
+    invalid.disable_planar_prediction_flag = 2;
+    assert(H264E_sizeof(&invalid, &persistentSize, &scratchSize) == H264E_STATUS_BAD_PARAMETER);
+
+    invalid = create;
+    invalid.b_drh_mode = 1;
+    invalid.width = 848;
+    assert(H264E_sizeof(&invalid, &persistentSize, &scratchSize) == H264E_STATUS_BAD_PARAMETER);
+
+    create.b_drh_mode = 1;
+    create.disable_planar_prediction_flag = 1;
+    assert(H264E_sizeof(&create, &persistentSize, &scratchSize) == H264E_STATUS_SUCCESS);
+    AlignedBuffer drhPersistent(static_cast<std::size_t>(persistentSize));
+    AlignedBuffer drhScratch(static_cast<std::size_t>(scratchSize));
+    assert(H264E_init(reinterpret_cast<H264E_persist_t *>(drhPersistent.Data()), &create) ==
+           H264E_STATUS_SUCCESS);
+
+    run.frame_type = H264E_FRAME_TYPE_KEY;
+    run.qp_min = 20;
+    run.qp_max = 20;
+    FillFrame(frame.Data(), 7);
+    assert(H264E_encode(reinterpret_cast<H264E_persist_t *>(drhPersistent.Data()),
+                        reinterpret_cast<H264E_scratch_t *>(drhScratch.Data()), &run, &input,
+                        &encoded, &encodedSize) == H264E_STATUS_SUCCESS);
+    const std::vector<std::uint8_t> forcedQuantizer(encoded, encoded + encodedSize);
+
+    assert(H264E_init(reinterpret_cast<H264E_persist_t *>(drhPersistent.Data()), &create) ==
+           H264E_STATUS_SUCCESS);
+    run.qp_min = 32;
+    run.qp_max = 32;
+    FillFrame(frame.Data(), 7);
+    assert(H264E_encode(reinterpret_cast<H264E_persist_t *>(drhPersistent.Data()),
+                        reinterpret_cast<H264E_scratch_t *>(drhScratch.Data()), &run, &input,
+                        &encoded, &encodedSize) == H264E_STATUS_SUCCESS);
+    assert(forcedQuantizer == std::vector<std::uint8_t>(encoded, encoded + encodedSize));
+
     return 0;
 }
