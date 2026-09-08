@@ -1228,7 +1228,7 @@ static void h264e_bs_put_sgolomb_sse2(bs_t *bs, int val)
 
 static void h264e_bs_init_bits_sse2(bs_t *bs, void *data)
 {
-    bs->origin = data;
+    bs->origin = (bs_item_t *)data;
     bs->buf = bs->origin;
     bs->shift = BS_BITS;
     bs->cache = 0;
@@ -11005,8 +11005,12 @@ static void rc_mb_end(h264e_enc_t *enc)
 /*      Top-level API                                                   */
 /************************************************************************/
 
-#define ALIGN_128BIT(p) (void *)((uintptr_t)(((char*)(p)) + 15) & ~(uintptr_t)15)
+#define ALIGN_128BIT(p) (unsigned char *)((uintptr_t)(((char*)(p)) + 15) & ~(uintptr_t)15)
+#ifdef __cplusplus
+#define ALLOC(ptr, size) p = ALIGN_128BIT(p); if (enc) ptr = reinterpret_cast<decltype(ptr)>(p); p += size;
+#else
 #define ALLOC(ptr, size) p = ALIGN_128BIT(p); if (enc) ptr = (void *)p; p += size;
+#endif
 
 /**
 *   Internal allocator for persistent RAM
@@ -11137,11 +11141,11 @@ static int H264E_sizeof_one(const H264E_create_param_t *par, int *sizeof_persist
         return error;
     }
 
-    *sizeof_persist = enc_alloc(NULL, par, (void*)(uintptr_t)1, inp_buf_flag) + sizeof(h264e_enc_t);
+    *sizeof_persist = enc_alloc(NULL, par, (unsigned char *)(uintptr_t)1, inp_buf_flag) + sizeof(h264e_enc_t);
 #if H264E_MAX_THREADS > 1
-    *sizeof_scratch = enc_alloc_scratch(NULL, par, (void*)(uintptr_t)1) * (par->max_threads + 1);
+    *sizeof_scratch = enc_alloc_scratch(NULL, par, (unsigned char *)(uintptr_t)1) * (par->max_threads + 1);
 #else
-    *sizeof_scratch = enc_alloc_scratch(NULL, par, (void*)(uintptr_t)1);
+    *sizeof_scratch = enc_alloc_scratch(NULL, par, (unsigned char *)(uintptr_t)1);
 #endif
     return error;
 }
@@ -11166,7 +11170,7 @@ static int H264E_init_one(h264e_enc_t *enc, const H264E_create_param_t *opt, int
     enc->frame.cropping_flag = !!((opt->width | opt->height) & 15);
     enc->param = *opt;
 
-    enc_alloc(enc, opt, (void*)(enc + 1), inp_buf_flag);
+    enc_alloc(enc, opt, (unsigned char *)(enc + 1), inp_buf_flag);
 
 #if H264E_SVC_API
     if (inp_buf_flag)
@@ -11236,7 +11240,7 @@ int H264E_init(h264e_enc_t *enc, const H264E_create_param_t *opt)
         opt_next.vbv_size_bytes <<= 2;
 
         H264E_sizeof_one(&enc_curr->param, &sizeof_persist, &sizeof_scratch, 1);
-        enc_curr = enc_curr->enc_next = (char *)enc_curr + sizeof_persist;
+        enc_curr = (h264e_enc_t *)(enc_curr->enc_next = (char *)enc_curr + sizeof_persist);
 
         ret = H264E_init_one(enc_curr, &opt_next, 1);
         if (ret)
@@ -11352,12 +11356,12 @@ static int H264E_encode_one(H264E_persist_t *enc, const H264E_run_param_t *opt,
         if (enc->param.max_threads > 1)
         {
             H264E_persist_t enc_thr[H264E_MAX_THREADS];
-            int sizeof_scratch = enc_alloc_scratch(NULL, &enc->param, (void*)(uintptr_t)1);
+            int sizeof_scratch = enc_alloc_scratch(NULL, &enc->param, (unsigned char *)(uintptr_t)1);
             unsigned char *scratch_base = ((unsigned char*)enc->scratch) + sizeof_scratch;
             int mby = 0;
             int ithr;
             int nmby = enc->frame.nmby;
-            void *savep[3];
+            pix_t *savep[3];
             for (i = 0; i < 3; i++)
             {
                 savep[i] = enc->dec.yuv[i];
@@ -11513,11 +11517,11 @@ int H264E_encode(H264E_persist_t *enc, H264E_scratch_t *scratch, const H264E_run
     i = enc_alloc_scratch(enc, &enc->param, (unsigned char*)scratch);
 #if H264E_SVC_API
     {
-        H264E_persist_t *e = enc->enc_next;
+        H264E_persist_t *e = (H264E_persist_t *)enc->enc_next;
         while (e)
         {
             i += enc_alloc_scratch(e, &enc->param, ((unsigned char*)scratch) + i);
-            e = e->enc_next;
+            e = (H264E_persist_t *)e->enc_next;
         }
     }
 #endif
@@ -11625,7 +11629,7 @@ int H264E_encode(H264E_persist_t *enc, H264E_scratch_t *scratch, const H264E_run
 #if H264E_SVC_API
         if (enc->param.num_layers > 1)
         {
-            H264E_persist_t *enc_base = enc->enc_next;
+            H264E_persist_t *enc_base = (H264E_persist_t *)enc->enc_next;
             enc_base->sps.pic_init_qp = pic_init_qp;
             enc_base->next_idr_pic_id ^= 1;
             enc_base->frame.num = 0;
@@ -11661,7 +11665,7 @@ int H264E_encode(H264E_persist_t *enc, H264E_scratch_t *scratch, const H264E_run
 #if H264E_SVC_API
     if (enc->param.num_layers > 1)
     {
-        H264E_persist_t *enc_base = enc->enc_next;
+        H264E_persist_t *enc_base = (H264E_persist_t *)enc->enc_next;
         int sh = 0;
 
         enc_base->run_param = enc->run_param;
@@ -11728,9 +11732,9 @@ int H264E_sizeof(const H264E_create_param_t *par, int *sizeof_persist, int *size
         opt_next.width  += opt_next.width & 1;
         opt_next.height  = opt_next.height >> 1;
         opt_next.height += opt_next.height & 1;
-        *sizeof_persist += enc_alloc(NULL, par, (void*)(uintptr_t)1, 1) + sizeof(h264e_enc_t);
+        *sizeof_persist += enc_alloc(NULL, par, (unsigned char *)(uintptr_t)1, 1) + sizeof(h264e_enc_t);
 #if H264E_MAX_THREADS > 1
-        *sizeof_scratch += enc_alloc_scratch(NULL, par, (void*)(uintptr_t)1) * (H264E_MAX_THREADS + 1);
+        *sizeof_scratch += enc_alloc_scratch(NULL, par, (unsigned char *)(uintptr_t)1) * (H264E_MAX_THREADS + 1);
 #else
         *sizeof_scratch += enc_alloc_scratch(NULL, par, (void*)(uintptr_t)1);
 #endif

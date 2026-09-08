@@ -31,7 +31,7 @@ if(BARISTA_BUILD_ENGINE)
         drh/encoder/x264/bit_writer.cpp
         drh/encoder/x264/cabac.cpp
         drh/encoder/x264/contexts.cpp
-        drh/encoder/x264/minih264e.c
+        drh/encoder/x264/minih264e.cpp
         drh/encoder/media_streamer.cpp
         drh/encoder/x264/encoder.cpp
     )
