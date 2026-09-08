@@ -31,6 +31,7 @@ if(BARISTA_BUILD_ENGINE)
         drh/encoder/x264/bit_writer.cpp
         drh/encoder/x264/cabac.cpp
         drh/encoder/x264/contexts.cpp
+        drh/encoder/x264/minih264e.c
         drh/encoder/media_streamer.cpp
         drh/encoder/x264/encoder.cpp
     )
@@ -101,7 +102,6 @@ if(BUILD_TESTING)
             add_test(NAME drc_ipc_tests COMMAND drc_ipc_tests)
         endif()
 
-        enable_language(C)
         add_executable(drcd_encoder_recon_probe tests/encoder_recon_probe.c)
         target_link_libraries(drcd_encoder_recon_probe PRIVATE drc_x264 m pthread dl)
         find_package(Python3 COMPONENTS Interpreter QUIET)
@@ -133,6 +133,10 @@ if(BUILD_TESTING)
         add_executable(drcd_h264_contexts_tests tests/h264_contexts_tests.cpp)
         target_link_libraries(drcd_h264_contexts_tests PRIVATE barista_drh_encoder)
         add_test(NAME drcd_h264_contexts_tests COMMAND drcd_h264_contexts_tests)
+
+        add_executable(drcd_minih264_tests tests/minih264_tests.cpp)
+        target_link_libraries(drcd_minih264_tests PRIVATE barista_drh_encoder)
+        add_test(NAME drcd_minih264_tests COMMAND drcd_minih264_tests)
 
         add_executable(drcd_format_slot_tests tests/format_slot_scheduler_tests.cpp)
         target_link_libraries(drcd_format_slot_tests PRIVATE barista_drh_encoder pthread)
