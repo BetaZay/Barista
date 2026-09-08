@@ -1,27 +1,48 @@
 #pragma once
 
-#include "api/media.h"
-
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
+#include <span>
+#include <string>
 #include <vector>
 
 namespace barista::drh
 {
-struct EncodedVideoPacket
+inline constexpr size_t DrcVideoWidth = 864;
+inline constexpr size_t DrcVideoHeight = 480;
+inline constexpr size_t DrcVideoFrameBytes = DrcVideoWidth * DrcVideoHeight * 3 / 2;
+inline constexpr size_t DrcVideoChunkCount = 5;
+inline constexpr size_t DrcVideoMacroblocksPerRow = DrcVideoWidth / 16;
+inline constexpr size_t DrcVideoMacroblocksPerChunk = DrcVideoMacroblocksPerRow * 6;
+
+struct EncodedVideoChunk
 {
-    uint64_t sourceSequence = 0;
     std::vector<uint8_t> bytes;
-    bool keyFrame = false;
+    int nalType = 0;
+    int referencePriority = 0;
+    int firstMacroblock = 0;
+    int lastMacroblock = 0;
 };
 
-// Codec implementations live behind this portable contract. Packet scheduling
-// belongs here, while radio transport stays in a platform backend.
+struct EncodedVideoFrame
+{
+    bool idr = false;
+    std::array<EncodedVideoChunk, DrcVideoChunkCount> chunks;
+};
+
+// Produces the five logical chunks expected by the GamePad. Codec-specific
+// configuration stays behind this boundary; VSTRM packet construction and
+// scheduling remain owned by MediaStreamer.
 class VideoEncoder
 {
 public:
     virtual ~VideoEncoder() = default;
-    virtual std::optional<api::Error> Encode(
-        const api::VideoFrame& frame,
-        std::vector<EncodedVideoPacket>& packets) = 0;
+    virtual bool IsValid() const = 0;
+    virtual std::optional<EncodedVideoFrame> Encode(
+        std::span<uint8_t> i420,
+        bool requestIdr,
+        std::string& error) = 0;
 };
 }

@@ -1,4 +1,6 @@
 #include "drh/encoder/media_streamer.h"
+#include "drh/encoder/encoder.h"
+#include "drh/encoder/x264/encoder.h"
 #include "real_replay.h"
 #include "serial_video_sender.h"
 #include "format_slot_scheduler.h"
@@ -21,10 +23,6 @@
 #include <span>
 #include <vector>
 
-extern "C" {
-#include <x264.h>
-}
-
 namespace barista::drh
 {
 namespace
@@ -33,20 +31,6 @@ bool DefaultEnabled(const char* name)
 {
 	const char* value = std::getenv(name);
 	return !value || std::strcmp(value, "0") != 0;
-}
-
-int VideoQuantizer()
-{
-	const char* selected = std::getenv("DRCD_VIDEO_QP");
-	if (selected)
-	{
-		if (std::strcmp(selected, "28") == 0) return 28;
-		if (std::strcmp(selected, "32") == 0) return 32;
-		if (std::strcmp(selected, "36") == 0) return 36;
-		return 32;
-	}
-	const char* value = std::getenv("DRCD_QP28");
-	return value && std::strcmp(value, "1") == 0 ? 28 : 32;
 }
 
 constexpr bool VideoInitFlag(bool initialized, bool idr, bool recovery_init)
@@ -61,9 +45,9 @@ static_assert(!VideoInitFlag(true, false, true));
 // The LCD has 854 visible columns, but the DRC H.264 surface is 54 complete
 // macroblocks wide.  The GamePad uses a fixed 864x480 decoder configuration
 // because SPS/PPS NAL units are not carried in the DRH stream.
-constexpr size_t kWidth = 864;
-constexpr size_t kHeight = 480;
-constexpr size_t kRawFrameSize = kWidth * kHeight * 3 / 2;
+constexpr size_t kWidth = DrcVideoWidth;
+constexpr size_t kHeight = DrcVideoHeight;
+constexpr size_t kRawFrameSize = DrcVideoFrameBytes;
 constexpr size_t kMaxVideoPayload = 1400;
 constexpr size_t kAudioFramesPerPacket = 416;
 constexpr size_t kAudioSamplesPerPacket = kAudioFramesPerPacket * 2;
@@ -71,11 +55,7 @@ constexpr size_t kAudioSamplesPerPacket = kAudioFramesPerPacket * 2;
 constexpr auto kAudioPacketPeriod = std::chrono::nanoseconds(
 	kAudioFramesPerPacket * 1000000000ULL / 48000);
 static_assert(kAudioPacketPeriod.count() == 8666666);
-constexpr size_t kChunksPerFrame = 5;
-constexpr int kMacroblocksPerRow = static_cast<int>(kWidth / 16);
-constexpr int kMacroblocksPerChunk = kMacroblocksPerRow * 6;
-constexpr int kVideoFpsNumerator = 60000;
-constexpr int kVideoFpsDenominator = 1001;
+constexpr int kMacroblocksPerChunk = static_cast<int>(DrcVideoMacroblocksPerChunk);
 constexpr auto kVideoFramePeriod = std::chrono::microseconds(16683);
 
 void GeneratePattern(std::span<uint8_t> frame, uint64_t frame_number)
@@ -264,194 +244,6 @@ bool WriteBinaryFile(const std::filesystem::path& path, std::span<const uint8_t>
 }
 }
 
-class MediaStreamer::VideoEncoder
-{
-public:
-	struct Chunk
-	{
-		std::vector<uint8_t> bytes;
-		int nal_type = 0;
-		int reference_priority = 0;
-		int first_macroblock = 0;
-		int last_macroblock = 0;
-	};
-
-	explicit VideoEncoder(bool preserve_replay_frame_types = false)
-	{
-		x264_param_t parameters{};
-		x264_param_default_preset(&parameters, "slow", "zerolatency");
-		// Optional lower-cost search; retain all DRH bitstream constraints below.
-		const char* fast_encode = std::getenv("DRCD_FAST_ENCODE");
-		if (fast_encode && std::strcmp(fast_encode, "1") == 0)
-		{
-			parameters.analyse.i_me_method = X264_ME_DIA;
-			parameters.analyse.i_subpel_refine = 2;
-			parameters.analyse.i_trellis = 0;
-		}
-		parameters.i_width = kWidth;
-		parameters.i_height = kHeight;
-		parameters.i_csp = X264_CSP_I420;
-		parameters.i_fps_num = kVideoFpsNumerator;
-		parameters.i_fps_den = kVideoFpsDenominator;
-		parameters.b_vfr_input = 0;
-		parameters.analyse.inter &= ~X264_ANALYSE_PSUB16x16;
-		parameters.i_keyint_min = 10;
-		parameters.i_keyint_max = 30;
-		parameters.i_scenecut_threshold = -1;
-		parameters.b_cabac = 1;
-		parameters.b_interlaced = 0;
-		parameters.i_bframe = 0;
-		parameters.i_bframe_pyramid = 0;
-		parameters.i_frame_reference = 1;
-		parameters.b_constrained_intra = 1;
-		parameters.b_intra_refresh = DefaultEnabled("DRCD_INTRA_REFRESH") ? 1 : 0;
-		// Without PIR, the 30-frame keyint overrides explicit P requests with
-		// automatic IDRs. Offline comparison must retain the captured frame types.
-		// Keep the normal live encoder and PIR-enabled comparison unchanged.
-		if (preserve_replay_frame_types && !parameters.b_intra_refresh)
-			parameters.i_keyint_max = X264_KEYINT_MAX_INFINITE;
-		parameters.analyse.i_weighted_pred = 0;
-		parameters.analyse.b_weighted_bipred = 0;
-		parameters.analyse.b_transform_8x8 = 0;
-		// At fixed QP32, early P-skip and texture-biased RD leave uneven blocks
-		// in uniform fades. Evaluate residuals fully and prioritize pixel fidelity.
-		const char* legacy_quality = std::getenv("DRCD_LEGACY_ENCODER_QUALITY");
-		if (!legacy_quality || std::strcmp(legacy_quality, "1") != 0)
-		{
-			parameters.analyse.b_fast_pskip = 0;
-			parameters.analyse.b_psy = 0;
-		}
-		parameters.analyse.i_chroma_qp_offset = 0;
-		parameters.rc.i_rc_method = X264_RC_CQP;
-		parameters.rc.i_qp_constant = parameters.rc.i_qp_min = parameters.rc.i_qp_max = VideoQuantizer();
-		parameters.rc.f_ip_factor = 1.0f;
-		parameters.b_repeat_headers = 0;
-		parameters.b_aud = 0;
-		parameters.b_drh_mode = 1;
-		parameters.i_threads = 1;
-		parameters.b_sliced_threads = 0;
-		parameters.i_slice_count = 1;
-		parameters.nalu_process = ProcessNal;
-		parameters.i_log_level = X264_LOG_WARNING;
-		x264_param_apply_profile(&parameters, "main");
-		m_encoder = x264_encoder_open(&parameters);
-		if (m_encoder)
-		{
-			x264_param_t effective{};
-			x264_encoder_parameters(m_encoder, &effective);
-			// Check the effective contract, not just the requested pre-open value.
-			if (effective.analyse.i_chroma_qp_offset != 0)
-			{
-				x264_encoder_close(m_encoder);
-				m_encoder = nullptr;
-			}
-		}
-	}
-
-	~VideoEncoder() { if (m_encoder) x264_encoder_close(m_encoder); }
-	bool valid() const { return m_encoder != nullptr; }
-
-	std::vector<Chunk> encode(std::vector<uint8_t>& frame, bool request_idr,
-		bool& encoded_idr, std::string& error)
-	{
-		if (frame.size() != kRawFrameSize)
-		{ error = "DRH encoder requires one complete 864x480 I420 picture"; return {}; }
-		m_chunks = {};
-		m_chunk_present = {};
-		m_callback_error.clear();
-		x264_picture_t input{};
-		x264_picture_init(&input);
-		input.opaque = this;
-		input.img.i_csp = X264_CSP_I420;
-		input.img.i_plane = 3;
-		input.img.i_stride[0] = kWidth;
-		input.img.i_stride[1] = kWidth / 2;
-		input.img.i_stride[2] = kWidth / 2;
-		input.img.plane[0] = frame.data();
-		input.img.plane[1] = frame.data() + kWidth * kHeight;
-		input.img.plane[2] = input.img.plane[1] + kWidth * kHeight / 4;
-		input.i_type = request_idr ? X264_TYPE_IDR : X264_TYPE_P;
-		x264_nal_t* nals = nullptr;
-		int count = 0;
-		x264_picture_t output{};
-		if (x264_encoder_encode(m_encoder, &nals, &count, &input, &output) < 0)
-		{
-			error = "x264_encoder_encode failed";
-			return {};
-		}
-		if (!m_callback_error.empty())
-		{
-			error = m_callback_error;
-			return {};
-		}
-		if (std::count(m_chunk_present.begin(), m_chunk_present.end(), true) != kChunksPerFrame)
-		{
-			error = "DRH encoder returned " +
-				std::to_string(std::count(m_chunk_present.begin(), m_chunk_present.end(), true)) +
-				" chunks (expected 5)";
-			return {};
-		}
-		encoded_idr = std::all_of(m_chunks.begin(), m_chunks.end(), [](const Chunk& chunk) {
-			return chunk.nal_type == NAL_SLICE_IDR &&
-				chunk.reference_priority != NAL_PRIORITY_DISPOSABLE;
-		});
-		if (request_idr && !encoded_idr)
-		{
-			error = "x264 did not honor the requested IDR frame";
-			return {};
-		}
-		return {m_chunks.begin(), m_chunks.end()};
-	}
-
-private:
-	static void ProcessNal(x264_t*, x264_nal_t* nal, void* opaque)
-	{
-		if (nal->i_type == NAL_SEI)
-			return;
-		auto& self = *static_cast<VideoEncoder*>(opaque);
-		if (nal->i_payload <= 0 || (nal->i_type != NAL_SLICE && nal->i_type != NAL_SLICE_IDR))
-		{
-			self.m_callback_error = "unexpected x264 callback: type=" +
-				std::to_string(nal->i_type) + " size=" + std::to_string(nal->i_payload);
-			return;
-		}
-		const int chunk_index = nal->i_first_mb / kMacroblocksPerChunk;
-		if (chunk_index < 0 || chunk_index >= static_cast<int>(kChunksPerFrame))
-		{
-			self.m_callback_error = "x264 callback first_mb=" +
-				std::to_string(nal->i_first_mb) + " maps outside the five DRH chunks";
-			return;
-		}
-		if (self.m_chunk_present[chunk_index])
-		{
-			self.m_callback_error = "duplicate x264 callback for DRH chunk " +
-				std::to_string(chunk_index);
-			return;
-		}
-		if (nal->i_first_mb != chunk_index * kMacroblocksPerChunk ||
-			nal->i_last_mb != (chunk_index + 1) * kMacroblocksPerChunk - 1)
-		{
-			self.m_callback_error = "DRH callback does not describe exactly six logical rows";
-			return;
-		}
-		self.m_chunks[chunk_index] = {
-			.bytes = {nal->p_payload, nal->p_payload + nal->i_payload},
-			.nal_type = nal->i_type,
-			.reference_priority = nal->i_ref_idc,
-			.first_macroblock = nal->i_first_mb,
-			.last_macroblock = nal->i_last_mb,
-		};
-		// Patched x264 now publishes only after CABAC flush. Own the finalized
-		// bytes immediately; no pointers into the next encode survive this call.
-		self.m_chunk_present[chunk_index] = true;
-	}
-
-	x264_t* m_encoder = nullptr;
-	std::array<Chunk, kChunksPerFrame> m_chunks{};
-	std::array<bool, kChunksPerFrame> m_chunk_present{};
-	std::string m_callback_error;
-};
-
 MediaStreamer::MediaStreamer(barista::drh::RuntimeTransport& transport, std::string path,
 	bool black_frames)
 	: m_transport(transport), m_path(std::move(path)), m_black_frames(black_frames) {}
@@ -460,19 +252,18 @@ MediaStreamer::~MediaStreamer() { stop(); }
 
 bool MediaStreamer::reencode_replay(std::istream& input, std::ostream& output, std::string& error)
 {
-	VideoEncoder encoder(true);
-	if (!encoder.valid()) { error = "replay encoder initialization failed"; return false; }
+	auto encoder = x264::CreateEncoder(x264::OptionsFromEnvironment(true));
+	if (!encoder || !encoder->IsValid()) { error = "replay encoder initialization failed"; return false; }
 	std::vector<uint8_t> frame(kRawFrameSize);
 	while (input.peek() != std::char_traits<char>::eof())
 	{
 		const int requested = input.get();
 		if ((requested != 0 && requested != 1) || !input.read(reinterpret_cast<char*>(frame.data()), frame.size()))
 		{ error = "truncated/invalid offline frame"; return false; }
-		bool idr = false;
-		auto chunks = encoder.encode(frame, requested == 1, idr, error);
-		if (chunks.size() != 5 || idr != bool(requested))
+		auto encoded = encoder->Encode(frame, requested == 1, error);
+		if (!encoded || encoded->idr != bool(requested))
 		{ if (error.empty()) error = "offline encoder changed frame type"; return false; }
-		for (const auto& chunk : chunks)
+		for (const auto& chunk : encoded->chunks)
 		{
 			const uint32_t size = chunk.bytes.size();
 			const char header[]{char(size), char(size>>8), char(size>>16), char(size>>24)};
@@ -571,8 +362,8 @@ bool MediaStreamer::start(std::string& error)
 		error = "media file does not exist: " + m_path;
 		return false;
 	}
-	m_encoder = std::make_unique<VideoEncoder>();
-	if (!m_encoder->valid())
+	m_encoder = x264::CreateEncoder(x264::OptionsFromEnvironment());
+	if (!m_encoder || !m_encoder->IsValid())
 	{
 		m_encoder.reset();
 		m_running.store(false);
@@ -652,8 +443,8 @@ bool MediaStreamer::protocol_self_test(std::string& error)
 			error = "generated tone stereo validation failed";
 			return false;
 		}
-	VideoEncoder encoder;
-	if (!encoder.valid())
+	auto encoder = x264::CreateEncoder(x264::OptionsFromEnvironment());
+	if (!encoder || !encoder->IsValid())
 	{
 		error = "could not initialize the DRH x264 encoder";
 		return false;
@@ -661,14 +452,14 @@ bool MediaStreamer::protocol_self_test(std::string& error)
 
 	std::vector<uint8_t> frame(kRawFrameSize, 16);
 	std::fill(frame.begin() + kWidth * kHeight, frame.end(), 128);
-	bool encoded_idr = false;
-	auto chunks = encoder.encode(frame, true, encoded_idr, error);
-	if (chunks.size() != kChunksPerFrame || !encoded_idr)
+	auto encoded = encoder->Encode(frame, true, error);
+	if (!encoded || !encoded->idr)
 		return false;
+	const auto& chunks = encoded->chunks;
 	for (size_t index = 0; index < chunks.size(); ++index)
 	{
 		if (chunks[index].bytes.empty() ||
-			chunks[index].first_macroblock / kMacroblocksPerChunk != static_cast<int>(index))
+			chunks[index].firstMacroblock / kMacroblocksPerChunk != static_cast<int>(index))
 		{
 			error = "DRH chunk ordering or payload validation failed at chunk " +
 				std::to_string(index);
@@ -840,7 +631,8 @@ void MediaStreamer::video_loop()
 		? "Media sync: format AP TSF-1250us, video 5000us later with identical timestamp; PCM unchanged"
 		: "Video timestamp: baseline before encoding and pacing sleep");
 	m_transport.report_status("DRH encoder contract: effective chroma QP offset=0 (post-psy normalization)");
-	m_transport.report_status("Video quantizer: QP=" + std::to_string(VideoQuantizer()));
+	m_transport.report_status("Video quantizer: QP=" +
+		std::to_string(x264::OptionsFromEnvironment().quantizer));
 	const char* legacy_quality = std::getenv("DRCD_LEGACY_ENCODER_QUALITY");
 	m_transport.report_status(legacy_quality && std::strcmp(legacy_quality, "1") == 0
 		? "Encoder quality: legacy psy/fast-P-skip"
@@ -905,17 +697,16 @@ void MediaStreamer::video_loop()
 		// libdrc timestamps the input before encoding, then transmits the
 		// completed frame on the following frame boundary.
 		uint32_t timestamp = m_transport.timestamp_us();
-		bool idr = false;
 		std::string error;
 		const auto encode_started = std::chrono::steady_clock::now();
-		auto chunks = m_encoder->encode(frame, force_idr, idr, error);
+		auto encoded = m_encoder->Encode(frame, force_idr, error);
 		const uint64_t encode_us = std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - encode_started).count();
 		interval_encode_us += encode_us;
 		interval_encode_max_us = std::max(interval_encode_max_us, encode_us);
 		++interval_encoded_frames;
 		interval_over_budget += encode_us > static_cast<uint64_t>(kVideoFramePeriod.count());
-		if (chunks.empty())
+		if (!encoded)
 		{
 			++encode_failures;
 			if (encode_failures <= 3 || encode_failures % 100 == 0)
@@ -924,6 +715,8 @@ void MediaStreamer::video_loop()
 			std::this_thread::sleep_for(kVideoFramePeriod);
 			continue;
 		}
+		const bool idr = encoded->idr;
+		auto chunks = std::move(encoded->chunks);
 		if (idr)
 		{
 			if (!force_idr)
@@ -1052,10 +845,10 @@ void MediaStreamer::video_loop()
 				<< "datagrams=" << frame_packets.size() << '\n';
 			for (size_t index = 0; index < chunks.size(); ++index)
 				manifest << "chunk[" << index << "] size=" << chunks[index].bytes.size()
-					<< " nal_type=" << chunks[index].nal_type
-					<< " ref_idc=" << chunks[index].reference_priority
-					<< " first_mb=" << chunks[index].first_macroblock
-					<< " last_mb=" << chunks[index].last_macroblock << '\n';
+					<< " nal_type=" << chunks[index].nalType
+					<< " ref_idc=" << chunks[index].referencePriority
+					<< " first_mb=" << chunks[index].firstMacroblock
+					<< " last_mb=" << chunks[index].lastMacroblock << '\n';
 			dump_ok = manifest.good() && dump_ok;
 			m_transport.report_status(dump_ok
 				? "Captured first valid five-chunk IDR at " + dump_dir.string()
@@ -1068,7 +861,7 @@ void MediaStreamer::video_loop()
 				<< frame_packets.size() << " VSTRM packets, timestamp=" << timestamp;
 			for (size_t index = 0; index < chunks.size(); ++index)
 				details << " c" << index << '=' << chunks[index].bytes.size()
-					<< "B/mb" << chunks[index].first_macroblock << '-' << chunks[index].last_macroblock;
+					<< "B/mb" << chunks[index].firstMacroblock << '-' << chunks[index].lastMacroblock;
 			details << ", sends " << (sends_ok ? "OK" : "FAILED: " + error);
 			m_transport.report_status(details.str());
 		}

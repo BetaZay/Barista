@@ -7,7 +7,7 @@
 #include <thread>
 #include <iosfwd>
 
-namespace barista::drh { class RuntimeTransport; }
+namespace barista::drh { class RuntimeTransport; class VideoEncoder; }
 namespace barista::api { class AppHook; }
 
 namespace barista::drh
@@ -29,7 +29,6 @@ public:
 	static bool reencode_replay(std::istream& input, std::ostream& output, std::string& error);
 
 private:
-	class VideoEncoder;
 	void video_loop();
 	void audio_loop();
 	void input_loop();

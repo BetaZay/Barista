@@ -27,7 +27,10 @@ if(BARISTA_BUILD_ENGINE)
     target_compile_features(drc_ipc PUBLIC cxx_std_20)
     target_link_libraries(drc_ipc PUBLIC pthread)
 
-    add_library(barista_drh_encoder STATIC drh/encoder/media_streamer.cpp)
+    add_library(barista_drh_encoder STATIC
+        drh/encoder/media_streamer.cpp
+        drh/encoder/x264/encoder.cpp
+    )
     add_library(barista::drh_encoder ALIAS barista_drh_encoder)
     target_include_directories(barista_drh_encoder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(barista_drh_encoder
@@ -111,6 +114,10 @@ if(BUILD_TESTING)
         add_executable(drcd_packet_schedule_tests tests/video_packet_schedule_tests.cpp)
         target_link_libraries(drcd_packet_schedule_tests PRIVATE barista_drh_encoder)
         add_test(NAME drcd_packet_schedule_tests COMMAND drcd_packet_schedule_tests)
+
+        add_executable(drcd_x264_encoder_tests tests/x264_encoder_tests.cpp)
+        target_link_libraries(drcd_x264_encoder_tests PRIVATE barista_drh_encoder)
+        add_test(NAME drcd_x264_encoder_tests COMMAND drcd_x264_encoder_tests)
 
         add_executable(drcd_format_slot_tests tests/format_slot_scheduler_tests.cpp)
         target_link_libraries(drcd_format_slot_tests PRIVATE barista_drh_encoder pthread)
