@@ -1,4 +1,4 @@
-#include "drh/encoder/h264_cabac.h"
+#include "drh/encoder/x264/cabac.h"
 
 #include <array>
 #include <cstdint>
@@ -17,8 +17,8 @@ void Check(bool condition, const char* message)
 
 int main()
 {
-    barista::drh::H264CabacWriter cabac(0xa5);
-    std::array<barista::drh::H264CabacState, 3> states{64, 17, 126};
+    barista::drh::x264::H264CabacWriter cabac(0xa5);
+    std::array<barista::drh::x264::H264CabacState, 3> states{64, 17, 126};
     for (int index = 0; index < 80; ++index)
     {
         cabac.EncodeDecision(states[index % 3], ((index * 7 + 3) & 1) != 0);
@@ -34,7 +34,7 @@ int main()
     };
     Check(std::vector<uint8_t>(cabac.Payload().begin(), cabac.Payload().end()) == oracle,
         "native CABAC bytes differ from the legacy oracle");
-    Check(states == std::array<barista::drh::H264CabacState, 3>{118, 119, 126},
+    Check(states == std::array<barista::drh::x264::H264CabacState, 3>{118, 119, 126},
         "native CABAC context transitions differ from the legacy oracle");
     Check(cabac.BytePosition() == oracle.size(), "CABAC position is inaccurate");
     Check(cabac.PrecedingByte() == 0xa5, "CABAC carried before its payload");

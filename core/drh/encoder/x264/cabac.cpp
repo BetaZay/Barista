@@ -1,9 +1,9 @@
-#include "drh/encoder/h264_cabac.h"
+#include "drh/encoder/x264/cabac.h"
 
 #include <array>
 #include <stdexcept>
 
-namespace barista::drh
+namespace barista::drh::x264
 {
 namespace
 {

@@ -1,4 +1,4 @@
-#include "drh/encoder/h264_contexts.h"
+#include "drh/encoder/x264/contexts.h"
 
 #include <cstdint>
 #include <iostream>
@@ -12,7 +12,7 @@ void Check(bool condition, const char* message)
         throw std::runtime_error(message);
 }
 
-uint64_t Hash(const barista::drh::H264CabacContexts& contexts)
+uint64_t Hash(const barista::drh::x264::H264CabacContexts& contexts)
 {
     uint64_t hash = 1469598103934665603ULL;
     for (const uint8_t state : contexts)
@@ -26,10 +26,10 @@ uint64_t Hash(const barista::drh::H264CabacContexts& contexts)
 
 int main()
 {
-    const auto intra = barista::drh::InitializeGamepadCabacContexts(
-        barista::drh::H264SliceKind::Intra);
-    const auto predicted = barista::drh::InitializeGamepadCabacContexts(
-        barista::drh::H264SliceKind::Predicted);
+    const auto intra = barista::drh::x264::InitializeGamepadCabacContexts(
+        barista::drh::x264::H264SliceKind::Intra);
+    const auto predicted = barista::drh::x264::InitializeGamepadCabacContexts(
+        barista::drh::x264::H264SliceKind::Predicted);
 
     Check(Hash(intra) == 0xf42172c6a9f2cf56ULL,
         "QP 32 intra CABAC contexts differ from the H.264 oracle");
@@ -42,4 +42,3 @@ int main()
 
     std::cout << "GamePad CABAC context tests passed\n";
 }
-

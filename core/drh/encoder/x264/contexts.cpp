@@ -1,6 +1,6 @@
-#include "drh/encoder/h264_contexts.h"
+#include "drh/encoder/x264/contexts.h"
 
-namespace barista::drh
+namespace barista::drh::x264
 {
 namespace
 {
@@ -74,4 +74,3 @@ H264CabacContexts InitializeGamepadCabacContexts(H264SliceKind kind)
     return kind == H264SliceKind::Intra ? IntraContexts : PredictedContexts;
 }
 }
-

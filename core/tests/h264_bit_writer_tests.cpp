@@ -1,4 +1,4 @@
-#include "drh/encoder/h264_bit_writer.h"
+#include "drh/encoder/x264/bit_writer.h"
 
 #include <cstdint>
 #include <iostream>
@@ -16,7 +16,7 @@ void Check(bool condition, const char* message)
 
 int main()
 {
-    barista::drh::H264BitWriter bits;
+    barista::drh::x264::H264BitWriter bits;
     bits.WriteBits(0b101, 3);
     bits.WriteUnsignedExpGolomb(0);
     bits.WriteUnsignedExpGolomb(1);
@@ -26,7 +26,7 @@ int main()
     Check(bits.Bytes() == std::vector<uint8_t>({0xb4, 0xc0}),
         "bit and unsigned Exp-Golomb output changed");
 
-    barista::drh::H264BitWriter signedBits;
+    barista::drh::x264::H264BitWriter signedBits;
     signedBits.WriteSignedExpGolomb(0);
     signedBits.WriteSignedExpGolomb(1);
     signedBits.WriteSignedExpGolomb(-1);
@@ -38,7 +38,7 @@ int main()
 
     const std::vector<uint8_t> rbsp{0, 0, 0, 1, 2, 3, 4, 0, 0, 3};
     const std::vector<uint8_t> expected{0, 0, 3, 0, 1, 2, 3, 4, 0, 0, 3, 3};
-    Check(barista::drh::EscapeH264Rbsp(rbsp) == expected,
+    Check(barista::drh::x264::EscapeH264Rbsp(rbsp) == expected,
         "RBSP emulation-prevention output changed");
 
     bool rejected = false;

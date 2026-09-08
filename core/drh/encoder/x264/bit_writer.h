@@ -5,7 +5,7 @@
 #include <span>
 #include <vector>
 
-namespace barista::drh
+namespace barista::drh::x264
 {
 class H264BitWriter
 {

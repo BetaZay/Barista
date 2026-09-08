@@ -1,11 +1,11 @@
 #pragma once
 
-#include "drh/encoder/h264_cabac.h"
+#include "drh/encoder/x264/cabac.h"
 
 #include <array>
 #include <cstddef>
 
-namespace barista::drh
+namespace barista::drh::x264
 {
 inline constexpr size_t H264CabacContextCount = 460;
 using H264CabacContexts = std::array<H264CabacState, H264CabacContextCount>;
@@ -20,4 +20,3 @@ enum class H264SliceKind
 // slices use cabac_init_idc 0, so these contexts always start at QP 32.
 H264CabacContexts InitializeGamepadCabacContexts(H264SliceKind kind);
 }
-

@@ -5,7 +5,7 @@
 #include <span>
 #include <vector>
 
-namespace barista::drh
+namespace barista::drh::x264
 {
 // H.264 context state encoded as (pStateIdx << 1) | valMPS.
 using H264CabacState = uint8_t;

@@ -28,9 +28,9 @@ if(BARISTA_BUILD_ENGINE)
     target_link_libraries(drc_ipc PUBLIC pthread)
 
     add_library(barista_drh_encoder STATIC
-        drh/encoder/h264_bit_writer.cpp
-        drh/encoder/h264_cabac.cpp
-        drh/encoder/h264_contexts.cpp
+        drh/encoder/x264/bit_writer.cpp
+        drh/encoder/x264/cabac.cpp
+        drh/encoder/x264/contexts.cpp
         drh/encoder/media_streamer.cpp
         drh/encoder/x264/encoder.cpp
     )

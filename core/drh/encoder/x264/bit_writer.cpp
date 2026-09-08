@@ -1,10 +1,10 @@
-#include "drh/encoder/h264_bit_writer.h"
+#include "drh/encoder/x264/bit_writer.h"
 
 #include <bit>
 #include <limits>
 #include <stdexcept>
 
-namespace barista::drh
+namespace barista::drh::x264
 {
 void H264BitWriter::WriteBit(bool value)
 {
