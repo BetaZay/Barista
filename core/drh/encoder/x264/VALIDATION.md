@@ -48,5 +48,13 @@ regression ceiling is 25 (five luma levels RMS). This replaces the old compariso
 between two x264-specific quality policies, not a claim of improved native
 source fidelity. Decoder-to-reference equality remains exact.
 
-Legacy dependency removal and desktop-only checks remain necessary.
+The bundled legacy library and its obsolete reference probe have been removed.
+The generated engine build has no `drc_x264`/`libx264` dependency, and the replay
+worker contains the native encoder implementation. A fresh Ninja Debug build
+with `BARISTA_BUILD_ENGINE=OFF` passes all six desktop-only tests (local socket
+access is required for the single-instance test).
+
+The remaining integration cleanup is to remove obsolete x264-only configuration
+knobs and status messages; these must not imply that native fixed-QP encoding
+honors the old quality or intra-refresh options.
 No GamePad hardware playback or radio timing validation is claimed here.

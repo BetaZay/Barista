@@ -39,7 +39,7 @@ if(BARISTA_BUILD_ENGINE)
     target_include_directories(barista_drh_encoder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(barista_drh_encoder
         PUBLIC barista_api
-        PRIVATE drc_host drc_ipc drc_x264 m pthread dl
+        PRIVATE drc_host drc_ipc m pthread dl
     )
     target_compile_features(barista_drh_encoder PUBLIC cxx_std_20)
 

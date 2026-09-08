@@ -68,7 +68,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_subdirectory(third_party/hostapd-drc)
 endif()
 
-add_subdirectory(third_party/drc-x264)
 endif()
 add_subdirectory(core)
 if(BARISTA_BUILD_DESKTOP OR BARISTA_BUILD_ENGINE)
