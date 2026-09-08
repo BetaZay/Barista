@@ -231,6 +231,10 @@ typedef struct H264E_run_param_tag
     // token to pass to NALU callback
     void *nalu_callback_token;
 
+    // Internal Barista CABAC slice sink, valid for the duration of Encode.
+    // A non-null sink keeps prediction continuous across all thirty rows.
+    void *drh_cabac_context;
+
 } H264E_run_param_t;
 
 /**
@@ -9213,6 +9217,9 @@ l_skip:
 
         // Increment run count
         enc->mb.skip_run++;
+#ifdef BARISTA_MINIH264_CABAC
+        barista_minih264_macroblock(enc, 0, 0);
+#endif
 
         // Update predictors
         *(uint32_t*)(nnz_top + 4) = *(uint32_t*)(nnz_left + 4) = 0; // set chroma NNZ to 0
@@ -9312,6 +9319,9 @@ l_skip:
             }
             mb_type += enc->mb.i16.pred_mode_luma + cbpc*4 + (cbpl ? 12 : 0);
         }
+#ifdef BARISTA_MINIH264_CABAC
+        barista_minih264_macroblock(enc, cbpl, cbpc);
+#endif
         if (mb_type >= 5 && enc->slice.type == SLICE_TYPE_I)    // Intra in I slice
         {
             mb_type -= 5;
@@ -11291,7 +11301,8 @@ static void encode_slice(h264e_enc_t *enc, int frame_type, int long_term_idx_use
         enc->i4x4mode[0] = -1;
 
         enc->mb.y++;
-        if (enc->param.b_drh_mode && enc->mb.y < enc->frame.nmby && (enc->mb.y % 6) == 0)
+        if (enc->param.b_drh_mode && !enc->run_param.drh_cabac_context &&
+            enc->mb.y < enc->frame.nmby && (enc->mb.y % 6) == 0)
         {
             if (enc->mb.skip_run)
             {

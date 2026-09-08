@@ -138,6 +138,15 @@ if(BUILD_TESTING)
         target_link_libraries(drcd_minih264_tests PRIVATE barista_drh_encoder)
         add_test(NAME drcd_minih264_tests COMMAND drcd_minih264_tests)
 
+        add_executable(drcd_minih264_cabac_probe tests/minih264_cabac_probe.cpp)
+        target_link_libraries(drcd_minih264_cabac_probe PRIVATE barista_drh_encoder)
+        if(Python3_Interpreter_FOUND AND DRCD_TEST_FFMPEG)
+            add_test(NAME drcd_minih264_cabac_reconstruction
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test-minih264-cabac.py
+                    $<TARGET_FILE:drcd_minih264_cabac_probe> ${DRCD_TEST_FFMPEG})
+            set_tests_properties(drcd_minih264_cabac_reconstruction PROPERTIES TIMEOUT 60)
+        endif()
+
         add_executable(drcd_format_slot_tests tests/format_slot_scheduler_tests.cpp)
         target_link_libraries(drcd_format_slot_tests PRIVATE barista_drh_encoder pthread)
         add_test(NAME drcd_format_slot_tests COMMAND drcd_format_slot_tests)
