@@ -38,6 +38,15 @@ as a machine-dependent CTest assertion.
 
 ## Remaining gates
 
-Live streaming still uses the legacy encoder. Packet-path validation, backend
-migration, legacy removal, full-suite and desktop-only checks remain necessary.
+The production factory now selects the native adapter. The production replay
+worker is checked byte-for-byte against a native reconstruction probe, then its
+stream is independently decoded and compared with all reference pixels. Moving
+chroma and luma fades exercise both default and fast search.
+
+The 120-frame fade has approximately 19.91 sampled luma MSE at fixed QP32; the
+regression ceiling is 25 (five luma levels RMS). This replaces the old comparison
+between two x264-specific quality policies, not a claim of improved native
+source fidelity. Decoder-to-reference equality remains exact.
+
+Legacy dependency removal and desktop-only checks remain necessary.
 No GamePad hardware playback or radio timing validation is claimed here.

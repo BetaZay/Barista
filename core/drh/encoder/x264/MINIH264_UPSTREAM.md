@@ -13,5 +13,7 @@ DRH configuration, constrained intra prediction, and the continuous CABAC sink.
 The native adapter's `EncoderOptions::disablePlanarPrediction` defaults to `true`
 for GamePad compatibility. Setting it to `false` permits planar prediction;
 software reconstruction tests exercise both settings. This does not establish
-that a GamePad supports planar prediction. The legacy live backend does not use
-this new option yet.
+that a GamePad supports planar prediction. The production factory selects the
+native adapter, using the compatibility default unless configured otherwise.
+`DRCD_DISABLE_PLANAR_PREDICTION=0` permits planar prediction in that factory;
+leave it unset for GamePad use.

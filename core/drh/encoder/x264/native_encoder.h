@@ -3,6 +3,7 @@
 #include "drh/encoder/x264/encoder.h"
 #include "drh/encoder/x264/minih264e.h"
 #include "drh/encoder/x264/slice.h"
+#include "drh/encoder/x264/reconstruction.h"
 
 #include <cstring>
 #include <cstdlib>
@@ -43,6 +44,13 @@ public:
     NativeEncoder& operator=(const NativeEncoder&) = delete;
 
     bool IsValid() const override { return m_valid; }
+
+    H264E_io_yuv_t ReferencePicture() const
+    {
+        if (!m_valid || m_firstFrame)
+            throw std::logic_error("no reconstructed reference picture");
+        return Reconstruction(m_encoder);
+    }
 
     std::optional<EncodedVideoFrame> Encode(std::span<uint8_t> input,
         bool requestIdr, std::string& error) override
