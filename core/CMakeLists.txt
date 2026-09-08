@@ -30,6 +30,7 @@ if(BARISTA_BUILD_ENGINE)
     add_library(barista_drh_encoder STATIC
         drh/encoder/h264_bit_writer.cpp
         drh/encoder/h264_cabac.cpp
+        drh/encoder/h264_contexts.cpp
         drh/encoder/media_streamer.cpp
         drh/encoder/x264/encoder.cpp
     )
@@ -128,6 +129,10 @@ if(BUILD_TESTING)
         add_executable(drcd_h264_cabac_tests tests/h264_cabac_tests.cpp)
         target_link_libraries(drcd_h264_cabac_tests PRIVATE barista_drh_encoder)
         add_test(NAME drcd_h264_cabac_tests COMMAND drcd_h264_cabac_tests)
+
+        add_executable(drcd_h264_contexts_tests tests/h264_contexts_tests.cpp)
+        target_link_libraries(drcd_h264_contexts_tests PRIVATE barista_drh_encoder)
+        add_test(NAME drcd_h264_contexts_tests COMMAND drcd_h264_contexts_tests)
 
         add_executable(drcd_format_slot_tests tests/format_slot_scheduler_tests.cpp)
         target_link_libraries(drcd_format_slot_tests PRIVATE barista_drh_encoder pthread)
