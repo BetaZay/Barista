@@ -26,8 +26,8 @@ Measured on 2026-09-07, AMD Ryzen 5 7600, Linux x86_64, GCC 16.2.1 Release:
 
 | Preset | Mean ms | P95 ms | P99 ms | Maximum ms | Frames over 16.6834 ms |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Default | 4.607 | 5.443 | 5.521 | 8.193 | 0/600 |
-| Fast | 3.965 | 4.062 | 4.161 | 6.938 | 0/600 |
+| Default | 4.513 | 4.661 | 5.014 | 7.026 | 0/600 |
+| Fast | 4.037 | 4.188 | 4.383 | 7.259 | 0/600 |
 
 The workload is a deterministic moving luma/chroma pattern with IDRs every 270
 frames. These results establish headroom for this workload on this host, not
@@ -36,7 +36,7 @@ copying, MiniH264 analysis, CABAC encoding, and owned chunk creation. It current
 also includes the diagnostic CAVLC path. Timing is reported rather than enforced
 as a machine-dependent CTest assertion.
 
-## Remaining gates
+## Integration and verification scope
 
 The production factory now selects the native adapter. The production replay
 worker is checked byte-for-byte against a native reconstruction probe, then its
@@ -60,3 +60,20 @@ The native configuration exposes only fast search and planar prediction.
 at 32; recovery uses requested IDRs, not cyclic intra-refresh. Status messages
 report those native behaviors rather than the former x264 policies.
 No GamePad hardware playback or radio timing validation is claimed here.
+
+## Completion evidence
+
+| Requirement | Evidence |
+| --- | --- |
+| Implicit SPS/PPS CABAC compatibility | FFmpeg decoding with the GamePad SPS/PPS and exact full-frame reference equality |
+| 864x480 I420, IDR/P, QP32, configurable planar disabling | Native adapter parameters, DRH QP clamp, environment tests, and three reconstruction variants |
+| Five six-row chunks from one continuous slice | `CabacSlice` records boundaries every 324 macroblocks using one writer/context set; it terminates only after 1,620 macroblocks |
+| Motion, long reference chain, forced recovery | 300 moving frames, 269 consecutive P frames, frame-number wrap, and consecutive forced IDRs |
+| Packet software compatibility | Media self-test checks format/VSTRM bytes and timestamps; packet scheduling and AppHook recovery tests exercise native output |
+| 59.94 FPS encoding budget | Reproducible Release measurements above, scoped to this host and workload |
+| Live backend replacement | `CreateEncoder` returns `NativeEncoder`; no tracked legacy source or generated x264 link dependency remains |
+| Build/test gates | Final Debug build and all 33 CTests pass; fresh engine-disabled desktop build and all six tests pass |
+
+These are Linux x86_64 software results. They do not certify other CPU paths,
+GamePad firmware behavior, radio delivery, or end-to-end latency. Real-device
+playback remains the next integration check, not a result of FFmpeg validation.
