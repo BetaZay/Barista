@@ -89,6 +89,9 @@ owned and permissioned for the desktop user; applications must not run as root.
 See [COMPILING.md](COMPILING.md) for dependencies, a development build, tests,
 and system installation.
 
+Developers integrating an application, control client, or future backend should
+start with the [API documentation](docs/api/README.md).
+
 ## Status
 
 Barista is active development software. The primary Linux pairing, streaming,
