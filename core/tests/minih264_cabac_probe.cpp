@@ -3,13 +3,14 @@
 #include <fstream>
 #include "drh/encoder/x264/minih264e.h"
 #include "drh/encoder/x264/native_encoder.h"
+#include "drh/encoder/x264/reconstruction.h"
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 int main(int argc, char** argv)
 {
-    if (argc != 3)
-        throw std::runtime_error("expected CAVLC and CABAC output paths");
+    if (argc != 4)
+        throw std::runtime_error("expected CAVLC, CABAC and reconstruction output paths");
     using namespace barista::drh::x264;
     NativeEncoder native(EncoderOptions{});
     std::string error;
@@ -29,6 +30,8 @@ int main(int argc, char** argv)
     std::vector<unsigned char> pixels(864 * 480 * 3 / 2, 128);
     std::ofstream baseline(argv[1], std::ios::binary);
     std::ofstream out(argv[2], std::ios::binary);
+    std::ofstream reconstructed(argv[3], std::ios::binary);
+    reconstructed.exceptions(std::ios::badbit | std::ios::failbit);
     baseline.exceptions(std::ios::badbit | std::ios::failbit);
     out.exceptions(std::ios::badbit | std::ios::failbit);
     unsigned number = 0;
@@ -57,6 +60,16 @@ int main(int argc, char** argv)
     if (H264E_encode(enc, scratch, &run, &input, &coded, &size))
         throw std::runtime_error("encode failed");
     baseline.write(reinterpret_cast<char*>(coded), size);
+    const auto reference = Reconstruction(enc);
+    // Compare the visible region selected by the GamePad's implicit SPS.
+    for (int plane = 0; plane < 3; ++plane)
+    {
+        const int width = plane ? 427 : 854;
+        const int height = plane ? 240 : 480;
+        for (int row = 0; row < height; ++row)
+            reconstructed.write(reinterpret_cast<const char*>(reference.yuv[plane] +
+                row * reference.stride[plane]), width);
+    }
     auto frame = slice.Finish(index);
     // The first frame must become an IDR without an explicit request. Rejected
     // inputs must not advance either the reference picture or frame numbering.

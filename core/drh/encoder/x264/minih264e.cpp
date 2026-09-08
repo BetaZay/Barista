@@ -6,6 +6,12 @@ static unsigned barista_minih264_intra_availability(H264E_persist_tag*);
 #define BARISTA_MINIH264_CABAC
 #define MINIH264_IMPLEMENTATION
 #include "minih264e.h"
+#include "reconstruction.h"
+
+H264E_io_yuv_t barista::drh::x264::Reconstruction(const H264E_persist_t* encoder)
+{
+    return encoder->ref;
+}
 
 static unsigned barista_minih264_intra_availability(H264E_persist_tag* enc)
 {

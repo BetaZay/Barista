@@ -1,4 +1,4 @@
-"""Decode both entropy paths and compare all visible reconstructed pixels."""
+"""Compare both decoded entropy paths to the encoder's deblocked reference."""
 
 import pathlib
 import subprocess
@@ -12,7 +12,8 @@ def main():
         root = pathlib.Path(directory)
         cavlc = root / "cavlc.h264"
         cabac = root / "cabac.h264"
-        subprocess.run([probe, str(cavlc), str(cabac)], check=True)
+        reconstruction = root / "reconstruction.yuv"
+        subprocess.run([probe, str(cavlc), str(cabac), str(reconstruction)], check=True)
         decoded = []
         for source in (cavlc, cabac):
             output = source.with_suffix(".yuv")
@@ -28,6 +29,12 @@ def main():
         if decoded[0] != decoded[1]:
             offset = next(i for i, (a, b) in enumerate(zip(*decoded)) if a != b)
             raise RuntimeError(f"CABAC reconstruction differs at decoded byte {offset}")
+        reference = reconstruction.read_bytes()
+        if len(reference) != expected:
+            raise RuntimeError("encoder did not produce 300 reconstructed frames")
+        if decoded[1] != reference:
+            offset = next(i for i, (a, b) in enumerate(zip(decoded[1], reference)) if a != b)
+            raise RuntimeError(f"CABAC differs from internal reconstruction at byte {offset}")
         print("300 moving IDR/P frames match exactly, including frame-number wrap and consecutive IDRs")
 
 
