@@ -1,4 +1,7 @@
 #include "barista/controller.h"
+#include "api/media.h"
+#include "drh/encoder/encoder.h"
+#include "drh/server/session_server.h"
 #include <iostream>
 #include <stdexcept>
 int main()
@@ -19,5 +22,13 @@ int main()
     check(barista::DecodeInput(raw).sticks[0] == -32767);
     check(barista::DecodeInput(raw).sticks[1] == -32767);
     check(barista::DecodeInput(std::span(raw).first(80)).buttons == 0);
+    const barista::api::SessionStatus status;
+    check(status.apiVersion == barista::api::ApiVersion);
+    check(barista::api::ParseSessionMode("real") == barista::api::SessionMode::Real);
+    check(barista::api::ParseSessionMode("controller") == barista::api::SessionMode::Controller);
+    check(!barista::api::ParseSessionMode("invalid"));
+    check(barista::api::SessionModeName(barista::api::SessionMode::Controller) == "controller");
+    const barista::api::VideoFrame frame;
+    check(frame.i420.empty());
     std::cout << "Input normalization and privileged argument validation passed\n";
 }

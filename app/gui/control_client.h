@@ -1,4 +1,5 @@
 #pragma once
+#include "api/types.h"
 #include <QObject>
 #include <QVariantMap>
 
@@ -8,8 +9,8 @@ class ControlClient : public QObject {
 public:
     explicit ControlClient(QObject* parent = nullptr) : QObject(parent) {}
     void Refresh();
-    void Start(const QString& interface, const QString& mode);
-    void Pair(const QString& interface, const QString& code, const QString& mode);
+    void Start(const QString& interface, barista::api::SessionMode mode);
+    void Pair(const QString& interface, const QString& code, barista::api::SessionMode mode);
     void Stop();
     void Prepare();
     void Retry();

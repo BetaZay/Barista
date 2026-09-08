@@ -1,5 +1,6 @@
 #pragma once
 #include <QMainWindow>
+#include "api/types.h"
 #include "control_client.h"
 class QComboBox;
 class QLabel;
@@ -25,7 +26,7 @@ private slots:
     void ApplyStatus(const QVariantMap& status);
 private:
     bool ConfirmWifi(bool pairing, const QString& interface);
-    QString Mode() const;
+    barista::api::SessionMode Mode() const;
     void RefreshSavedGamePads();
     ControlClient m_client;
     QTabWidget* m_tabs;

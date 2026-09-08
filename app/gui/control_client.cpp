@@ -10,8 +10,14 @@
 void ControlClient::Refresh() { if (!m_pollPending && QDateTime::currentMSecsSinceEpoch() >= m_nextRetry) Call("GetStatus"); }
 void ControlClient::Retry() { m_nextRetry = 0; Refresh(); }
 void ControlClient::Prepare() { Call("PrepareSystem"); }
-void ControlClient::Start(const QString& interface, const QString& mode) { Call("StartSession",{interface,mode}); }
-void ControlClient::Pair(const QString& interface, const QString& code, const QString& mode) { Call("Pair",{interface,code,mode}); }
+void ControlClient::Start(const QString& interface, barista::api::SessionMode mode)
+{
+    Call("StartSession", {interface, QString::fromLatin1(barista::api::SessionModeName(mode))});
+}
+void ControlClient::Pair(const QString& interface, const QString& code, barista::api::SessionMode mode)
+{
+    Call("Pair", {interface, code, QString::fromLatin1(barista::api::SessionModeName(mode))});
+}
 void ControlClient::Stop()
 {
     if (m_operationPending) { m_stopAfterOperation = true; return; }

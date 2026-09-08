@@ -21,6 +21,11 @@ constexpr auto ControlSocket = "/run/barista/worker.sock";
 constexpr auto CredentialsFile = "/var/lib/drcd/credentials.conf";
 constexpr int GamePadBatteryFull = 176;
 
+QString ModeName(barista::api::SessionMode mode)
+{
+    return QString::fromLatin1(barista::api::SessionModeName(mode));
+}
+
 int BatteryPercent(int raw)
 {
     return qBound(0, (raw * 100 + GamePadBatteryFull / 2) / GamePadBatteryFull, 100);
@@ -158,7 +163,7 @@ QVariantMap Service::GetStatus()
     qint64 appLastSeen = 0;
     qint64 appConnectedAt = 0;
     QString appIdleLogo;
-    if (m_mode == "real" && !m_endpoint.isEmpty())
+    if (m_mode == barista::api::SessionMode::Real && !m_endpoint.isEmpty())
     {
         drc_ipc::AppHook::ConnectedAppInfo appInfo{};
         if (drc_ipc::AppHook::read_app_lock(m_endpoint.toStdString(), appInfo))
@@ -172,10 +177,10 @@ QVariantMap Service::GetStatus()
         }
     }
     return {{"apiVersion",1}, {"platform","linux"}, {"running",m_worker.state() != QProcess::NotRunning},
-        {"phase",m_phase}, {"connected",m_connected}, {"mode",m_mode}, {"interface",m_interface},
+        {"phase",m_phase}, {"connected",m_connected}, {"mode",m_mode ? ModeName(*m_mode) : QString()}, {"interface",m_interface},
         {"batteryAvailable",m_batteryAvailable}, {"battery",m_battery},
         {"ownedByCaller",mine}, {"busy",m_authorizing || m_stopping}, {"error",m_error},
-        {"mediaEndpoint",mine && m_mode == "real" ? m_endpoint : QString()},
+        {"mediaEndpoint",mine && m_mode == barista::api::SessionMode::Real ? m_endpoint : QString()},
         {"appConnected",appConnected}, {"appName",appName}, {"appPid",appPid},
         {"appLastSeen",appLastSeen}, {"appConnectedAt",appConnectedAt},
         {"appIdleLogo",appIdleLogo},
@@ -230,10 +235,11 @@ void Service::AuthorizeAsync(std::function<void(uint,const QString&,Completion)>
 }
 void Service::StartSession(const QString& interface, const QString& mode)
 {
-    AuthorizeAsync([this,interface,mode](uint uid,const QString& caller,Completion done) {
+    const auto parsedMode = barista::api::ParseSessionMode(mode.toStdString());
+    AuthorizeAsync([this,interface,parsedMode](uint uid,const QString& caller,Completion done) {
         if (!barista::ValidInterface(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
-            (mode != "real" && mode != "controller")) { done("Choose an existing wireless adapter and supported mode"); return; }
-        Prepare(mode == "controller",caller,[this,interface,mode,uid,caller,done](QString error) {
+            !parsedMode) { done("Choose an existing wireless adapter and supported mode"); return; }
+        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,mode=*parsedMode,uid,caller,done](QString error) {
             done(error.isEmpty() ? Start(interface,mode,{},uid,caller) : error);
         });
     });
@@ -241,10 +247,11 @@ void Service::StartSession(const QString& interface, const QString& mode)
 void Service::Pair(const QString& interface, const QString& code, const QString& mode)
 {
     if (!barista::ValidPairCode(code.toStdString())) { sendErrorReply("org.barista.Error.Invalid", "Pairing code must be four digits 0–3"); return; }
-    AuthorizeAsync([this,interface,code,mode](uint uid,const QString& caller,Completion done) {
+    const auto parsedMode = barista::api::ParseSessionMode(mode.toStdString());
+    AuthorizeAsync([this,interface,code,parsedMode](uint uid,const QString& caller,Completion done) {
         if (!barista::ValidInterface(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
-            (mode != "real" && mode != "controller")) { done("Choose an existing wireless adapter and supported mode"); return; }
-        Prepare(mode == "controller",caller,[this,interface,code,mode,uid,caller,done](QString error) {
+            !parsedMode) { done("Choose an existing wireless adapter and supported mode"); return; }
+        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,code,mode=*parsedMode,uid,caller,done](QString error) {
             done(error.isEmpty() ? Start(interface,mode,code,uid,caller) : error);
         });
     });
@@ -304,12 +311,11 @@ void Service::StopSession()
         StopWorker(); return {};
     });
 }
-QString Service::Start(const QString& interface, const QString& mode, const QString& code, uint uid, const QString& caller)
+QString Service::Start(const QString& interface, barista::api::SessionMode mode, const QString& code, uint uid, const QString& caller)
 {
     if (m_worker.state() != QProcess::NotRunning) return "Stop the current session before changing mode or pairing";
     if (!barista::ValidInterface(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211"))
         return "Choose an existing wireless interface";
-    if (mode != "real" && mode != "controller") return "Unsupported mode";
     if (!TrustedExecutable(BARISTA_WORKER) || !TrustedExecutable(BARISTA_HOSTAPD))
         return "Install root-owned Barista engine and hostapd binaries first; writable development binaries cannot run privileged";
     if (QFileInfo::exists("/tmp/drcd.sock")) return "Stop the legacy drcd/capture session first (existing /tmp/drcd.sock)";
@@ -325,7 +331,7 @@ QString Service::Start(const QString& interface, const QString& mode, const QStr
     }
     QString idleError;
     if (!barista::WriteIdleScreen("/run/barista/idle.i420", idleError)) return idleError;
-    if (mode == "controller") {
+    if (mode == barista::api::SessionMode::Controller) {
         std::string error;
         if (!m_controller.Start(error)) { m_phase = "idle"; return error.empty() ? "Cannot create virtual controller" : QString::fromStdString(error); }
         m_input = std::make_unique<drc_ipc::AppHook>(false);
@@ -341,7 +347,7 @@ QString Service::Start(const QString& interface, const QString& mode, const QStr
     env.insert("DRCD_AP_CHANNEL","149");
     env.insert("BARISTA_MUG_SOCKET",m_endpoint);
     env.insert("BARISTA_IDLE_I420","/run/barista/idle.i420");
-    env.insert("BARISTA_CLIENT_UID",QString::number(mode == "controller" ? 0 : uid));
+    env.insert("BARISTA_CLIENT_UID",QString::number(mode == barista::api::SessionMode::Controller ? 0 : uid));
     env.insert("DRCD_LOG_STDERR","1");
     QStringList args{"--socket",ControlSocket,"--interface",interface};
     if (code.isEmpty()) args << "--np";

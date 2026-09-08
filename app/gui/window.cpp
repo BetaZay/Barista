@@ -453,7 +453,7 @@ Window::Window(bool smokeTest)
     setCentralWidget(root);
 
     auto describe = [this] {
-        m_description->setText(Mode() == "real"
+        m_description->setText(Mode() == barista::api::SessionMode::Real
             ? "A compatible AppHook client can use the GamePad screen, audio and input. The Barista logo is shown until an app supplies video."
             : "Buttons and sticks appear as a virtual controller for PC games. The GamePad shows the Barista logo. Touch, motion and rumble are not supported yet.");
     };
@@ -486,7 +486,7 @@ Window::Window(bool smokeTest)
         QSettings settings;
         settings.setValue("interface",interface);
         settings.setValue("pairInterface",interface);
-        settings.setValue("mode",Mode());
+        settings.setValue("mode",QString::fromLatin1(barista::api::SessionModeName(Mode())));
         m_message->hide();
         m_client.Start(interface,Mode());
     });
@@ -605,7 +605,11 @@ bool Window::ConfirmWifi(bool pairing, const QString& interface)
     warning.exec();
     return warning.clickedButton() == proceed;
 }
-QString Window::Mode() const { return m_mode->currentData().toString(); }
+barista::api::SessionMode Window::Mode() const
+{
+    return barista::api::ParseSessionMode(m_mode->currentData().toString().toStdString())
+        .value_or(barista::api::SessionMode::Real);
+}
 void Window::RefreshSavedGamePads()
 {
     auto records = LoadSavedGamePadsCache();
@@ -797,7 +801,7 @@ void Window::ApplyStatus(const QVariantMap& status)
         m_appLastSeen->setText("—");
         m_appSocket->setText(mediaEndpoint.isEmpty() ? "Listening" : mediaEndpoint);
     }
-    const bool supported = Mode() != "controller" || status.value("controllerSupported").toBool() ||
+    const bool supported = Mode() != barista::api::SessionMode::Controller || status.value("controllerSupported").toBool() ||
         status.value("controllerSetupAvailable").toBool();
     m_start->setEnabled(available && !running && !busy && supported);
     m_pair->setEnabled(available && !running && !busy && supported &&

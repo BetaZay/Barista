@@ -7,6 +7,8 @@
 #include <QVariantMap>
 #include <functional>
 #include <memory>
+#include <optional>
+#include "api/types.h"
 #include "drc_ipc/app_hook.h"
 #include "uinput_output.h"
 
@@ -32,14 +34,15 @@ private:
     void Authorize(std::function<QString(uint, const QString&)> operation);
     void Prepare(bool controller, const QString& caller, Completion done);
     void RunSetup(const QString& program, const QStringList& args, Completion done);
-    QString Start(const QString& interface, const QString& mode, const QString& code, uint uid, const QString& caller);
+    QString Start(const QString& interface, barista::api::SessionMode mode, const QString& code, uint uid, const QString& caller);
     void Poll();
     void ParseStatus();
     QProcess m_worker;
     QLocalSocket m_statusSocket;
     QTimer m_poll, m_inputTimer, m_statusTimeout;
     QByteArray m_response;
-    QString m_owner, m_mode, m_interface, m_endpoint, m_error, m_phase = "idle";
+    QString m_owner, m_interface, m_endpoint, m_error, m_phase = "idle";
+    std::optional<barista::api::SessionMode> m_mode;
     uint m_uid = 0;
     bool m_authorizing = false, m_connected = false, m_stopping = false, m_batteryAvailable = false;
     int m_battery = 0;

@@ -1,5 +1,10 @@
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network)
 set(CMAKE_AUTOMOC ON)
+# Placeholder for the future headless engine executable. Its portable session
+# and codec dependencies are already separated under core/drh.
+add_library(barista_engine_app INTERFACE)
+target_link_libraries(barista_engine_app INTERFACE barista_drh_server barista_drh_encoder)
+target_compile_features(barista_engine_app INTERFACE cxx_std_20)
 add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/control_client.cpp gui/control_client.h
     gui/single_instance.cpp gui/single_instance.h)
 target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network barista_core)
