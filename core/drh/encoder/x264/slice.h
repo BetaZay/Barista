@@ -25,6 +25,7 @@ public:
             m_writer.EncodeTerminal();
         EncodeMacroblockHeader(m_writer, m_contexts, m_kind, mb, left, top);
         EncodeMacroblockResidual(m_writer, m_contexts, mb, left, top);
+        m_topLeft = m_top[x];
         m_left = mb;
         m_top[x] = mb;
         ++m_count;
@@ -59,12 +60,22 @@ public:
         return frame;
     }
 
+    unsigned IntraAvailability() const
+    {
+        const unsigned x = m_count % 54;
+        return (m_count >= 54 && m_top[x].type >= 5 ? 1U : 0U) |
+            (x && m_left.type >= 5 ? 2U : 0U) |
+            (x && m_count >= 54 && m_topLeft.type >= 5 ? 4U : 0U) |
+            (x < 53 && m_count >= 54 && m_top[x + 1].type >= 5 ? 8U : 0U);
+    }
+
 private:
     H264SliceKind m_kind;
     H264CabacContexts m_contexts;
     H264CabacWriter m_writer;
     std::array<CabacMacroblock, 54> m_top{};
     CabacMacroblock m_left;
+    CabacMacroblock m_topLeft;
     std::array<size_t, 4> m_ends{};
     unsigned m_count = 0;
 };

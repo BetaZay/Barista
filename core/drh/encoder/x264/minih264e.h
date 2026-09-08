@@ -8974,7 +8974,7 @@ static void encode_pps(h264e_enc_t *enc, int pps_id)
     U1(0);  // constrained_intra_pred_flag            0
     U1(0);  // redundant_pic_cnt_present_flag         0
 #else
-    U(5, 0x1C);         // constant shortcut:
+    U(5, enc->run_param.drh_cabac_context ? 0x1E : 0x1C); // Match constrained intra prediction.
 //     SE(0);  // pic_init_qs_minus26                    1
 //     SE(0);  // chroma_qp_index_offset                 1
 //     U1(1);  // deblocking_filter_control_present_flag 1
@@ -9538,6 +9538,9 @@ l_skip:
 static void intra_choose_4x4(h264e_enc_t *enc)
 {
     int i, n, a, nz_mask = 0, avail = mb_avail_flag(enc);
+#ifdef BARISTA_MINIH264_CABAC
+    avail &= barista_minih264_intra_availability(enc);
+#endif
     scratch_t *qv = enc->scratch;
     pix_t *mb_dec = enc->dec.yuv[0];
     pix_t *dec = enc->ptest;
@@ -10599,6 +10602,11 @@ static void mb_encode(h264e_enc_t *enc, int enc_type)
 
     if (enc->mb.type >= 0)
     {
+#ifdef BARISTA_MINIH264_CABAC
+        avail &= barista_minih264_intra_availability(enc);
+        if (!(avail & AVAIL_L)) left = NULL;
+        if (!(avail & AVAIL_T)) top = NULL;
+#endif
         intra_choose_16x16(enc, left, top, avail);
         if (enc->run_param.encode_speed < 2 || enc->slice.type != SLICE_TYPE_P) // enable intra4x4 on P slices
         {

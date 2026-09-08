@@ -2,9 +2,16 @@
 
 struct H264E_persist_tag;
 static void barista_minih264_macroblock(H264E_persist_tag*, int, int);
+static unsigned barista_minih264_intra_availability(H264E_persist_tag*);
 #define BARISTA_MINIH264_CABAC
 #define MINIH264_IMPLEMENTATION
 #include "minih264e.h"
+
+static unsigned barista_minih264_intra_availability(H264E_persist_tag* enc)
+{
+    return enc->run_param.drh_cabac_context ?
+        static_cast<barista::drh::x264::CabacSlice*>(enc->run_param.drh_cabac_context)->IntraAvailability() : 15;
+}
 
 static void barista_minih264_macroblock(H264E_persist_tag* enc, int cbpl, int cbpc)
 {

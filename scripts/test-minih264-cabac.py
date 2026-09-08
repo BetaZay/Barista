@@ -22,13 +22,13 @@ def main():
                 "-f", "rawvideo", str(output),
             ], check=True)
             decoded.append(output.read_bytes())
-        expected = 90 * 854 * 480 * 3 // 2
+        expected = 300 * 854 * 480 * 3 // 2
         if any(len(data) != expected for data in decoded):
-            raise RuntimeError("decoder did not produce exactly 90 complete frames")
+            raise RuntimeError("decoder did not produce exactly 300 complete frames")
         if decoded[0] != decoded[1]:
             offset = next(i for i, (a, b) in enumerate(zip(*decoded)) if a != b)
             raise RuntimeError(f"CABAC reconstruction differs at decoded byte {offset}")
-        print("90 moving IDR/P frames match exactly across CAVLC and CABAC")
+        print("300 moving IDR/P frames match exactly, including frame-number wrap and consecutive IDRs")
 
 
 if __name__ == "__main__":

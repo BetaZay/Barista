@@ -27,14 +27,20 @@ int main(int argc, char** argv)
     baseline.exceptions(std::ios::badbit | std::ios::failbit);
     out.exceptions(std::ios::badbit | std::ios::failbit);
     unsigned number = 0;
-    for (unsigned index = 0; index < 90; ++index)
+    for (unsigned index = 0; index < 300; ++index)
     {
-    const bool idr = index == 0 || index == 45;
+    const bool idr = index == 0 || index == 270 || index == 271;
     if (idr) number = 0;
     CabacSlice slice(idr);
     for (int y = 0; y < 480; ++y)
         for (int x = 0; x < 864; ++x)
-            pixels[y * 864 + x] = 16 + ((x + y + index * 3) % 220);
+            pixels[y * 864 + x] = 16 + ((x + y + index * 3 + ((x / 13 ^ y / 11) & 7) * 17) % 220);
+    for (unsigned y = 0; y < 240; ++y)
+        for (unsigned x = 0; x < 432; ++x)
+        {
+            pixels[864 * 480 + y * 432 + x] = 32 + ((x * 3 + y + index * 2) % 192);
+            pixels[864 * 480 * 5 / 4 + y * 432 + x] = 32 + ((x + y * 5 + index * 3) % 192);
+        }
     H264E_io_yuv_t input{{pixels.data(), pixels.data() + 864 * 480, pixels.data() + 864 * 480 * 5 / 4}, {864,432,432}};
     H264E_run_param_t run{};
     run.encode_speed = 5; run.frame_type = idr ? H264E_FRAME_TYPE_KEY : H264E_FRAME_TYPE_P;
