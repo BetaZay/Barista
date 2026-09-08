@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Barista is a C++20/CMake project that connects a Wii U GamePad to a desktop application. `app/` contains the Qt 6 GUI and D-Bus service; `core/` holds portable shared interfaces. The Linux radio and streaming stack lives in `drcd/`, `drcctl/`, `libdrc-host/`, and `libdrc-ipc/`, each with public headers in `include/`, implementation in `src/`, and tests in `tests/` where applicable. Linux integration files are in `platform/linux/` and `packaging/`. Keep changes to bundled upstream code in `third_party/` deliberate and isolated. Utility and hardware-analysis scripts live in `scripts/`.
+Barista is a C++20/CMake project that connects a Wii U GamePad to a desktop application. `app/` contains executable entry points, the Qt 6 GUI, D-Bus service, and branding. `core/api/` holds the portable application and media interfaces, while `core/drh/` contains the GamePad protocol, server, encoder, and Linux radio backend. Tests for portable code live together in `core/tests/`. Linux installation integration remains in `packaging/`. Keep changes to bundled upstream code in `third_party/` deliberate and isolated. Utility and hardware-analysis scripts live in `scripts/`.
 
 ## Build, Test, and Development Commands
 

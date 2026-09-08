@@ -23,10 +23,11 @@ public slots:
 protected:
     void closeEvent(QCloseEvent* event) override;
 private slots:
-    void ApplyStatus(const QVariantMap& status);
+    void ApplyStatus(const barista::api::SessionStatus& status);
 private:
     bool ConfirmWifi(bool pairing, const QString& interface);
     barista::api::SessionMode Mode() const;
+    void ApplyGamePads(const std::vector<barista::api::GamePad>& gamePads);
     void RefreshSavedGamePads();
     ControlClient m_client;
     QTabWidget* m_tabs;
@@ -42,7 +43,7 @@ private:
     QAction *m_trayStart, *m_trayStop;
     QListWidget* m_savedGamePads;
     QMap<QString,QLabel*> m_health;
-    QVariantMap m_lastStatus;
+    barista::api::SessionStatus m_lastStatus;
     QString m_operationError;
     QString m_appLogoSource;
     bool m_pending = false;

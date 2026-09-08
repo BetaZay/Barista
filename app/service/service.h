@@ -9,7 +9,7 @@
 #include <memory>
 #include <optional>
 #include "api/types.h"
-#include "drc_ipc/app_hook.h"
+#include "api/app_hook.h"
 #include "uinput_output.h"
 
 class Service : public QObject, protected QDBusContext {
@@ -30,11 +30,15 @@ public slots:
     void PrepareSystem();
 private:
     using Completion = std::function<void(QString)>;
+    std::vector<barista::api::GamePad> GamePads() const;
+    void RenameGamePadRecord(const barista::api::RenameGamePadRequest& request);
+    void RemoveGamePadRecord(const barista::api::RemoveGamePadRequest& request);
     void AuthorizeAsync(std::function<void(uint, const QString&, Completion)> operation);
     void Authorize(std::function<QString(uint, const QString&)> operation);
     void Prepare(bool controller, const QString& caller, Completion done);
     void RunSetup(const QString& program, const QStringList& args, Completion done);
     QString Start(const QString& interface, barista::api::SessionMode mode, const QString& code, uint uid, const QString& caller);
+    barista::api::SessionStatus Status(bool ownedByCaller) const;
     void Poll();
     void ParseStatus();
     QProcess m_worker;
@@ -46,6 +50,6 @@ private:
     uint m_uid = 0;
     bool m_authorizing = false, m_connected = false, m_stopping = false, m_batteryAvailable = false;
     int m_battery = 0;
-    std::unique_ptr<drc_ipc::AppHook> m_input;
+    std::unique_ptr<barista::api::AppHook> m_input;
     barista::UinputOutput m_controller;
 };

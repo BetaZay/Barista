@@ -1,6 +1,6 @@
 #include "service.h"
 #include "../branding/idle_screen.h"
-#include "barista/controller.h"
+#include "api/controller.h"
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
 #include <QDBusReply>
@@ -32,9 +32,9 @@ int BatteryPercent(int raw)
 }
 }
 
-QVariantList Service::SavedGamePads()
+std::vector<barista::api::GamePad> Service::GamePads() const
 {
-    QVariantList result;
+    std::vector<barista::api::GamePad> result;
     QFile file(CredentialsFile);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return result;
     QHash<QString,QString> names;
@@ -45,12 +45,29 @@ QVariantList Service::SavedGamePads()
         else if (line.startsWith("gamepad_mac=")) macs.append(line.mid(12));
     }
     macs.removeDuplicates();
-    for (const auto& mac : macs) result.append(QVariantMap{{"mac",mac},{"name",names.value(mac)}});
+    for (const auto& mac : macs)
+        result.push_back({mac.toStdString(), names.value(mac).toStdString()});
+    return result;
+}
+
+QVariantList Service::SavedGamePads()
+{
+    QVariantList result;
+    for (const auto& gamePad : GamePads())
+        result.append(QVariantMap{{"mac",QString::fromStdString(gamePad.mac)},
+            {"name",QString::fromStdString(gamePad.name)}});
     return result;
 }
 
 void Service::RenameGamePad(const QString& mac, const QString& name)
 {
+    RenameGamePadRecord({mac.toStdString(), name.toStdString()});
+}
+
+void Service::RenameGamePadRecord(const barista::api::RenameGamePadRequest& request)
+{
+    const QString mac = QString::fromStdString(request.mac);
+    const QString name = QString::fromStdString(request.name);
     QFile input(CredentialsFile);
     if (!input.open(QIODevice::ReadOnly | QIODevice::Text)) return;
     QStringList lines = QString::fromUtf8(input.readAll()).split('\n',Qt::SkipEmptyParts);
@@ -63,6 +80,12 @@ void Service::RenameGamePad(const QString& mac, const QString& name)
 
 void Service::RemoveGamePad(const QString& mac)
 {
+    RemoveGamePadRecord({mac.toStdString()});
+}
+
+void Service::RemoveGamePadRecord(const barista::api::RemoveGamePadRequest& request)
+{
+    const QString mac = QString::fromStdString(request.mac);
     QFile input(CredentialsFile);
     if (!input.open(QIODevice::ReadOnly | QIODevice::Text)) return;
     QStringList lines = QString::fromUtf8(input.readAll()).split('\n',Qt::SkipEmptyParts);
@@ -151,47 +174,88 @@ Service::~Service()
     // The service unit's timeout handles an unresponsive engine; allow normal cleanup.
     if (m_worker.state() != QProcess::NotRunning) m_worker.waitForFinished(15000);
 }
+barista::api::SessionStatus Service::Status(bool ownedByCaller) const
+{
+    barista::api::SessionStatus status;
+    status.available = true;
+    status.platform = "linux";
+    status.phase = barista::api::ParseSessionPhase(m_phase.toStdString())
+        .value_or(barista::api::SessionPhase::Failed);
+    status.mode = m_mode;
+    status.running = m_worker.state() != QProcess::NotRunning;
+    status.gamePadConnected = m_connected;
+    if (m_batteryAvailable)
+        status.batteryPercent = static_cast<uint8_t>(m_battery);
+    status.interfaceName = m_interface.toStdString();
+    status.ownedByCaller = ownedByCaller;
+    status.busy = m_authorizing || m_stopping;
+    if (!m_error.isEmpty())
+        status.error = barista::api::Error{
+            .code = barista::api::ErrorCode::Failed,
+            .message = m_error.toStdString(),
+        };
+    if (ownedByCaller && m_mode == barista::api::SessionMode::Real)
+        status.mediaEndpoint = m_endpoint.toStdString();
+
+    for (const auto* tool : {"iw", "ip", "nmcli"})
+    {
+        if (QStandardPaths::findExecutable(tool,{"/usr/sbin","/usr/bin","/sbin","/bin"}).isEmpty())
+            status.health.missingTools.emplace_back(tool);
+    }
+    if (m_mode == barista::api::SessionMode::Real && !m_endpoint.isEmpty())
+    {
+        barista::api::AppHook::ConnectedAppInfo appInfo{};
+        if (barista::api::AppHook::read_app_lock(m_endpoint.toStdString(), appInfo))
+        {
+            status.application.connected = appInfo.connected;
+            status.application.name = std::move(appInfo.name);
+            status.application.pid = appInfo.pid;
+            status.application.lastSeen = appInfo.last_seen;
+            status.application.connectedAt = appInfo.connected_at;
+            status.application.idleLogo = std::move(appInfo.idle_logo);
+        }
+    }
+    status.capabilities.controller = QFileInfo::exists("/dev/uinput");
+    status.capabilities.pairing = true;
+    status.capabilities.systemPreparation = true;
+    status.capabilities.mediaStreaming = true;
+    status.capabilities.controllerSetup = TrustedSystemHelper(BARISTA_MODPROBE);
+    status.health.networkManagerRunning = BusServiceRunning("org.freedesktop.NetworkManager");
+    status.health.authorizationRunning = BusServiceRunning("org.freedesktop.PolicyKit1");
+    status.health.engineInstalled = TrustedExecutable(BARISTA_WORKER);
+    status.health.hostapdInstalled = TrustedExecutable(BARISTA_HOSTAPD);
+    status.health.authorizationInstalled = TrustedExecutable(BARISTA_PKCHECK);
+    status.health.legacySessionPresent = QFileInfo::exists("/tmp/drcd.sock");
+    return status;
+}
+
 QVariantMap Service::GetStatus()
 {
     const bool mine = calledFromDBus() && message().service() == m_owner;
+    const auto status = Status(mine);
     QStringList missingTools;
-    for (const auto* tool : {"iw", "ip", "nmcli"})
-        if (QStandardPaths::findExecutable(tool,{"/usr/sbin","/usr/bin","/sbin","/bin"}).isEmpty()) missingTools << tool;
-    bool appConnected = false;
-    QString appName;
-    qint64 appPid = 0;
-    qint64 appLastSeen = 0;
-    qint64 appConnectedAt = 0;
-    QString appIdleLogo;
-    if (m_mode == barista::api::SessionMode::Real && !m_endpoint.isEmpty())
-    {
-        drc_ipc::AppHook::ConnectedAppInfo appInfo{};
-        if (drc_ipc::AppHook::read_app_lock(m_endpoint.toStdString(), appInfo))
-        {
-            appConnected = appInfo.connected;
-            appName = QString::fromStdString(appInfo.name);
-            appPid = appInfo.pid;
-            appLastSeen = static_cast<qint64>(appInfo.last_seen);
-            appConnectedAt = static_cast<qint64>(appInfo.connected_at);
-            appIdleLogo = QString::fromStdString(appInfo.idle_logo);
-        }
-    }
-    return {{"apiVersion",1}, {"platform","linux"}, {"running",m_worker.state() != QProcess::NotRunning},
-        {"phase",m_phase}, {"connected",m_connected}, {"mode",m_mode ? ModeName(*m_mode) : QString()}, {"interface",m_interface},
-        {"batteryAvailable",m_batteryAvailable}, {"battery",m_battery},
-        {"ownedByCaller",mine}, {"busy",m_authorizing || m_stopping}, {"error",m_error},
-        {"mediaEndpoint",mine && m_mode == barista::api::SessionMode::Real ? m_endpoint : QString()},
-        {"appConnected",appConnected}, {"appName",appName}, {"appPid",appPid},
-        {"appLastSeen",appLastSeen}, {"appConnectedAt",appConnectedAt},
-        {"appIdleLogo",appIdleLogo},
-        {"controllerSupported",QFileInfo::exists("/dev/uinput")}, {"pairingSupported",true},
-        {"setupSupported",true}, {"controllerSetupAvailable",TrustedSystemHelper(BARISTA_MODPROBE)},
-        {"networkManagerRunning",BusServiceRunning("org.freedesktop.NetworkManager")},
-        {"polkitRunning",BusServiceRunning("org.freedesktop.PolicyKit1")},
-        {"engineInstalled",TrustedExecutable(BARISTA_WORKER)},
-        {"hostapdInstalled",TrustedExecutable(BARISTA_HOSTAPD)},
-        {"authorizationInstalled",TrustedExecutable(BARISTA_PKCHECK)},
-        {"missingTools",missingTools}, {"legacySessionPresent",QFileInfo::exists("/tmp/drcd.sock")}};
+    for (const auto& tool : status.health.missingTools)
+        missingTools.push_back(QString::fromStdString(tool));
+    const QString error = status.error ? QString::fromStdString(status.error->message) : QString();
+    return {{"apiVersion",status.apiVersion}, {"platform",QString::fromStdString(status.platform)},
+        {"running",status.running}, {"phase",QString::fromLatin1(barista::api::SessionPhaseName(status.phase))},
+        {"connected",status.gamePadConnected}, {"mode",status.mode ? ModeName(*status.mode) : QString()},
+        {"interface",QString::fromStdString(status.interfaceName)},
+        {"batteryAvailable",status.batteryPercent.has_value()}, {"battery",status.batteryPercent.value_or(0)},
+        {"ownedByCaller",status.ownedByCaller}, {"busy",status.busy}, {"error",error},
+        {"mediaEndpoint",QString::fromStdString(status.mediaEndpoint)},
+        {"appConnected",status.application.connected}, {"appName",QString::fromStdString(status.application.name)},
+        {"appPid",status.application.pid}, {"appLastSeen",qulonglong(status.application.lastSeen)},
+        {"appConnectedAt",qulonglong(status.application.connectedAt)},
+        {"appIdleLogo",QString::fromStdString(status.application.idleLogo)},
+        {"controllerSupported",status.capabilities.controller}, {"pairingSupported",status.capabilities.pairing},
+        {"setupSupported",status.capabilities.systemPreparation},
+        {"controllerSetupAvailable",status.capabilities.controllerSetup},
+        {"networkManagerRunning",status.health.networkManagerRunning},
+        {"polkitRunning",status.health.authorizationRunning},
+        {"engineInstalled",status.health.engineInstalled}, {"hostapdInstalled",status.health.hostapdInstalled},
+        {"authorizationInstalled",status.health.authorizationInstalled},
+        {"missingTools",missingTools}, {"legacySessionPresent",status.health.legacySessionPresent}};
 }
 void Service::Authorize(std::function<QString(uint,const QString&)> operation)
 {
@@ -237,7 +301,7 @@ void Service::StartSession(const QString& interface, const QString& mode)
 {
     const auto parsedMode = barista::api::ParseSessionMode(mode.toStdString());
     AuthorizeAsync([this,interface,parsedMode](uint uid,const QString& caller,Completion done) {
-        if (!barista::ValidInterface(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
+        if (!barista::api::ValidInterfaceName(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
             !parsedMode) { done("Choose an existing wireless adapter and supported mode"); return; }
         Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,mode=*parsedMode,uid,caller,done](QString error) {
             done(error.isEmpty() ? Start(interface,mode,{},uid,caller) : error);
@@ -246,10 +310,10 @@ void Service::StartSession(const QString& interface, const QString& mode)
 }
 void Service::Pair(const QString& interface, const QString& code, const QString& mode)
 {
-    if (!barista::ValidPairCode(code.toStdString())) { sendErrorReply("org.barista.Error.Invalid", "Pairing code must be four digits 0–3"); return; }
+    if (!barista::api::ParsePairCode(code.toStdString())) { sendErrorReply("org.barista.Error.Invalid", "Pairing code must be four digits 0–3"); return; }
     const auto parsedMode = barista::api::ParseSessionMode(mode.toStdString());
     AuthorizeAsync([this,interface,code,parsedMode](uint uid,const QString& caller,Completion done) {
-        if (!barista::ValidInterface(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
+        if (!barista::api::ValidInterfaceName(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
             !parsedMode) { done("Choose an existing wireless adapter and supported mode"); return; }
         Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,code,mode=*parsedMode,uid,caller,done](QString error) {
             done(error.isEmpty() ? Start(interface,mode,code,uid,caller) : error);
@@ -314,7 +378,7 @@ void Service::StopSession()
 QString Service::Start(const QString& interface, barista::api::SessionMode mode, const QString& code, uint uid, const QString& caller)
 {
     if (m_worker.state() != QProcess::NotRunning) return "Stop the current session before changing mode or pairing";
-    if (!barista::ValidInterface(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211"))
+    if (!barista::api::ValidInterfaceName(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211"))
         return "Choose an existing wireless interface";
     if (!TrustedExecutable(BARISTA_WORKER) || !TrustedExecutable(BARISTA_HOSTAPD))
         return "Install root-owned Barista engine and hostapd binaries first; writable development binaries cannot run privileged";
@@ -334,7 +398,7 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
     if (mode == barista::api::SessionMode::Controller) {
         std::string error;
         if (!m_controller.Start(error)) { m_phase = "idle"; return error.empty() ? "Cannot create virtual controller" : QString::fromStdString(error); }
-        m_input = std::make_unique<drc_ipc::AppHook>(false);
+        m_input = std::make_unique<barista::api::AppHook>(false);
         if (!m_input->start(m_endpoint.toStdString(), error)) { m_controller.Stop(); m_input.reset(); return QString::fromStdString(error); }
     }
     QProcessEnvironment env;

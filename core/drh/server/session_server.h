@@ -5,7 +5,7 @@
 namespace barista::drh
 {
 // Radio/platform backends implement this narrow interface. SessionServer will
-// become the portable replacement for drcd::ServerCore during migration.
+// become the portable replacement for barista::drh::ServerCore during migration.
 class RadioBackend
 {
 public:

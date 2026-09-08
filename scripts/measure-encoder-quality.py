@@ -143,10 +143,10 @@ def measure(probe, profile, raw, frames, encoder=None, output_dir=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--probe', type=Path, default=Path(__file__).resolve().parents[1] /
-                        'build/drcd/drcd_encoder_recon_probe')
+                        'build/core/drcd_encoder_recon_probe')
     parser.add_argument('--clip', type=Path)
     parser.add_argument('--encoder', type=Path, default=Path(__file__).resolve().parents[1] /
-                        'build/drcd/drcd_reencode_replay')
+                        'build/app/drcd_reencode_replay')
     parser.add_argument('--output-dir', type=Path, help='new directory for review videos and metrics')
     parser.add_argument('--start', type=float, default=0)
     parser.add_argument('--frames', type=int, default=240)

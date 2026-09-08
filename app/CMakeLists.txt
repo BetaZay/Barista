@@ -1,10 +1,22 @@
+if(BARISTA_BUILD_ENGINE)
+    add_executable(drcd service/engine_main.cpp)
+    target_link_libraries(drcd PRIVATE barista_drh_server drc_host)
+    target_compile_features(drcd PRIVATE cxx_std_20)
+
+    add_executable(drcd_reencode_replay service/reencode_replay_main.cpp)
+    target_link_libraries(drcd_reencode_replay PRIVATE barista_drh_encoder)
+
+    add_executable(drcctl service/control_main.cpp)
+    target_link_libraries(drcctl PRIVATE drcctl_core drc_host)
+    target_compile_features(drcctl PRIVATE cxx_std_20)
+endif()
+
+if(NOT BARISTA_BUILD_DESKTOP)
+    return()
+endif()
+
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network)
 set(CMAKE_AUTOMOC ON)
-# Placeholder for the future headless engine executable. Its portable session
-# and codec dependencies are already separated under core/drh.
-add_library(barista_engine_app INTERFACE)
-target_link_libraries(barista_engine_app INTERFACE barista_drh_server barista_drh_encoder)
-target_compile_features(barista_engine_app INTERFACE cxx_std_20)
 add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/control_client.cpp gui/control_client.h
     gui/single_instance.cpp gui/single_instance.h)
 target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network barista_core)
@@ -24,7 +36,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         get_filename_component(BARISTA_MODPROBE_NAME "${BARISTA_MODPROBE}" NAME)
         add_executable(barista-service service/main.cpp service/service.cpp service/service.h
             branding/idle_screen.cpp
-            ../platform/linux/uinput_output.cpp)
+            service/uinput_output.cpp service/uinput_output.h)
         qt_add_resources(barista-service service_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
             FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
         if(BUILD_TESTING)
@@ -34,7 +46,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                 FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
             add_test(NAME barista_idle_screen COMMAND barista_idle_test)
         endif()
-        target_include_directories(barista-service PRIVATE ../platform/linux)
         target_link_libraries(barista-service PRIVATE Qt6::Core Qt6::Gui Qt6::DBus Qt6::Network barista_core drc_ipc)
         target_compile_definitions(barista-service PRIVATE
             BARISTA_WORKER="${CMAKE_INSTALL_FULL_LIBEXECDIR}/barista/barista-engine"

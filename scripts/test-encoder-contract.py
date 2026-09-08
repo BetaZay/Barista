@@ -9,7 +9,7 @@ spec = importlib.util.spec_from_file_location('reencode', Path(__file__).with_na
 r = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(r)
 
-encoder = Path(__file__).resolve().parent.parent/'build/drcd/drcd_reencode_replay'
+encoder = Path(__file__).resolve().parent.parent/'build/app/drcd_reencode_replay'
 worker = subprocess.Popen([str(encoder)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           env=r.encoder_settings())
 start=b'\0\0\0\1'

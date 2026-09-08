@@ -1,5 +1,4 @@
 #include "window.h"
-#include "barista/controller.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QCheckBox>
@@ -14,9 +13,6 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QInputDialog>
-#include <QDBusInterface>
-#include <QDBusArgument>
-#include <QDBusReply>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -42,7 +38,7 @@ enum class Tone { Neutral, Good, Warning, Bad };
 
 QString InterfaceName(const QComboBox* combo)
 {
-    if (combo->isEditable() && barista::ValidInterface(combo->currentText().toStdString()))
+    if (combo->isEditable() && barista::api::ValidInterfaceName(combo->currentText().toStdString()))
         return combo->currentText();
     if (combo->isEditable() && combo->currentIndex() >= 0 &&
         combo->currentText() != combo->itemText(combo->currentIndex()))
@@ -366,21 +362,17 @@ Window::Window(bool smokeTest)
         const QString mac = item->data(Qt::UserRole).toString();
         bool ok = false; const QString name = QInputDialog::getText(this,"Rename GamePad","Name:",QLineEdit::Normal,item->text().section(" — ",0,0),&ok);
         if (!ok) return;
-#ifdef BARISTA_LINUX_CONTROL
-        QDBusInterface("org.barista.Service1","/org/barista/Service1","org.barista.Service1",QDBusConnection::systemBus()).call("RenameGamePad",mac,name);
-#endif
-    auto records = LoadSavedGamePadsCache(); records.insert(mac,name); SaveSavedGamePadsCache(records);
-        RefreshSavedGamePads();
+        m_client.RenameGamePad({mac.toStdString(), name.toStdString()});
+        auto records = LoadSavedGamePadsCache(); records.insert(mac,name); SaveSavedGamePadsCache(records);
+        ApplyGamePads({});
     });
     connect(removePair,&QPushButton::clicked,this,[this] {
         auto* item = m_savedGamePads->currentItem(); if (!item) return;
         const QString mac = item->data(Qt::UserRole).toString();
         if (QMessageBox::question(this,"Remove saved GamePad?",QString("Remove %1? It will need to be paired again.").arg(item->text())) != QMessageBox::Yes) return;
-#ifdef BARISTA_LINUX_CONTROL
-        QDBusInterface("org.barista.Service1","/org/barista/Service1","org.barista.Service1",QDBusConnection::systemBus()).call("RemoveGamePad",mac);
-#endif
-    auto records = LoadSavedGamePadsCache(); records.remove(mac); SaveSavedGamePadsCache(records);
-        RefreshSavedGamePads();
+        m_client.RemoveGamePad({mac.toStdString()});
+        auto records = LoadSavedGamePadsCache(); records.remove(mac); SaveSavedGamePadsCache(records);
+        ApplyGamePads({});
     });
     QTimer::singleShot(0,this,&Window::RefreshSavedGamePads);
     pairingLayout->addWidget(savedPairs);
@@ -488,7 +480,7 @@ Window::Window(bool smokeTest)
         settings.setValue("pairInterface",interface);
         settings.setValue("mode",QString::fromLatin1(barista::api::SessionModeName(Mode())));
         m_message->hide();
-        m_client.Start(interface,Mode());
+        m_client.Start({interface.toStdString(), Mode()});
     });
     connect(m_stop,&QPushButton::clicked,&m_client,&ControlClient::Stop);
     connect(m_pair,&QPushButton::clicked,this,[this] {
@@ -499,7 +491,9 @@ Window::Window(bool smokeTest)
         settings.setValue("pairInterface",interface);
         m_message->hide();
         m_pairingRequested = true;
-        m_client.Pair(interface,m_code->text(),Mode());
+        const auto code = barista::api::ParsePairCode(m_code->text().toStdString());
+        if (!code) return;
+        m_client.Pair({{interface.toStdString(), Mode()}, *code});
     });
     connect(m_copy,&QPushButton::clicked,this,[this] {
         QApplication::clipboard()->setText("env BARISTA_MUG_SOCKET=" + m_endpoint->text() + " ");
@@ -523,6 +517,7 @@ Window::Window(bool smokeTest)
     if (!smokeTest) m_tray->show();
 
     connect(&m_client,&ControlClient::Status,this,&Window::ApplyStatus);
+    connect(&m_client,&ControlClient::GamePads,this,&Window::ApplyGamePads);
     connect(&m_client,&ControlClient::Error,this,[this](const QString& error) {
         m_pairingRequested = false;
         if (!isVisible()) ShowWindow();
@@ -540,7 +535,9 @@ Window::Window(bool smokeTest)
         if (m_quitting) QApplication::quit();
     });
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int) { ApplyStatus(m_lastStatus); });
-    ApplyStatus({{"activating",!smokeTest}});
+    barista::api::SessionStatus initialStatus;
+    initialStatus.activating = !smokeTest;
+    ApplyStatus(initialStatus);
     if (!smokeTest) {
         auto* timer = new QTimer(this);
         connect(timer,&QTimer::timeout,this,[this] {
@@ -575,13 +572,13 @@ void Window::RunInBackground()
 }
 void Window::Quit()
 {
-    if ((m_lastStatus.value("running").toBool() && m_lastStatus.value("ownedByCaller").toBool()) || m_pending) {
+    if ((m_lastStatus.running && m_lastStatus.ownedByCaller) || m_pending) {
         ShowWindow();
         if (QMessageBox::question(this,"Quit Barista?","Quit and stop your GamePad session? The Wi-Fi adapter will be released.",
             QMessageBox::Yes | QMessageBox::Cancel,QMessageBox::Cancel) != QMessageBox::Yes) return;
     }
     m_quitting = true;
-    if (m_lastStatus.value("running").toBool() || m_pending) {
+    if (m_lastStatus.running || m_pending) {
         m_client.Stop();
         return;
     }
@@ -589,7 +586,7 @@ void Window::Quit()
 }
 bool Window::ConfirmWifi(bool pairing, const QString& interface)
 {
-    if (!barista::ValidInterface(interface.toStdString())) {
+    if (!barista::api::ValidInterfaceName(interface.toStdString())) {
         m_message->setText("Choose a valid Wi-Fi adapter first."); m_message->show(); return false;
     }
     QMessageBox warning(QMessageBox::Warning, pairing ? "Pair your GamePad?" : "Start Barista?",
@@ -612,20 +609,14 @@ barista::api::SessionMode Window::Mode() const
 }
 void Window::RefreshSavedGamePads()
 {
+    ApplyGamePads({});
+    m_client.RefreshGamePads();
+}
+void Window::ApplyGamePads(const std::vector<barista::api::GamePad>& gamePads)
+{
     auto records = LoadSavedGamePadsCache();
-#ifdef BARISTA_LINUX_CONTROL
-    QDBusInterface service("org.barista.Service1","/org/barista/Service1","org.barista.Service1",QDBusConnection::systemBus());
-    const QDBusReply<QVariantList> reply = service.call("SavedGamePads");
-    if (reply.isValid()) for (const auto& value : reply.value()) {
-        QVariantMap record = value.toMap();
-        if (record.isEmpty() && value.canConvert<QDBusArgument>()) {
-            auto argument = qvariant_cast<QDBusArgument>(value);
-            argument >> record;
-        }
-        const QString mac = record.value("mac").toString();
-        if (!mac.isEmpty()) records.insert(mac,record.value("name").toString());
-    }
-#endif
+    for (const auto& gamePad : gamePads)
+        records.insert(QString::fromStdString(gamePad.mac), QString::fromStdString(gamePad.name));
     SaveSavedGamePadsCache(records);
     m_savedGamePads->clear();
     for (auto it = records.cbegin(); it != records.cend(); ++it) {
@@ -634,17 +625,19 @@ void Window::RefreshSavedGamePads()
         item->setData(Qt::UserRole,it.key());
     }
 }
-void Window::ApplyStatus(const QVariantMap& status)
+void Window::ApplyStatus(const barista::api::SessionStatus& status)
 {
-    const QString previousPhase = m_lastStatus.value("phase").toString();
+    const auto previousPhase = m_lastStatus.phase;
     m_lastStatus = status;
-    const bool available = status.value("available").toBool();
-    const bool running = status.value("running").toBool();
-    const bool busy = m_pending || status.value("busy").toBool();
-    const bool owned = status.value("ownedByCaller").toBool();
-    const bool connected = status.value("connected").toBool();
-    const auto phase = status.value("phase").toString();
-    if (m_pairingRequested && phase == "runtime" && previousPhase != "runtime") {
+    const bool available = status.available;
+    const bool running = status.running;
+    const bool busy = m_pending || status.busy;
+    const bool owned = status.ownedByCaller;
+    const bool connected = status.gamePadConnected;
+    const auto phase = status.phase;
+    const QString phaseText = QString::fromLatin1(barista::api::SessionPhaseName(phase));
+    if (m_pairingRequested && phase == barista::api::SessionPhase::Runtime &&
+        previousPhase != barista::api::SessionPhase::Runtime) {
         RefreshSavedGamePads();
         m_pairingRequested = false;
         m_tabs->setCurrentIndex(0);
@@ -655,7 +648,7 @@ void Window::ApplyStatus(const QVariantMap& status)
                 m_message->hide();
         });
     }
-    const bool activating = status.value("activating").toBool();
+    const bool activating = status.activating;
     Tone sessionTone = Tone::Neutral;
     QString sessionText;
     QString hint;
@@ -665,7 +658,7 @@ void Window::ApplyStatus(const QVariantMap& status)
     } else if (!available) {
         sessionText = "● Service unavailable"; sessionTone = Tone::Bad;
         hint = "Automatic startup did not complete. Open Advanced to check setup or retry.";
-    } else if (phase == "stopping") {
+    } else if (phase == barista::api::SessionPhase::Stopping) {
         sessionText = "● Stopping"; sessionTone = Tone::Warning;
         hint = "Releasing the Wi-Fi adapter…";
     } else if (busy) {
@@ -689,13 +682,13 @@ void Window::ApplyStatus(const QVariantMap& status)
     m_hint->setText(hint);
     SetTone(m_hint,sessionTone);
 
-    const auto sessionMode = status.value("mode").toString();
-    const auto ifaceName = status.value("interface").toString();
-    m_gamepadPhase->setText(running ? (phase.isEmpty() ? "Running" : phase) : "Idle");
-    m_gamepadMode->setText(sessionMode == "controller" ? "Controller only" : "Screen + controller");
+    const auto sessionMode = status.mode.value_or(barista::api::SessionMode::Real);
+    const auto ifaceName = QString::fromStdString(status.interfaceName);
+    m_gamepadPhase->setText(running ? phaseText : "Idle");
+    m_gamepadMode->setText(sessionMode == barista::api::SessionMode::Controller ? "Controller only" : "Screen + controller");
     m_gamepadIface->setText(ifaceName.isEmpty() ? InterfaceName(m_interface) : ifaceName);
-    if (status.value("batteryAvailable").toBool())
-        m_gamepadBattery->setText(QString("%1%").arg(status.value("battery").toInt()));
+    if (status.batteryPercent)
+        m_gamepadBattery->setText(QString("%1%").arg(*status.batteryPercent));
     else
         m_gamepadBattery->setText("—");
     if (connected) {
@@ -704,7 +697,7 @@ void Window::ApplyStatus(const QVariantMap& status)
     } else if (running) {
         m_gamepadState->setText("● Waiting for GamePad (searching…)");
         SetTone(m_gamepadState, Tone::Bad, true);
-    } else if (phase == "pairing") {
+    } else if (phase == barista::api::SessionPhase::Pairing) {
         m_gamepadState->setText("● Pairing mode active");
         SetTone(m_gamepadState, Tone::Warning, true);
     } else {
@@ -712,12 +705,12 @@ void Window::ApplyStatus(const QVariantMap& status)
         SetTone(m_gamepadState, Tone::Neutral, false);
     }
 
-    bool appConnected = status.value("appConnected").toBool();
-    QString appName = status.value("appName").toString();
-    qint64 appPid = status.value("appPid").toLongLong();
-    qint64 appLastSeen = status.value("appLastSeen").toLongLong();
-    QString appIdleLogo = status.value("appIdleLogo").toString();
-    const QString mediaEndpoint = status.value("mediaEndpoint").toString();
+    bool appConnected = status.application.connected;
+    QString appName = QString::fromStdString(status.application.name);
+    qint64 appPid = status.application.pid;
+    qint64 appLastSeen = static_cast<qint64>(status.application.lastSeen);
+    QString appIdleLogo = QString::fromStdString(status.application.idleLogo);
+    const QString mediaEndpoint = QString::fromStdString(status.mediaEndpoint);
 
     // Fallback: check lock file directly if mediaEndpoint is known
     if (!appConnected && !mediaEndpoint.isEmpty())
@@ -770,7 +763,7 @@ void Window::ApplyStatus(const QVariantMap& status)
         if (m_appIdleLogo) m_appIdleLogo->setText("—");
         m_appLastSeen->setText("—");
         m_appSocket->setText("—");
-    } else if (sessionMode == "controller") {
+    } else if (sessionMode == barista::api::SessionMode::Controller) {
         m_appName->setText("Virtual PC Controller (uinput)");
         SetTone(m_appName, Tone::Good, false);
         m_appLock->setText("Not applicable in controller mode");
@@ -801,34 +794,42 @@ void Window::ApplyStatus(const QVariantMap& status)
         m_appLastSeen->setText("—");
         m_appSocket->setText(mediaEndpoint.isEmpty() ? "Listening" : mediaEndpoint);
     }
-    const bool supported = Mode() != barista::api::SessionMode::Controller || status.value("controllerSupported").toBool() ||
-        status.value("controllerSetupAvailable").toBool();
+    const bool supported = Mode() != barista::api::SessionMode::Controller || status.capabilities.controller ||
+        status.capabilities.controllerSetup;
     m_start->setEnabled(available && !running && !busy && supported);
     m_pair->setEnabled(available && !running && !busy && supported &&
-        barista::ValidPairCode(m_code->text().toStdString()));
-    m_stop->setEnabled(available && running && !busy && owned && phase != "stopping");
+        barista::api::ParsePairCode(m_code->text().toStdString()).has_value());
+    m_stop->setEnabled(available && running && !busy && owned && phase != barista::api::SessionPhase::Stopping);
     m_trayStart->setEnabled(m_start->isEnabled());
     m_trayStop->setEnabled(m_stop->isEnabled());
     m_tray->setToolTip("Barista — " + m_status->text());
-    m_prepare->setEnabled(available && !running && !busy && status.value("setupSupported").toBool());
+    m_prepare->setEnabled(available && !running && !busy && status.capabilities.systemPreparation);
     m_health["service"]->setText(available ? "Ready" : activating ? "Starting…" : "Not available");
     SetTone(m_health["service"],available ? Tone::Good : activating ? Tone::Warning : Tone::Bad);
-    for (const auto& key : {"networkManagerRunning","polkitRunning","engineInstalled","hostapdInstalled","controllerSupported"}) {
+    const std::array healthChecks{
+        std::pair{"networkManagerRunning", status.health.networkManagerRunning},
+        std::pair{"polkitRunning", status.health.authorizationRunning},
+        std::pair{"engineInstalled", status.health.engineInstalled},
+        std::pair{"hostapdInstalled", status.health.hostapdInstalled},
+        std::pair{"controllerSupported", status.capabilities.controller},
+    };
+    for (const auto& [key,ready] : healthChecks) {
         QString text = "Not checked";
         Tone tone = Tone::Neutral;
         if (available) {
-            const bool ready = status.value(key).toBool();
             if (QString(key) == "networkManagerRunning") { text = ready ? "Running" : "Will start when needed"; tone = ready ? Tone::Good : Tone::Warning; }
             else if (QString(key) == "polkitRunning") { text = ready ? "Running" : "Not available"; tone = ready ? Tone::Good : Tone::Bad; }
             else if (QString(key) == "controllerSupported") {
-                text = ready ? "Ready" : status.value("controllerSetupAvailable").toBool() ? "Can prepare" : "Unavailable";
-                tone = ready ? Tone::Good : status.value("controllerSetupAvailable").toBool() ? Tone::Warning : Tone::Bad;
+                text = ready ? "Ready" : status.capabilities.controllerSetup ? "Can prepare" : "Unavailable";
+                tone = ready ? Tone::Good : status.capabilities.controllerSetup ? Tone::Warning : Tone::Bad;
             } else { text = ready ? "Installed" : "Not available"; tone = ready ? Tone::Good : Tone::Bad; }
         }
         m_health[key]->setText(text);
         SetTone(m_health[key],tone);
     }
-    const auto missing = status.value("missingTools").toStringList();
+    QStringList missing;
+    for (const auto& tool : status.health.missingTools)
+        missing.push_back(QString::fromStdString(tool));
     m_health["tools"]->setText(!available ? "Not checked" : missing.isEmpty() ? "Ready" : "Missing: " + missing.join(", "));
     SetTone(m_health["tools"],!available ? Tone::Neutral : missing.isEmpty() ? Tone::Good : Tone::Bad);
     m_interface->setEnabled(!running && !busy);
@@ -840,11 +841,11 @@ void Window::ApplyStatus(const QVariantMap& status)
     if (!available) {
         pairStatus = "Pairing unavailable — check the service status in Advanced.";
         pairStatusTone = Tone::Bad;
-    } else if (busy || phase == "starting") {
+    } else if (busy || phase == barista::api::SessionPhase::Starting) {
         pairStatus = QString("Starting pairing on %1… Preparing the Wi-Fi adapter. Wait for “Pair now” before using SYNC.")
             .arg(pairInterface);
         pairStatusTone = Tone::Warning;
-    } else if (phase == "pairing") {
+    } else if (phase == barista::api::SessionPhase::Pairing) {
         pairStatus = QString("Pair now — the pairing network is ready on %1. Press SYNC on the GamePad and enter the four symbols selected above. The GamePad submits automatically after the fourth symbol.")
             .arg(pairInterface);
         pairStatusTone = Tone::Good;
@@ -860,16 +861,19 @@ void Window::ApplyStatus(const QVariantMap& status)
     }
     m_pairStatus->setText(pairStatus);
     SetTone(m_pairStatus,pairStatusTone,true);
-    m_pair->setText(busy || phase == "starting" ? "Starting pairing…" :
-        phase == "pairing" ? "Pairing active" : "Start pairing");
+    m_pair->setText(busy || phase == barista::api::SessionPhase::Starting ? "Starting pairing…" :
+        phase == barista::api::SessionPhase::Pairing ? "Pairing active" : "Start pairing");
     m_pairInterface->setEnabled(!running && !busy);
-    m_endpoint->setText(status.value("mediaEndpoint").toString());
+    m_endpoint->setText(mediaEndpoint);
     m_copy->setEnabled(!m_endpoint->text().isEmpty());
-    const auto error = m_operationError.isEmpty() ? status.value("error").toString() : m_operationError;
+    const auto error = m_operationError.isEmpty()
+        ? status.error ? QString::fromStdString(status.error->message) : QString()
+        : m_operationError;
     if (!error.isEmpty()) m_details->setText(error);
     else if (available && !supported) m_details->setText("Controller support cannot be prepared automatically. Check kernel module tools and uinput support.");
     else if (available) m_details->setText(QString("Service: %1\nSession: %2\nMode: %3")
-        .arg(status.value("platform").toString(),phase,status.value("mode").toString()));
+        .arg(QString::fromStdString(status.platform),phaseText,
+            QString::fromLatin1(barista::api::SessionModeName(sessionMode))));
     if (available && !error.isEmpty()) {
         m_hint->setText("The last operation reported a problem. See Advanced for details before trying again.");
         SetTone(m_hint,Tone::Bad);

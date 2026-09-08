@@ -146,7 +146,7 @@ def convert(source, destination, encoder, intra_refresh=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source'); parser.add_argument('output')
-    parser.add_argument('--encoder', type=Path, default=Path(__file__).resolve().parent.parent/'build/drcd/drcd_reencode_replay')
+    parser.add_argument('--encoder', type=Path, default=Path(__file__).resolve().parent.parent/'build/app/drcd_reencode_replay')
     parser.add_argument('--no-intra-refresh', action='store_true',
                         help='Disable only cyclic intra-refresh; retain captured IDR/P decisions')
     args = parser.parse_args()

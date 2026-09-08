@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -66,12 +67,75 @@ enum class SessionPhase
     Failed,
 };
 
+inline constexpr std::string_view SessionPhaseName(SessionPhase phase)
+{
+    switch (phase)
+    {
+    case SessionPhase::Idle:
+        return "idle";
+    case SessionPhase::Preparing:
+        return "preparing";
+    case SessionPhase::Pairing:
+        return "pairing";
+    case SessionPhase::Starting:
+        return "starting";
+    case SessionPhase::Runtime:
+        return "runtime";
+    case SessionPhase::Stopping:
+        return "stopping";
+    case SessionPhase::Failed:
+        return "failed";
+    }
+    return "failed";
+}
+
+inline constexpr std::optional<SessionPhase> ParseSessionPhase(std::string_view value)
+{
+    if (value == "idle")
+        return SessionPhase::Idle;
+    if (value == "preparing")
+        return SessionPhase::Preparing;
+    if (value == "pairing")
+        return SessionPhase::Pairing;
+    if (value == "starting")
+        return SessionPhase::Starting;
+    if (value == "runtime")
+        return SessionPhase::Runtime;
+    if (value == "stopping")
+        return SessionPhase::Stopping;
+    if (value == "failed")
+        return SessionPhase::Failed;
+    return std::nullopt;
+}
+
 struct Capabilities
 {
     bool pairing = false;
     bool controller = false;
     bool systemPreparation = false;
     bool mediaStreaming = false;
+    bool controllerSetup = false;
+};
+
+struct ConnectedApplication
+{
+    bool connected = false;
+    std::string name;
+    uint32_t pid = 0;
+    uint64_t lastSeen = 0;
+    uint64_t connectedAt = 0;
+    std::string idleLogo;
+};
+
+struct ServiceHealth
+{
+    bool networkManagerRunning = false;
+    bool authorizationRunning = false;
+    bool engineInstalled = false;
+    bool hostapdInstalled = false;
+    bool authorizationInstalled = false;
+    bool legacySessionPresent = false;
+    std::vector<std::string> missingTools;
 };
 
 struct GamePad
@@ -83,13 +147,21 @@ struct GamePad
 struct SessionStatus
 {
     uint32_t apiVersion = ApiVersion;
+    bool available = false;
+    bool activating = false;
+    std::string platform;
     SessionPhase phase = SessionPhase::Idle;
-    SessionMode mode = SessionMode::Real;
+    std::optional<SessionMode> mode;
     bool running = false;
     bool gamePadConnected = false;
     std::optional<uint8_t> batteryPercent;
     std::string interfaceName;
+    bool ownedByCaller = false;
+    bool busy = false;
+    std::string mediaEndpoint;
+    ConnectedApplication application;
     Capabilities capabilities;
+    ServiceHealth health;
     std::optional<Error> error;
 };
 
@@ -103,6 +175,45 @@ struct PairRequest : StartSessionRequest
 {
     std::array<uint8_t, 4> code{};
 };
+
+inline bool ValidInterfaceName(std::string_view name)
+{
+    if (name.empty() || name.size() > 15 || name.front() == '-' || name == "." || name == "..")
+        return false;
+    return std::all_of(name.begin(), name.end(), [](unsigned char character) {
+        return (character >= 'a' && character <= 'z') ||
+            (character >= 'A' && character <= 'Z') ||
+            (character >= '0' && character <= '9') ||
+            character == '_' || character == '-' || character == '.';
+    });
+}
+
+inline constexpr std::optional<std::array<uint8_t, 4>> ParsePairCode(std::string_view value)
+{
+    if (value.size() != 4)
+        return std::nullopt;
+    std::array<uint8_t, 4> code{};
+    for (size_t index = 0; index < code.size(); ++index)
+    {
+        if (value[index] < '0' || value[index] > '3')
+            return std::nullopt;
+        code[index] = static_cast<uint8_t>(value[index] - '0');
+    }
+    return code;
+}
+
+inline std::string PairCodeName(const std::array<uint8_t, 4>& code)
+{
+    std::string value;
+    value.reserve(code.size());
+    for (const auto digit : code)
+    {
+        if (digit > 3)
+            return {};
+        value.push_back(static_cast<char>('0' + digit));
+    }
+    return value;
+}
 
 struct RenameGamePadRequest
 {

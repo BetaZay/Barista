@@ -1,7 +1,7 @@
 #pragma once
 #include "api/types.h"
 #include <QObject>
-#include <QVariantMap>
+#include <QVariantList>
 
 // Transport seam: the widget layer has no D-Bus, polkit, uinput or Unix headers.
 class ControlClient : public QObject {
@@ -9,13 +9,17 @@ class ControlClient : public QObject {
 public:
     explicit ControlClient(QObject* parent = nullptr) : QObject(parent) {}
     void Refresh();
-    void Start(const QString& interface, barista::api::SessionMode mode);
-    void Pair(const QString& interface, const QString& code, barista::api::SessionMode mode);
+    void Start(const barista::api::StartSessionRequest& request);
+    void Pair(const barista::api::PairRequest& request);
     void Stop();
     void Prepare();
     void Retry();
+    void RefreshGamePads();
+    void RenameGamePad(const barista::api::RenameGamePadRequest& request);
+    void RemoveGamePad(const barista::api::RemoveGamePadRequest& request);
 signals:
-    void Status(const QVariantMap& status);
+    void Status(const barista::api::SessionStatus& status);
+    void GamePads(const std::vector<barista::api::GamePad>& gamePads);
     void Error(const QString& message);
     void Pending(bool pending);
     void Stopped(bool success);

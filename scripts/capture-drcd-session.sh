@@ -44,7 +44,7 @@ ip_output_path=${output_path%.pcap}-ip.pcap
 if (($# > 0)); then
 	shift
 fi
-drcd_binary=$project_dir/build/drcd/drcd
+drcd_binary=$project_dir/build/app/drcd
 monitor_interface=${DRC_TSF_MONITOR_IFACE:-drcdtsf}
 
 if (($# == 0)); then

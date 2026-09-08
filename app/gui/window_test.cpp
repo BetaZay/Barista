@@ -32,18 +32,23 @@ int main(int argc, char** argv)
         tabs->setCurrentIndex(2); Check(advanced->isVisible(),"advanced tab opens");
         Check(window.findChild<QLineEdit*>("mediaEndpoint")->isReadOnly(),"automatic socket is not editable");
         Check(!window.findChild<QPushButton*>("prepareButton")->isEnabled(),"no repair without service");
-        QVariantMap status{{"available",true},{"running",false},{"controllerSupported",true},{"phase","idle"}};
-        auto apply = [&] { Check(QMetaObject::invokeMethod(&window,"ApplyStatus",Qt::DirectConnection,Q_ARG(QVariantMap,status)),"apply status"); };
+        barista::api::SessionStatus status;
+        status.available = true;
+        status.capabilities.controller = true;
+        auto apply = [&] {
+            Check(QMetaObject::invokeMethod(&window,"ApplyStatus",Qt::DirectConnection,
+                Q_ARG(barista::api::SessionStatus,status)),"apply status");
+        };
         apply(); Check(start->isEnabled() && pair->isEnabled() && !stop->isEnabled(),"idle actions");
         auto* pairingStatus = window.findChild<QLabel*>("pairingStatus");
         Check(pairingStatus && pairingStatus->text().contains("Ready to start pairing"),"pairing is initially ready");
-        status["busy"] = true; status["phase"] = "starting"; apply();
+        status.busy = true; status.phase = barista::api::SessionPhase::Starting; apply();
         Check(pairingStatus->text().contains("Starting pairing") && !pair->isEnabled(),"pairing startup is explained");
-        status["busy"] = false; status["running"] = true; status["phase"] = "pairing"; apply();
+        status.busy = false; status.running = true; status.phase = barista::api::SessionPhase::Pairing; apply();
         Check(pairingStatus->text().contains("Pair now") && pairingStatus->text().contains("automatically") &&
             pair->text() == "Pairing active","pairing readiness is explicit");
-        status["running"] = false; status["phase"] = "idle"; apply();
-        status["batteryAvailable"] = true; status["battery"] = 100; apply();
+        status.running = false; status.phase = barista::api::SessionPhase::Idle; apply();
+        status.batteryPercent = 100; apply();
         Check(window.findChild<QLabel*>("gamepadBattery") && window.findChild<QLabel*>("gamepadBattery")->text() == "100%","GamePad battery is shown");
         int operations = 0;
         QObject::connect(window.findChild<ControlClient*>(),&ControlClient::Pending,[&](bool pending) { if (pending) ++operations; });
@@ -71,13 +76,13 @@ int main(int argc, char** argv)
             Check(warned && safeDefault,"Wi-Fi warning with Cancel as default");
             Check(operations == 0,"cancel must not call backend");
         }
-        status["running"] = true; status["ownedByCaller"] = true; apply();
+        status.running = true; status.ownedByCaller = true; apply();
         Check(!start->isEnabled() && !pair->isEnabled() && stop->isEnabled(),"owned running session");
         auto* sessionStatus = window.findChild<QLabel*>("sessionStatus");
         Check(sessionStatus && sessionStatus->styleSheet().contains("#b3261e"),"waiting GamePad is red");
-        status["connected"] = true; apply();
+        status.gamePadConnected = true; apply();
         Check(sessionStatus->text().contains("connected") && sessionStatus->styleSheet().contains("#207a3b"),"connected GamePad is green");
-        status["connected"] = false;
+        status.gamePadConnected = false;
         auto* background = window.findChild<QCheckBox*>("backgroundCheck");
         Check(background && background->isChecked(),"background enabled by default");
         window.close();
@@ -92,10 +97,10 @@ int main(int argc, char** argv)
         });
         window.close();
         Check(quitPrompt && window.isVisible() && operations == 0,"cancel quit keeps session");
-        status["ownedByCaller"] = false; apply(); Check(!stop->isEnabled(),"cannot stop another session");
-        status["ownedByCaller"] = true; status["phase"] = "stopping"; apply(); Check(!stop->isEnabled(),"no repeated stops");
-        status["running"] = false; status["busy"] = true; apply(); Check(!start->isEnabled() && !pair->isEnabled(),"pending authorization");
-        status["busy"] = false; status["setupSupported"] = true; apply();
+        status.ownedByCaller = false; apply(); Check(!stop->isEnabled(),"cannot stop another session");
+        status.ownedByCaller = true; status.phase = barista::api::SessionPhase::Stopping; apply(); Check(!stop->isEnabled(),"no repeated stops");
+        status.running = false; status.busy = true; apply(); Check(!start->isEnabled() && !pair->isEnabled(),"pending authorization");
+        status.busy = false; status.capabilities.systemPreparation = true; apply();
         auto* prepare = window.findChild<QPushButton*>("prepareButton");
         Check(prepare->isEnabled(),"idle system can prepare");
         bool setupPrompt = false;
