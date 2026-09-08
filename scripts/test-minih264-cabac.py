@@ -7,13 +7,13 @@ import tempfile
 
 
 def main():
-    probe, ffmpeg = sys.argv[1:]
+    probe, ffmpeg = sys.argv[1:3]
     with tempfile.TemporaryDirectory(prefix="barista-cabac-") as directory:
         root = pathlib.Path(directory)
         cavlc = root / "cavlc.h264"
         cabac = root / "cabac.h264"
         reconstruction = root / "reconstruction.yuv"
-        subprocess.run([probe, str(cavlc), str(cabac), str(reconstruction)], check=True)
+        subprocess.run([probe, str(cavlc), str(cabac), str(reconstruction), *sys.argv[3:]], check=True)
         decoded = []
         for source in (cavlc, cabac):
             output = source.with_suffix(".yuv")

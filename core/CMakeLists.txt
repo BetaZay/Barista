@@ -145,6 +145,10 @@ if(BUILD_TESTING)
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test-minih264-cabac.py
                     $<TARGET_FILE:drcd_minih264_cabac_probe> ${DRCD_TEST_FFMPEG})
             set_tests_properties(drcd_minih264_cabac_reconstruction PROPERTIES TIMEOUT 60)
+            add_test(NAME drcd_minih264_planar_reconstruction
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test-minih264-cabac.py
+                    $<TARGET_FILE:drcd_minih264_cabac_probe> ${DRCD_TEST_FFMPEG} planar)
+            set_tests_properties(drcd_minih264_planar_reconstruction PROPERTIES TIMEOUT 60)
         endif()
 
         add_executable(drcd_format_slot_tests tests/format_slot_scheduler_tests.cpp)

@@ -13,6 +13,7 @@ struct EncoderOptions
     bool intraRefresh = true;
     bool legacyQuality = false;
     bool preserveReplayFrameTypes = false;
+    bool disablePlanarPrediction = true;
 };
 
 EncoderOptions OptionsFromEnvironment(bool preserveReplayFrameTypes = false);

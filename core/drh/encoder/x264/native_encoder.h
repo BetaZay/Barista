@@ -20,7 +20,7 @@ public:
         parameters.num_layers = 1;
         parameters.const_input_flag = 1;
         parameters.b_drh_mode = 1;
-        parameters.disable_planar_prediction_flag = 1;
+        parameters.disable_planar_prediction_flag = options.disablePlanarPrediction;
         int persistentSize = 0, scratchSize = 0;
         if (H264E_sizeof(&parameters, &persistentSize, &scratchSize))
             return;

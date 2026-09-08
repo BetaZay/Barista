@@ -10622,7 +10622,35 @@ static void mb_encode(h264e_enc_t *enc, int enc_type)
     if (enc->mb.type >= 5)
     {
         pix_t *pred = enc->ptest;
-        h264e_intra_predict_chroma(pred, left + 16, top + 16, enc->mb.i16.pred_mode_luma);
+        if (enc->mb.i16.pred_mode_luma == 3)
+        {
+            // Chroma plane prediction (8x8). Upstream's architecture-specific
+            // predictors only implement vertical, horizontal and DC modes.
+            for (int plane = 0; plane < 2; ++plane)
+            {
+                const pix_t *l = left + 16 + plane*8;
+                const pix_t *t = top + 16 + plane*8;
+                const int corner = enc->top_line[33 + plane];
+                int h = 0, v = 0;
+                for (int i = 1; i <= 4; ++i)
+                {
+                    h += i*(t[3 + i] - (i == 4 ? corner : t[3 - i]));
+                    v += i*(l[3 + i] - (i == 4 ? corner : l[3 - i]));
+                }
+                const int a = 16*(l[7] + t[7]);
+                const int b = (17*h + 16) >> 5;
+                const int c = (17*v + 16) >> 5;
+                for (int y = 0; y < 8; ++y)
+                    for (int x = 0; x < 8; ++x)
+                    {
+                        const int value = (a + b*(x - 3) + c*(y - 3) + 16) >> 5;
+                        pred[y*16 + plane*8 + x] = (pix_t)(value < 0 ? 0 : value > 255 ? 255 : value);
+                    }
+            }
+        } else
+        {
+            h264e_intra_predict_chroma(pred, left + 16, top + 16, enc->mb.i16.pred_mode_luma);
+        }
     } else
     {
         interpolate_chroma(enc, mb_abs_mv(enc, enc->mb.mv[0]));

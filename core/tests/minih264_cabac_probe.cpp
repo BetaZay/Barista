@@ -9,17 +9,20 @@
 #include <stdexcept>
 int main(int argc, char** argv)
 {
-    if (argc != 4)
+    if (argc != 4 && argc != 5)
         throw std::runtime_error("expected CAVLC, CABAC and reconstruction output paths");
     using namespace barista::drh::x264;
-    NativeEncoder native(EncoderOptions{});
+    EncoderOptions options;
+    options.disablePlanarPrediction = argc != 5 || std::string(argv[4]) != "planar";
+    NativeEncoder native(options);
     std::string error;
     if (!native.IsValid() || native.Encode({}, false, error) || error.empty())
         throw std::runtime_error("native encoder must reject incomplete pictures");
     H264E_create_param_t create{};
     create.width = 864; create.height = 480;
     create.num_layers = 1; create.const_input_flag = 1;
-    create.b_drh_mode = 1; create.disable_planar_prediction_flag = 1;
+    create.b_drh_mode = 1;
+    create.disable_planar_prediction_flag = options.disablePlanarPrediction;
     int persistentSize, scratchSize;
     if (H264E_sizeof(&create, &persistentSize, &scratchSize))
         throw std::runtime_error("invalid encoder parameters");
