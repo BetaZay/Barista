@@ -11255,11 +11255,11 @@ static void encode_slice(h264e_enc_t *enc, int frame_type, int long_term_idx_use
     int i, k;
     encode_slice_header(enc, frame_type, long_term_idx_use, long_term_idx_update, pps_id,enc_type);
     // encode frame
-    do
+    while (enc->mb.y < enc->frame.nmby)
     {   // encode row
         do
         {   // encode macroblock
-            if (enc->run_param.desired_nalu_bytes &&
+            if (!enc->param.b_drh_mode && enc->run_param.desired_nalu_bytes &&
                 h264e_bs_get_pos_bits(enc->bs) > enc->run_param.desired_nalu_bytes*8u)
             {
                 // start new slice
@@ -11290,7 +11290,17 @@ static void encode_slice(h264e_enc_t *enc, int frame_type, int long_term_idx_use
         *((uint32_t*)(enc->nnz)) = *((uint32_t*)(enc->nnz + 4)) = 0x01010101 * NNZ_NA; // left edge of NNZ predictor
         enc->i4x4mode[0] = -1;
 
-    } while (++enc->mb.y < enc->frame.nmby);
+        enc->mb.y++;
+        if (enc->param.b_drh_mode && enc->mb.y < enc->frame.nmby && (enc->mb.y % 6) == 0)
+        {
+            if (enc->mb.skip_run)
+            {
+                UE(enc->mb.skip_run);
+            }
+            nal_end(enc);
+            encode_slice_header(enc, frame_type, long_term_idx_use, long_term_idx_update, pps_id, enc_type);
+        }
+    }
 
     if (enc->mb.skip_run)
     {

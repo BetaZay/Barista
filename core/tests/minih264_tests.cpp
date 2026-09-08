@@ -74,6 +74,55 @@ bool Contains(const std::vector<int> &types, int type)
     return std::find(types.begin(), types.end(), type) != types.end();
 }
 
+std::size_t Count(const std::vector<int> &types, int type)
+{
+    return static_cast<std::size_t>(std::count(types.begin(), types.end(), type));
+}
+
+unsigned ReadUnsignedExpGolomb(const std::uint8_t *data, int size)
+{
+    std::vector<std::uint8_t> rbsp;
+    int zeroCount = 0;
+    for (int offset = 1; offset < size; ++offset)
+    {
+        const std::uint8_t byte = data[offset];
+        if (zeroCount == 2 && byte == 3)
+        {
+            zeroCount = 0;
+            continue;
+        }
+        rbsp.push_back(byte);
+        zeroCount = byte == 0 ? zeroCount + 1 : 0;
+    }
+
+    unsigned leadingZeros = 0;
+    std::size_t bit = 0;
+    while (bit < rbsp.size() * 8U && ((rbsp[bit / 8U] >> (7U - bit % 8U)) & 1U) == 0)
+    {
+        ++leadingZeros;
+        ++bit;
+    }
+    assert(bit < rbsp.size() * 8U);
+    ++bit;
+
+    unsigned suffix = 0;
+    for (unsigned index = 0; index < leadingZeros; ++index, ++bit)
+    {
+        assert(bit < rbsp.size() * 8U);
+        suffix = (suffix << 1U) | ((rbsp[bit / 8U] >> (7U - bit % 8U)) & 1U);
+    }
+    return ((1U << leadingZeros) - 1U) + suffix;
+}
+
+void CaptureSliceStart(const unsigned char *data, int size, void *token)
+{
+    if (size > 1 && (data[0] & 0x1f) == 5)
+    {
+        static_cast<std::vector<unsigned> *>(token)->push_back(
+            ReadUnsignedExpGolomb(data, size));
+    }
+}
+
 void FillFrame(std::uint8_t *frame, int phase)
 {
     for (int y = 0; y < kHeight; ++y)
@@ -167,14 +216,20 @@ int main()
     run.frame_type = H264E_FRAME_TYPE_KEY;
     run.qp_min = 20;
     run.qp_max = 20;
+    std::vector<unsigned> sliceStarts;
+    run.nalu_callback = CaptureSliceStart;
+    run.nalu_callback_token = &sliceStarts;
     FillFrame(frame.Data(), 7);
     assert(H264E_encode(reinterpret_cast<H264E_persist_t *>(drhPersistent.Data()),
                         reinterpret_cast<H264E_scratch_t *>(drhScratch.Data()), &run, &input,
                         &encoded, &encodedSize) == H264E_STATUS_SUCCESS);
     const std::vector<std::uint8_t> forcedQuantizer(encoded, encoded + encodedSize);
+    assert(Count(NalTypes(encoded, encodedSize), 5) == 5);
+    assert((sliceStarts == std::vector<unsigned>{0, 324, 648, 972, 1296}));
 
     assert(H264E_init(reinterpret_cast<H264E_persist_t *>(drhPersistent.Data()), &create) ==
            H264E_STATUS_SUCCESS);
+    sliceStarts.clear();
     run.qp_min = 32;
     run.qp_max = 32;
     FillFrame(frame.Data(), 7);
@@ -182,6 +237,8 @@ int main()
                         reinterpret_cast<H264E_scratch_t *>(drhScratch.Data()), &run, &input,
                         &encoded, &encodedSize) == H264E_STATUS_SUCCESS);
     assert(forcedQuantizer == std::vector<std::uint8_t>(encoded, encoded + encodedSize));
+    assert(Count(NalTypes(encoded, encodedSize), 5) == 5);
+    assert((sliceStarts == std::vector<unsigned>{0, 324, 648, 972, 1296}));
 
     return 0;
 }
