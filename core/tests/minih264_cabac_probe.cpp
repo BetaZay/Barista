@@ -14,6 +14,7 @@ int main(int argc, char** argv)
     using namespace barista::drh::x264;
     EncoderOptions options;
     options.disablePlanarPrediction = argc != 5 || std::string(argv[4]) != "planar";
+    options.fastSearch = argc == 5 && std::string(argv[4]) == "fast";
     NativeEncoder native(options);
     std::string error;
     if (!native.IsValid() || native.Encode({}, false, error) || error.empty())
@@ -56,7 +57,8 @@ int main(int argc, char** argv)
         }
     H264E_io_yuv_t input{{pixels.data(), pixels.data() + 864 * 480, pixels.data() + 864 * 480 * 5 / 4}, {864,432,432}};
     H264E_run_param_t run{};
-    run.encode_speed = 5; run.frame_type = idr ? H264E_FRAME_TYPE_KEY : H264E_FRAME_TYPE_P;
+    run.encode_speed = options.fastSearch ? 9 : 5;
+    run.frame_type = idr ? H264E_FRAME_TYPE_KEY : H264E_FRAME_TYPE_P;
     run.qp_min = run.qp_max = 32;
     run.drh_cabac_context = &slice;
     unsigned char* coded; int size;
