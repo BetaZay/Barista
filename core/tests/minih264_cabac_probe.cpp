@@ -2,6 +2,7 @@
 #include "drh/encoder/x264/bit_writer.h"
 #include <fstream>
 #include "drh/encoder/x264/minih264e.h"
+#include "drh/encoder/x264/native_encoder.h"
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -10,6 +11,10 @@ int main(int argc, char** argv)
     if (argc != 3)
         throw std::runtime_error("expected CAVLC and CABAC output paths");
     using namespace barista::drh::x264;
+    NativeEncoder native(EncoderOptions{});
+    std::string error;
+    if (!native.IsValid() || native.Encode({}, false, error) || error.empty())
+        throw std::runtime_error("native encoder must reject incomplete pictures");
     H264E_create_param_t create{};
     create.width = 864; create.height = 480;
     create.num_layers = 1; create.const_input_flag = 1;
@@ -27,6 +32,8 @@ int main(int argc, char** argv)
     baseline.exceptions(std::ios::badbit | std::ios::failbit);
     out.exceptions(std::ios::badbit | std::ios::failbit);
     unsigned number = 0;
+    std::optional<barista::drh::EncodedVideoFrame> retainedFrame;
+    std::vector<uint8_t> retainedBytes;
     for (unsigned index = 0; index < 300; ++index)
     {
     const bool idr = index == 0 || index == 270 || index == 271;
@@ -51,6 +58,29 @@ int main(int argc, char** argv)
         throw std::runtime_error("encode failed");
     baseline.write(reinterpret_cast<char*>(coded), size);
     auto frame = slice.Finish(index);
+    // The first frame must become an IDR without an explicit request. Rejected
+    // inputs must not advance either the reference picture or frame numbering.
+    auto nativeFrame = native.Encode(pixels, idr && index != 0, error);
+    if (!nativeFrame || !error.empty() || nativeFrame->idr != idr ||
+        nativeFrame->chunks.size() != frame.chunks.size())
+        throw std::runtime_error("native adapter failed: " + error);
+    for (size_t chunk = 0; chunk < frame.chunks.size(); ++chunk)
+    {
+        const auto& actual = nativeFrame->chunks[chunk];
+        const auto& expected = frame.chunks[chunk];
+        if (actual.bytes != expected.bytes || actual.nalType != expected.nalType ||
+            actual.referencePriority != expected.referencePriority ||
+            actual.firstMacroblock != expected.firstMacroblock ||
+            actual.lastMacroblock != expected.lastMacroblock)
+            throw std::runtime_error("native adapter changed CABAC output");
+    }
+    if (index == 0)
+    {
+        retainedBytes = nativeFrame->chunks[0].bytes;
+        retainedFrame = std::move(nativeFrame);
+    }
+    if (retainedFrame->chunks[0].bytes != retainedBytes)
+        throw std::runtime_error("encoding overwrote a previously returned frame");
     const uint32_t header = idr ? 0x25b804ff : 0x21e003ff | ((number & 255) << 13);
     std::vector<uint8_t> data{uint8_t(header >> 24),uint8_t(header >> 16),uint8_t(header >> 8),uint8_t(header)};
     for (auto& chunk : frame.chunks)
