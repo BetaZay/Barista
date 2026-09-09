@@ -413,6 +413,13 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
     env.insert("BARISTA_IDLE_I420","/run/barista/idle.i420");
     env.insert("BARISTA_CLIENT_UID",QString::number(mode == barista::api::SessionMode::Controller ? 0 : uid));
     env.insert("DRCD_LOG_STDERR","1");
+    // TEMPORARY full-rate comparison: remove the format-only recovery slot,
+    // keeping independent frames and init signaling on every IDR unchanged.
+    // Compress packet pacing to 8ms to test additional receiver headroom.
+    env.insert("DRCD_ALL_IDR","1");
+    env.insert("DRCD_IDR_FULL_RATE","1");
+    env.insert("DRCD_COMPACT_PACING","1");
+    env.insert("DRCD_IDR_INIT","1");
     QStringList args{"--socket",ControlSocket,"--interface",interface};
     if (code.isEmpty()) args << "--np";
     else args << "--pair-code" << code << "--pair";

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <span>
@@ -73,7 +74,9 @@ public:
 
 	bool start(const RuntimeTransportConfig& config, std::string& error);
 	void stop();
-	bool send(RuntimeChannel channel, std::span<const uint8_t> payload, std::string& error);
+	bool send(RuntimeChannel channel, std::span<const uint8_t> payload, std::string& error,
+		std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point{},
+		bool* temporary_failure = nullptr);
 	std::optional<RuntimePacket> receive();
 	std::optional<std::string> consume_status_event();
 	bool consume_ready_event();

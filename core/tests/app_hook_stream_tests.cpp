@@ -73,6 +73,7 @@ int main()
     bool previous_idr = false;
     unsigned recovery_idrs = 0;
     bool recovery_flags_ok = true;
+    bool initial_video_frame = false;
     std::vector<uint32_t> video_ages;
     std::vector<uint32_t> format_ages;
     std::map<uint32_t, Clock::time_point> format_times, video_times;
@@ -80,6 +81,10 @@ int main()
     std::vector<uint32_t> audio_ages;
     const char* all_idr_option = std::getenv("DRCD_ALL_IDR");
     const bool all_idr = all_idr_option && std::strcmp(all_idr_option, "1") == 0;
+    const char* full_rate_option = std::getenv("DRCD_IDR_FULL_RATE");
+    const bool full_rate_idr = all_idr && full_rate_option && std::strcmp(full_rate_option, "1") == 0;
+    const char* short_gop_option = std::getenv("DRCD_SHORT_GOP");
+    const bool short_gop = short_gop_option && std::strcmp(short_gop_option, "1") == 0;
     unsigned predicted_frames = 0;
     bool activated = false, input_received = false, audible_pcm = false;
     std::array<uint8_t, 128> input{}; input[2] = 0x80;
@@ -144,10 +149,11 @@ int main()
                     chunk_start = packet[2] & 0x20;
                     if (chunk_start) ++receive_chunk;
                 }
-                if (recovery_test && fd == video && n >= 16)
+                if (fd == video && n >= 16)
                 {
                     const bool idr = std::find(packet + 8, packet + 16, uint8_t{0x80}) != packet + 16;
-                    recovery_flags_ok &= bool(packet[2] & 0x80) == idr;
+                    if (packet[2] & 0x40) initial_video_frame = frames == 0;
+                    recovery_flags_ok &= bool(packet[2] & 0x80) == (initial_video_frame || (recovery_test && idr));
                     if (idr && (packet[2] & 0x40)) ++recovery_idrs;
                 }
                 if (fd == video && n >= 16 && (packet[2] & 0x40))
@@ -194,7 +200,9 @@ int main()
     const char* send_time = std::getenv("DRCD_SEND_TIME_VIDEO");
     bool timing_ok = true;
     // All-IDR diagnostics intentionally spend every other slot on formats only.
-    const unsigned minimum_frames = all_idr ? 75 : 140;
+    // Every eighth IDR adds a format-only slot: ideal short-GOP delivery is
+    // 8/9 of the normal cadence. Keep the same timing tolerance as baseline.
+    const unsigned minimum_frames = full_rate_idr ? 140 : all_idr ? 75 : short_gop ? 125 : 140;
     if (!send_time || std::strcmp(send_time, "0") != 0)
     {
         std::sort(video_ages.begin(), video_ages.end());
@@ -231,9 +239,20 @@ int main()
     std::cout << "pcm_median_age_us=" << audio_median << " predicted_frames=" << predicted_frames << '\n';
     timing_ok &= !audio_ages.empty() && audio_median >= expected_audio_age && audio_median < expected_audio_age + 6000;
     const bool reference_chain_ok = all_idr ? predicted_frames == 0 && recovery_idrs == frames : predicted_frames > 0;
+    if (short_gop && !all_idr)
+    {
+        unsigned chain = 0;
+        for (const auto& entry : video_order)
+        {
+            chain = entry.second ? 0 : chain + 1;
+            if (chain > 7) { std::cerr << "short GOP exceeded seven P frames\n"; return 1; }
+        }
+    }
     bool pacing_ok = chunk_timestamps_ok && packet_order_ok;
     if (pacing_test)
     {
+        const char* compact_option = std::getenv("DRCD_COMPACT_PACING");
+        const bool compact = compact_option && std::strcmp(compact_option, "1") == 0;
         constexpr int64_t expected[]{0, 3000, 6000, 9000, 11000};
         for (size_t i = 0; i < chunk_offsets.size(); ++i)
         {
@@ -241,7 +260,8 @@ int main()
             std::sort(offsets.begin(), offsets.end());
             const auto median = offsets.empty() ? -1 : offsets[offsets.size()/2];
             std::cout << "chunk=" << i << " median_offset_us=" << median << '\n';
-            pacing_ok &= offsets.size() >= minimum_frames - 5 && std::abs(median - expected[i]) < 1800;
+            const auto target = compact ? expected[i] * 8 / 13 : expected[i];
+            pacing_ok &= offsets.size() >= minimum_frames - 5 && std::abs(median - target) < 1800;
         }
     }
     if (pause_test)
@@ -251,7 +271,9 @@ int main()
         const auto idr_gap = after_idr_gaps.empty() ? 0 : after_idr_gaps[after_idr_gaps.size()/2];
         const auto p_gap = after_p_gaps.empty() ? 0 : after_p_gaps[after_p_gaps.size()/2];
         std::cout << "post_idr_median_us=" << idr_gap << " post_p_median_us=" << p_gap << '\n';
-        spacing_ok = after_idr_gaps.size() >= 4 && idr_gap >= 30000 && idr_gap < 43000;
+        spacing_ok = after_idr_gaps.size() >= 4 && (full_rate_idr
+            ? idr_gap >= 14000 && idr_gap < 23000
+            : idr_gap >= 30000 && idr_gap < 43000);
         if (!all_idr)
             spacing_ok &= after_p_gaps.size() >= 100 && p_gap >= 14000 && p_gap < 23000;
     }
@@ -269,7 +291,7 @@ int main()
             for (const auto& [format_stamp, when] : format_times)
                 if (uint32_t(format_stamp - previous_stamp) < uint32_t(stamp - previous_stamp) &&
                     format_stamp != previous_stamp && !video_times.contains(format_stamp)) ++empty_formats;
-            recovery_slots_ok &= empty_formats >= 1;
+            if (!full_rate_idr) recovery_slots_ok &= empty_formats >= 1;
             // Source activation may explicitly force a second startup IDR.
             if (!all_idr && i > 4) recovery_slots_ok &= !is_idr;
             ++recovery_gaps;
@@ -278,5 +300,6 @@ int main()
               << " recovery_slots_ok=" << recovery_slots_ok << '\n';
     return frames >= minimum_frames && format_times.size() >= 165 && recovery_slots_ok &&
         pcm_packets >= 300 && input_received && audible_pcm && timing_ok &&
-        reference_chain_ok && spacing_ok && pacing_ok && (!recovery_test || (recovery_idrs >= 4 && recovery_flags_ok)) ? 0 : 1;
+        reference_chain_ok && spacing_ok && pacing_ok && recovery_flags_ok &&
+        (!recovery_test || recovery_idrs >= 4) ? 0 : 1;
 }

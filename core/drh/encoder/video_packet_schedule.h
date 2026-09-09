@@ -25,7 +25,7 @@ inline constexpr uint32_t FormatVideoTimestamp(uint32_t ap_tsf)
 // Keep single-packet chunks at their original start deadline. Spread multi-packet
 // chunks in both IDR and P frames through the existing IDR completion windows.
 inline std::chrono::microseconds VideoPacketOffset(size_t chunk,
-    size_t packet, size_t count)
+    size_t packet, size_t count, bool compact = false)
 {
     constexpr std::array<int64_t, 5> starts{0, 3000, 6000, 9000, 11000};
     constexpr std::array<int64_t, 5> ends{2500, 5000, 7500, 10000, 13000};
@@ -33,6 +33,8 @@ inline std::chrono::microseconds VideoPacketOffset(size_t chunk,
         throw std::invalid_argument("invalid video packet schedule");
     const auto extra = count > 1 ?
         (ends[chunk] - starts[chunk]) * static_cast<int64_t>(packet) / static_cast<int64_t>(count-1) : 0;
-    return std::chrono::microseconds(starts[chunk] + extra);
+    // Experimental 8ms delivery window, preserving chunk/packet ordering.
+    const auto offset = starts[chunk] + extra;
+    return std::chrono::microseconds(compact ? offset * 8 / 13 : offset);
 }
 }

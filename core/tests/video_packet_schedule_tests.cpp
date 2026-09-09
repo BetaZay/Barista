@@ -25,6 +25,8 @@ int main()
             for (size_t packet=0; packet<count; ++packet)
             {
                 auto offset=VideoPacketOffset(chunk,packet,count).count();
+                const auto compact=VideoPacketOffset(chunk,packet,count,true).count();
+                if (compact != offset * 8 / 13 || compact > 8000) return 1;
                 if (offset<previous || offset>=16683) return 1;
                 if ((count==1 || packet==0) && offset!=starts[chunk]) return 1;
                 if (count>1 && packet==count-1 && offset!=ends[chunk]) return 1;
@@ -48,6 +50,8 @@ int main()
             ++packets;
         }
     if (packets!=44 || previous!=13000) return 1;
+    if (VideoPacketOffset(4, 7, 8, true) != microseconds(8000)) return 1;
+    if (origin + VideoPacketOffset(4, 7, 8, true) >= next_format) return 1;
     for (auto bad : {0,1,2})
     {
         try { VideoPacketOffset(bad==0 ? 5 : 0,bad==1 ? 1 : 0,bad==2 ? 0 : 1); return 1; }

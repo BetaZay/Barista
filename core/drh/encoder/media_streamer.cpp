@@ -3,6 +3,7 @@
 #include "drh/encoder/x264/encoder.h"
 #include "real_replay.h"
 #include "serial_video_sender.h"
+#include "video_send_recovery.h"
 #include "format_slot_scheduler.h"
 #include "video_packet_schedule.h"
 
@@ -615,13 +616,25 @@ void MediaStreamer::video_loop()
 	const bool send_time_video = DefaultEnabled("DRCD_SEND_TIME_VIDEO");
 	const bool recovery_init = DefaultEnabled("DRCD_IDR_INIT");
 	const bool chunk_pacing = DefaultEnabled("DRCD_CHUNK_PACING");
+	const char* compact_option = std::getenv("DRCD_COMPACT_PACING");
+	const bool compact_pacing = compact_option && std::strcmp(compact_option, "1") == 0;
 	const char* all_idr_option = std::getenv("DRCD_ALL_IDR");
 	const bool all_idr = all_idr_option && std::strcmp(all_idr_option, "1") == 0;
+	const char* full_rate_option = std::getenv("DRCD_IDR_FULL_RATE");
+	const bool full_rate_idr = all_idr && full_rate_option && std::strcmp(full_rate_option, "1") == 0;
+	if (full_rate_idr)
+		m_transport.report_status("Video experiment: consecutive IDRs without format-only recovery gaps; P recovery unchanged");
+	const char* short_gop_option = std::getenv("DRCD_SHORT_GOP");
+	const bool short_gop = short_gop_option && std::strcmp(short_gop_option, "1") == 0;
+	if (short_gop)
+		m_transport.report_status("Video experiment: IDR every eight frames; seven-frame P reference chain");
 	m_transport.report_status(all_idr
 		? "Video experiment: every frame independently encoded as IDR; increased encode/radio load expected"
 		: "Video reference chain: baseline IDR/P encoding");
 	m_transport.report_status(chunk_pacing
-		? "Video pacing: 0/3/6/9/11ms chunk starts; multi-packet IDR/P chunks spread through 2.5/5/7.5/10/13ms"
+		? (compact_pacing
+			? "Video experiment: compact packet pacing; 8ms delivery window instead of 13ms"
+			: "Video pacing: 0/3/6/9/11ms chunk starts; multi-packet IDR/P chunks spread through 2.5/5/7.5/10/13ms")
 		: "Video chunk pacing disabled: whole-frame burst");
 	m_transport.report_status("Video recovery: IDR / format-only slot / P; coalesce until resumed P delivery; DRCD_IDR_PAUSE retired");
 	m_transport.report_status(recovery_init
@@ -642,6 +655,7 @@ void MediaStreamer::video_loop()
 		? "Video encoder: MiniH264 fast search (preset 9)"
 		: "Video encoder: MiniH264 default search (preset 5)");
 	m_transport.report_status("Video recovery: requested IDRs; cyclic intra-refresh is not implemented");
+	VideoSendRecovery send_recovery;
 	SerialVideoSender sender;
 	FormatSlotScheduler formats([&](std::optional<uint32_t> legacy) {
 		const uint32_t stamp = legacy.value_or(FormatVideoTimestamp(m_transport.timestamp_us()));
@@ -652,7 +666,7 @@ void MediaStreamer::video_loop()
 		return stamp;
 	});
 	m_transport.report_status("DRH encoder v2: finalized CABAC slice, logical six-row chunks, two-byte read-ahead, owned output");
-	m_transport.report_status("Video pipeline: independent serial sender; at most one next frame encoding; no frame drops");
+	m_transport.report_status("Video pipeline: independent serial sender; bounded send retries and IDR recovery on backpressure");
 	while (!m_stop.load() && (m_black_frames || m_bridge || ReadExact(pipe, frame)))
 	{
 		if (m_bridge)
@@ -685,7 +699,8 @@ void MediaStreamer::video_loop()
 			interval_resync_events += resync_requested;
 			const bool coalesced = resync_requested && recovering;
 			interval_coalesced_events += coalesced;
-			force_idr = all_idr || (resync_requested && !coalesced) || force_idr;
+			force_idr = send_recovery.ConsumeRequest() || all_idr || (short_gop && frame_number % 8 == 0) ||
+				(resync_requested && !coalesced) || force_idr;
 			if (force_idr) { recovering = true; ++recovery_generation; }
 			frame_recovery_generation = recovery_generation;
 		}
@@ -746,7 +761,7 @@ void MediaStreamer::video_loop()
 					chunk_index + 1 == chunks.size() && last_packet, idr, reference_options);
 				sequence &= 0x3ff;
 				frame_packets.push_back(packet);
-				packet_offsets.push_back(VideoPacketOffset(chunk_index, chunk_packet++, packet_count));
+				packet_offsets.push_back(VideoPacketOffset(chunk_index, chunk_packet++, packet_count, compact_pacing));
 				remaining = remaining.subspan(count);
 				first_packet = false;
 			}
@@ -755,7 +770,9 @@ void MediaStreamer::video_loop()
 		const bool dump_frame = !artifact_dumped && idr;
 		artifact_dumped |= dump_frame;
 		FormatSlotScheduler::Slot slot;
-		if (!formats.Reserve(idr, send_time_video ? std::nullopt : std::optional(timestamp), slot))
+		// Gap suppression is limited to all-IDR diagnostics. Normal IDR/P
+		// recovery keeps its format-only slot and reference ordering unchanged.
+		if (!formats.Reserve(idr && !full_rate_idr, send_time_video ? std::nullopt : std::optional(timestamp), slot))
 		{
 			m_transport.report_status("Format scheduler failed; stopping media");
 			m_stop.store(true);
@@ -774,6 +791,9 @@ void MediaStreamer::video_loop()
 		std::this_thread::sleep_until(frame_deadline);
 		if (m_stop.load())
 			return;
+		// A P frame may already have been encoded when its predecessor failed.
+		// Do not send that dependent frame; request a fresh independent frame.
+		if (!send_recovery.CanSend(idr)) return;
 		const auto frame_send_started = std::chrono::steady_clock::now();
 		const auto late_us = std::chrono::duration_cast<std::chrono::microseconds>(
 			frame_send_started - frame_deadline).count();
@@ -781,6 +801,8 @@ void MediaStreamer::video_loop()
 			m_transport.report_status("Video start late by " + std::to_string(late_us) +
 				"us; shared format/video timestamp preserved; late_starts=" + std::to_string(late_video_starts));
 		bool sends_ok = true;
+		bool temporary_failure = false;
+		const auto send_deadline = frame_deadline + std::chrono::microseconds(10000);
 		for (size_t packet_index = 0; packet_index < frame_packets.size(); ++packet_index)
 		{
 			if (chunk_pacing)
@@ -789,13 +811,23 @@ void MediaStreamer::video_loop()
 				if (m_stop.load()) break;
 			}
 			sends_ok = m_transport.send(barista::drh::RuntimeChannel::Video,
-				frame_packets[packet_index], error) && sends_ok;
+				frame_packets[packet_index], error,
+				compact_pacing ? send_deadline : frame_deadline + std::chrono::microseconds(15000),
+				&temporary_failure);
+			if (!sends_ok) break;
 		}
 		if (!sends_ok)
 		{
+			if (temporary_failure)
+			{
+				send_recovery.Failed();
+				m_transport.report_status("Video send backpressure: frame abandoned at deadline; requesting IDR recovery: " + error);
+				return;
+			}
 			m_transport.report_status("Video send failed; stopping media to preserve reference order: " + error);
 			m_stop.store(true);
 		}
+		if (sends_ok) send_recovery.Delivered(idr);
 		if (!idr && !m_stop.load())
 		{
 			std::lock_guard lock(recovery_mutex);

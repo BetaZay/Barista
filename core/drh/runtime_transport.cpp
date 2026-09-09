@@ -1,4 +1,5 @@
 #include "drh/runtime_transport.h"
+#include "drh/datagram_retry.h"
 #include "ap_tsf_clock.h"
 
 #include <array>
@@ -494,8 +495,10 @@ public:
 		m_protocol_ready.store(false);
 	}
 
-	bool send(RuntimeChannel channel, std::span<const uint8_t> payload, std::string& error)
+	bool send(RuntimeChannel channel, std::span<const uint8_t> payload, std::string& error,
+		std::chrono::steady_clock::time_point deadline = {}, bool* temporary_failure = nullptr)
 	{
+		if (temporary_failure) *temporary_failure = false;
 		if (m_ap_clock && (channel == RuntimeChannel::Audio || channel == RuntimeChannel::Video)
 			&& !m_ap_clock->healthy())
 		{
@@ -520,11 +523,18 @@ public:
 		}
 		sockaddr_in destination = m_gamepad_address;
 		destination.sin_port = htons(port);
-		if (::sendto(fd, payload.data(), payload.size(), 0,
-			reinterpret_cast<sockaddr*>(&destination), sizeof(destination)) < 0)
+		if (deadline == std::chrono::steady_clock::time_point{})
+			deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+		const int send_error = RetryDatagram([&] {
+			return ::sendto(fd, payload.data(), payload.size(), MSG_DONTWAIT,
+				reinterpret_cast<sockaddr*>(&destination), sizeof(destination)) < 0 ? errno : 0;
+		}, deadline, [] { return std::chrono::steady_clock::now(); },
+			[] { std::this_thread::sleep_for(std::chrono::microseconds(100)); });
+		if (send_error)
 		{
 			++m_send_errors;
-			error = std::strerror(errno);
+			if (temporary_failure) *temporary_failure = TemporarySendError(send_error);
+			error = std::strerror(send_error);
 			return false;
 		}
 		if (channel == RuntimeChannel::Video) ++m_video_packets_sent;
@@ -1167,7 +1177,9 @@ RuntimeTransport::RuntimeTransport() : m_impl(std::make_unique<Impl>()) {}
 RuntimeTransport::~RuntimeTransport() = default;
 bool RuntimeTransport::start(const RuntimeTransportConfig& config, std::string& error) { return m_impl->start(config, error); }
 void RuntimeTransport::stop() { m_impl->stop(); }
-bool RuntimeTransport::send(RuntimeChannel channel, std::span<const uint8_t> payload, std::string& error) { return m_impl->send(channel, payload, error); }
+bool RuntimeTransport::send(RuntimeChannel channel, std::span<const uint8_t> payload, std::string& error,
+	std::chrono::steady_clock::time_point deadline, bool* temporary_failure)
+{ return m_impl->send(channel, payload, error, deadline, temporary_failure); }
 std::optional<RuntimePacket> RuntimeTransport::receive() { return m_impl->receive(); }
 std::optional<std::string> RuntimeTransport::consume_status_event() { return m_impl->consume_status_event(); }
 bool RuntimeTransport::consume_ready_event() { return m_impl->consume_ready_event(); }
