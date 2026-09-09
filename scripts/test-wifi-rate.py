@@ -106,7 +106,7 @@ def run(args):
     for tool in ("iw", "bash", "pgrep"):
         if not shutil.which(tool):
             raise RuntimeError("missing tool: " + tool)
-    running = subprocess.run(["pgrep", "-x", "drcd"], capture_output=True, timeout=3)
+    running = subprocess.run(["pgrep", "-x", "barista-engine|drcd"], capture_output=True, timeout=3)
     if running.returncode != 1:
         raise RuntimeError("stop the existing drcd/capture first (or resolve pgrep failure)")
     companions = [args.output, args.output.with_suffix(".log"), event_path,

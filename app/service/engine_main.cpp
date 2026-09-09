@@ -129,13 +129,13 @@ void ConfigureSocketOwnershipAndMode(const std::string& socket_path)
 
 	if (::chown(socket_path.c_str(), owner_uid, owner_gid) != 0)
 	{
-		std::cerr << "drcd: warning: chown(" << socket_path << ") failed: " << std::strerror(errno) << "\n";
+		std::cerr << "barista-engine: warning: chown(" << socket_path << ") failed: " << std::strerror(errno) << "\n";
 	}
 
 	// Group-writable socket enables local client access after sudo launch.
 	if (::chmod(socket_path.c_str(), static_cast<mode_t>(0660)) != 0)
 	{
-		std::cerr << "drcd: warning: chmod(" << socket_path << ") failed: " << std::strerror(errno) << "\n";
+		std::cerr << "barista-engine: warning: chmod(" << socket_path << ") failed: " << std::strerror(errno) << "\n";
 	}
 }
 }
@@ -174,7 +174,7 @@ int main(int argc, char** argv)
 		if (arg == "--pair-code" && (i + 1) < argc)
 		{
 			try { pair_code_value = std::stoi(argv[++i]); }
-			catch (...) { std::cerr << "drcd: invalid pairing code\n"; return 1; }
+			catch (...) { std::cerr << "barista-engine: invalid pairing code\n"; return 1; }
 			continue;
 		}
 		if (arg == "--manual")
@@ -205,8 +205,8 @@ int main(int argc, char** argv)
 		if (arg == "--help" || arg == "-h")
 		{
 			std::cout
-				<< "drcd " << barista::drh::version() << "\n"
-				<< "Usage: drcd [--socket <path>] [--interface <iface>] [--ap-mac <mac>]\n"
+				<< "barista-engine " << barista::drh::version() << "\n"
+				<< "Usage: barista-engine [--socket <path>] [--interface <iface>] [--ap-mac <mac>]\n"
 				<< "            [--pair-code <digits 0-3>] [--play <media> | --black] [--np] [--manual]\n"
 				<< "  --np            Check for paired GamePads without entering pairing mode\n"
 				<< "  --pair          Enter pairing mode immediately\n"
@@ -217,18 +217,18 @@ int main(int argc, char** argv)
 	}
 	if (test_black_frames && !test_media_path.empty())
 	{
-		std::cerr << "drcd: --play and --black are mutually exclusive\n";
+		std::cerr << "barista-engine: --play and --black are mutually exclusive\n";
 		return 1;
 	}
 
 	if (socket_path.empty())
 	{
-		std::cerr << "drcd: socket path is empty\n";
+		std::cerr << "barista-engine: socket path is empty\n";
 		return 1;
 	}
 	if (socket_path.size() >= sizeof(sockaddr_un{}.sun_path))
 	{
-		std::cerr << "drcd: socket path too long\n";
+		std::cerr << "barista-engine: socket path too long\n";
 		return 1;
 	}
 
@@ -238,7 +238,7 @@ int main(int argc, char** argv)
 	const int server_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
 	if (server_fd < 0)
 	{
-		std::perror("drcd socket");
+		std::perror("barista-engine socket");
 		return 1;
 	}
 
@@ -249,7 +249,7 @@ int main(int argc, char** argv)
 
 	if (::bind(server_fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
 	{
-		std::perror("drcd bind");
+		std::perror("barista-engine bind");
 		::close(server_fd);
 		return 1;
 	}
@@ -257,13 +257,13 @@ int main(int argc, char** argv)
 
 	if (::listen(server_fd, 16) != 0)
 	{
-		std::perror("drcd listen");
+		std::perror("barista-engine listen");
 		::close(server_fd);
 		::unlink(socket_path.c_str());
 		return 1;
 	}
 
-	std::cout << "drcd " << barista::drh::version() << " listening on " << socket_path << "\n";
+	std::cout << "barista-engine " << barista::drh::version() << " listening on " << socket_path << "\n";
 
 	barista::drh::ServerCore core;
 	if (automatic)
@@ -281,7 +281,7 @@ int main(int argc, char** argv)
 		const auto pair_code = barista::drh::PairingCode::from_numeric(static_cast<uint16_t>(pair_code_value));
 		if (!ap_mac.has_value() || !pair_code.has_value())
 		{
-			std::cerr << "drcd: automatic mode needs a valid AP MAC and pairing code\n";
+			std::cerr << "barista-engine: automatic mode needs a valid AP MAC and pairing code\n";
 			::close(server_fd);
 			::unlink(socket_path.c_str());
 			return 1;
@@ -308,7 +308,7 @@ int main(int argc, char** argv)
 		{
 			if (errno == EINTR)
 				continue;
-			std::perror("drcd poll");
+			std::perror("barista-engine poll");
 			break;
 		}
 		core.process_backend_events();

@@ -4,7 +4,7 @@ Barista has two build layers:
 
 - The portable Qt 6 UI/core can build without the GamePad radio engine.
 - The full GamePad implementation is currently Linux-only. It builds Barista's
-  patched hostapd and bundled DRC x264 encoder as part of the normal build.
+  patched hostapd and native MiniH264/CABAC encoder as part of the normal build.
 
 ## Prerequisites
 
@@ -20,8 +20,8 @@ families are commonly `build-essential`, `cmake`, `ninja-build`, `git`,
 distribution splits it out.
 
 The first full build clones the pinned upstream hostapd source and applies the
-patches included in this repository, so it needs Internet access. The DRC x264
-source is bundled.
+patches included in this repository, so it needs Internet access. The native
+encoder source is bundled under `core/drh/encoder/x264`.
 
 ## Development build
 
@@ -33,7 +33,7 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The build produces `build/app/barista`, `build/app/barista-service`, the engine,
+The build produces `build/app/barista`, `build/app/barista-service`, `build/app/barista-engine`,
 and test tools. A development build deliberately refuses to let the GUI launch
 writable binaries with root privileges; install the project before trying a
 real radio session.
@@ -57,14 +57,23 @@ Choose a prefix and use the normal CMake install step:
 ```sh
 cmake -S . -B build-release -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
+  -DBARISTA_BUILD_DESKTOP=ON -DBARISTA_BUILD_ENGINE=ON \
   -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build-release --parallel
+ctest --test-dir build-release --output-on-failure
 sudo cmake --install build-release
 ```
 
 Installation places the desktop file, D-Bus activation service, polkit policy,
 root-owned engine, and Barista's patched hostapd together. Open Barista as the
 regular desktop user; do not start the GUI with `sudo` or `pkexec`.
+
+This explicitly enables both frontend and backend, even if `build-release` was
+previously configured engine-only. Its executables are `app/barista`,
+`app/barista-service`, and `app/barista-engine`; the engine has the same name
+before and after installation. `drcctl` and `drcd_reencode_replay` remain legacy
+diagnostic tools, not the service engine. Old `app/drcd` files in existing build
+directories are stale artifacts and should not be installed.
 
 Before testing a GamePad, close tools that own the selected Wi-Fi adapter and
 prefer Ethernet or a second adapter for Internet access. Barista will warn
