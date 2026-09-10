@@ -1,4 +1,4 @@
-set(DRC_HOSTAPD_REPOSITORY "https://git.w1.fi/hostap.git" CACHE STRING
+set(DRC_HOSTAPD_REPOSITORY "https://chromium.googlesource.com/external/w1.fi/cgit/hostap" CACHE STRING
     "Git repository used for the standalone patched hostapd build")
 # hostap_2_11 is an annotated tag. Pin its peeled commit so `git clone`,
 # `reset --hard`, and patch application behave consistently across Git versions.
