@@ -18,7 +18,27 @@ if [[ ! -d "$src_dir/.git" ]]; then
 	mkdir -p "$(dirname "$src_dir")"
 	# The source is pinned by commit, not a branch name. Clone first, then reset
 	# below; `git clone --branch <commit>` is not portable across Git versions.
-	git clone "$repo_url" "$src_dir"
+	clone_dir="${src_dir}.clone-tmp"
+	rm -rf "$clone_dir"
+	cloned=false
+	for attempt in 1 2 3 4; do
+		if git -c http.version=HTTP/1.1 clone "$repo_url" "$clone_dir"; then
+			cloned=true
+			break
+		fi
+		rm -rf "$clone_dir"
+		if [[ "$attempt" -lt 4 ]]; then
+			delay=$((attempt * 2))
+			echo "hostapd clone attempt $attempt failed; retrying in ${delay}s" >&2
+			sleep "$delay"
+		fi
+	done
+	if [[ "$cloned" != true ]]; then
+		echo "hostapd clone failed after 4 attempts: $repo_url" >&2
+		exit 1
+	fi
+	rm -rf "$src_dir"
+	mv "$clone_dir" "$src_dir"
 fi
 
 patch_hash="$({ printf '%s\0' "$tag"; sha256sum "$hostapd_config" "$patch_dir"/*.patch; } | sha256sum | cut -d' ' -f1)"
