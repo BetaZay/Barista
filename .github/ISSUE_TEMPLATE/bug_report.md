@@ -35,7 +35,7 @@ What happened instead? Include any visible error message.
 
 ## Diagnostics
 
-Paste relevant, sanitized output from the Advanced page or service logs. Remove usernames, IP addresses, pairing details, and other sensitive data.
+In Barista, open **Advanced** and select **Copy support report**, then paste the report here. The generated report excludes pairing credentials and network addresses.
 
 ## Additional context
 

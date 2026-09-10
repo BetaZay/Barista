@@ -32,6 +32,19 @@ int main(int argc, char** argv)
         tabs->setCurrentIndex(2); Check(advanced->isVisible(),"advanced tab opens");
         Check(window.findChild<QLineEdit*>("mediaEndpoint")->isReadOnly(),"automatic socket is not editable");
         Check(!window.findChild<QPushButton*>("prepareButton")->isEnabled(),"no repair without service");
+        auto* viewLog = window.findChild<QPushButton*>("viewLogButton");
+        auto* openLogs = window.findChild<QPushButton*>("openLogsButton");
+        auto* copyDiagnostics = window.findChild<QPushButton*>("copyDiagnosticsButton");
+        auto* saveDiagnostics = window.findChild<QPushButton*>("saveDiagnosticsButton");
+        Check(viewLog && openLogs && copyDiagnostics && saveDiagnostics,"support log controls exist");
+        Check(!viewLog->isEnabled() && !copyDiagnostics->isEnabled(),"support controls wait for diagnostics");
+        auto* client = window.findChild<ControlClient*>();
+        Check(client,"control client exists");
+        emit client->Diagnostics("safe report","/var/log/barista/support",{"run-test.log","pairing-test.log"},"12345678-abcd");
+        Check(viewLog->isEnabled() && openLogs->isEnabled() && copyDiagnostics->isEnabled() &&
+            saveDiagnostics->isEnabled(),"support controls enable with diagnostics");
+        Check(window.findChild<QComboBox*>("supportLogFiles")->count() == 2,"support logs are listed");
+        Check(window.findChild<QLabel*>("supportId")->text().contains("12345678"),"support ID is shown");
         barista::api::SessionStatus status;
         status.available = true;
         status.capabilities.controller = true;
@@ -50,8 +63,15 @@ int main(int argc, char** argv)
         status.running = false; status.phase = barista::api::SessionPhase::Idle; apply();
         status.batteryPercent = 100; apply();
         Check(window.findChild<QLabel*>("gamepadBattery") && window.findChild<QLabel*>("gamepadBattery")->text() == "100%","GamePad battery is shown");
+        status.error = barista::api::Error{.code=barista::api::ErrorCode::Failed,.message="Adapter failed",
+            .diagnosticCode="ADAPTER_UNSUPPORTED",.action="Select another adapter."};
+        apply();
+        auto* supportDetails = window.findChild<QLabel*>("supportDetails");
+        Check(supportDetails && supportDetails->text().contains("ADAPTER_UNSUPPORTED") &&
+            supportDetails->text().contains("Select another adapter"),"diagnostic guidance is shown");
+        status.error.reset(); apply();
         int operations = 0;
-        QObject::connect(window.findChild<ControlClient*>(),&ControlClient::Pending,[&](bool pending) { if (pending) ++operations; });
+        QObject::connect(client,&ControlClient::Pending,[&](bool pending) { if (pending) ++operations; });
         pairInterface->setCurrentText("wlan1");
         auto* interfaceCombo = window.findChild<QComboBox*>("interfaceCombo");
         const auto selectedName = [](QComboBox* combo) {

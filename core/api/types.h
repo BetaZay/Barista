@@ -11,7 +11,7 @@
 
 namespace barista::api
 {
-inline constexpr uint32_t ApiVersion = 1;
+inline constexpr uint32_t ApiVersion = 2;
 
 enum class ErrorCode
 {
@@ -27,6 +27,8 @@ struct Error
 {
     ErrorCode code = ErrorCode::Failed;
     std::string message;
+    std::string diagnosticCode;
+    std::string action;
 };
 
 enum class SessionMode

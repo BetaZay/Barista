@@ -1,4 +1,5 @@
 #include "api/controller.h"
+#include "api/diagnostics.h"
 #include "api/media.h"
 #include "drh/encoder/encoder.h"
 #include "drh/server/session_server.h"
@@ -32,6 +33,14 @@ int main()
     check(barista::api::ParseSessionPhase("runtime") == barista::api::SessionPhase::Runtime);
     check(!barista::api::ParseSessionPhase("unknown"));
     check(barista::api::SessionPhaseName(barista::api::SessionPhase::Stopping) == "stopping");
+    check(barista::api::ClassifyDiagnosticMessage("adapter wlan0 lacks required 5 GHz AP capability") == "ADAPTER_UNSUPPORTED");
+    check(barista::api::AdviceForDiagnostic("PAIRING_TIMEOUT").action.find("SYNC") != std::string_view::npos);
+    check(barista::api::IsKnownDiagnosticCode("MEDIA_TRANSPORT_STATS"));
+    check(!barista::api::IsKnownDiagnosticCode("SECRET_AABBCCDDEEFF"));
+    check(barista::api::IsSafeDiagnosticDetail("Media UDP: video=120 audio=30 errors=0"));
+    check(!barista::api::IsSafeDiagnosticDetail("mac=aa:bb:cc:dd:ee:ff"));
+    check(!barista::api::IsSafeDiagnosticDetail("address=192.168.1.10"));
+    check(!barista::api::IsSafeDiagnosticDetail("ssid=WiiU-secret"));
     const barista::api::VideoFrame frame;
     check(frame.i420.empty());
     std::cout << "Input normalization and privileged argument validation passed\n";

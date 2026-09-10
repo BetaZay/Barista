@@ -18,6 +18,7 @@ must remain unprivileged.
 | Method | Arguments | Reply |
 | --- | --- | --- |
 | `GetStatus` | none | Variant map described below |
+| `GetDiagnostics` | none | Privacy-safe support report and retained support-log metadata |
 | `SavedGamePads` | none | List of maps with `mac` and `name` |
 | `StartSession` | `interface: string`, `mode: string` | Empty on completion |
 | `Pair` | `interface: string`, `code: string`, `mode: string` | Empty on completion |
@@ -53,6 +54,8 @@ unknown keys so fields can be added compatibly.
 | `ownedByCaller` | `ownedByCaller` | Boolean |
 | `busy` | `busy` | Boolean |
 | `error` | `error.message` | String; empty when no current error |
+| `errorCode` | `error.diagnosticCode` | Stable diagnostic identifier; empty when no current error |
+| `errorAction` | `error.action` | Suggested recovery step; empty when no current error |
 | `mediaEndpoint` | `mediaEndpoint` | String, disclosed only to the owning caller in real mode |
 | `appConnected` | `application.connected` | Boolean |
 | `appName` | `application.name` | String |
@@ -74,6 +77,24 @@ unknown keys so fields can be added compatibly.
 
 The Qt adapter currently derives `capabilities.mediaStreaming = true`; there is
 no separate `mediaStreaming` key in the D-Bus map.
+
+## Diagnostics map
+
+`GetDiagnostics` is read-only and does not require PolicyKit authorization. It
+returns these keys:
+
+| Key | Value |
+| --- | --- |
+| `schemaVersion` | Support-report schema version |
+| `report` | Bounded plain-text support report suitable for copying or saving |
+| `logDirectory` | User-readable support-log directory |
+| `logFiles` | Newest-first list of retained run and pairing-cycle log names |
+| `latestLog` | Newest retained log name, or empty |
+| `sessionId` | Correlation ID for the current or most recent service session |
+
+The report and listed support logs are allowlisted outputs. They exclude MAC
+and IP addresses, SSIDs, pairing codes, credentials, usernames, and raw hostapd
+output. Private engine logs are not returned over D-Bus.
 
 ## Errors and authorization
 
@@ -98,6 +119,9 @@ These calls are useful during development:
 ```sh
 busctl call org.barista.Service1 /org/barista/Service1 \
     org.barista.Service1 GetStatus
+
+busctl call org.barista.Service1 /org/barista/Service1 \
+    org.barista.Service1 GetDiagnostics
 
 busctl call org.barista.Service1 /org/barista/Service1 \
     org.barista.Service1 SavedGamePads

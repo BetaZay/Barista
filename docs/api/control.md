@@ -72,8 +72,9 @@ Adapters should treat them as data, not shell fragments or paths.
 | `Failed` | The operation failed for another reason; inspect `message` |
 
 An adapter should preserve the error category where its transport supports
-structured errors. The current D-Bus adapter exposes named D-Bus errors, while
-its status map contains only the human-readable error message.
+structured errors. `diagnosticCode` gives failures a stable support identifier,
+and `action` supplies user-facing recovery guidance. The D-Bus status map
+exposes both fields alongside the human-readable message.
 
 ## Ownership and lifecycle rules
 

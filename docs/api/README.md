@@ -39,7 +39,7 @@ The portable API has three boundaries:
 | Data model | [`types.h`](../../core/api/types.h) | Requests, status, errors, media frames, and input reports |
 | Media | [`media.h`](../../core/api/media.h) | Video/audio submission and input consumption |
 
-`barista::api::ApiVersion` is currently `1`. Consumers should reject a higher
+`barista::api::ApiVersion` is currently `2`. Consumers should reject a higher
 contract version they cannot understand and tolerate newly added optional
 status fields in transport adapters.
 

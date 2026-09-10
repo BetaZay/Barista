@@ -8,7 +8,7 @@ the fields they can support.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `apiVersion` | `uint32_t` | Contract version; currently `1` |
+| `apiVersion` | `uint32_t` | Contract version; currently `2` |
 | `available` | `bool` | The control backend is reachable |
 | `activating` | `bool` | An adapter is being activated but is not ready yet |
 | `platform` | `string` | Backend platform identifier, currently `linux` for the installed service |
@@ -89,3 +89,11 @@ Clients should gate controls on capabilities instead of branching only on
 Health fields are observations, not promises that the next operation will
 succeed. Hardware support, driver state, authorization, and radio conditions
 can still make an operation fail.
+
+## Diagnostic errors
+
+`Error::diagnosticCode` is a stable identifier suitable for support searches
+and UI guidance. `Error::action` contains the recommended next step. The older
+human-readable `message` remains available for context. Clients should display
+the action when present and must not parse the message to make control-flow
+decisions.

@@ -29,15 +29,18 @@ private:
     barista::api::SessionMode Mode() const;
     void ApplyGamePads(const std::vector<barista::api::GamePad>& gamePads);
     void RefreshSavedGamePads();
+    void RefreshDiagnostics();
+    void ViewSelectedLog();
     ControlClient m_client;
     QTabWidget* m_tabs;
-    QComboBox *m_interface, *m_pairInterface, *m_mode;
+    QComboBox *m_interface, *m_pairInterface, *m_mode, *m_logFiles;
     QLineEdit *m_code, *m_endpoint;
-    QLabel *m_status, *m_message, *m_description, *m_hint, *m_details, *m_pairStatus;
+    QLabel *m_status, *m_message, *m_description, *m_hint, *m_details, *m_pairStatus, *m_supportId;
     QLabel *m_gamepadState, *m_gamepadPhase, *m_gamepadMode, *m_gamepadIface, *m_gamepadBattery;
     QLabel *m_appName, *m_appLock, *m_appLastSeen, *m_appSocket, *m_appIdleLogo, *m_appLogo;
     QWidget* m_pairSymbols;
     QPushButton *m_start, *m_stop, *m_pair, *m_copy, *m_prepare;
+    QPushButton *m_viewLog, *m_openLogs, *m_copyDiagnostics, *m_saveDiagnostics;
     QCheckBox* m_background;
     QSystemTrayIcon* m_tray;
     QAction *m_trayStart, *m_trayStop;
@@ -45,6 +48,7 @@ private:
     QMap<QString,QLabel*> m_health;
     barista::api::SessionStatus m_lastStatus;
     QString m_operationError;
+    QString m_logDirectory, m_supportReport;
     QString m_appLogoSource;
     bool m_pending = false;
     bool m_pairingRequested = false;

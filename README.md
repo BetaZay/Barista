@@ -84,6 +84,20 @@ your-app
 The endpoint exists only while a Screen + controller session is active. It is
 owned and permissioned for the desktop user; applications must not run as root.
 
+## Troubleshooting and support logs
+
+Open **Advanced** when a session does not start, pair, connect, or stream
+correctly. Barista shows a diagnostic code with a suggested next step. Use
+**View log** to inspect an individual run, pairing-cycle, or maintenance log, **Open log
+folder** to browse retained logs, or **Copy support report** to collect the
+current system and session summary for a bug report.
+
+Support logs are designed to be safe to share. They contain coded state changes,
+versions, adapter driver information, and health checks. They exclude MAC and IP
+addresses, SSIDs, pairing codes, credentials, usernames, and raw hostapd output.
+Detailed private engine logs remain available to administrators for local
+investigation and should be reviewed before being shared.
+
 ## Build and install
 
 See [COMPILING.md](COMPILING.md) for dependencies, a development build, tests,

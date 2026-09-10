@@ -5,6 +5,8 @@
 #include <QLocalSocket>
 #include <QTimer>
 #include <QVariantMap>
+#include <QFile>
+#include <QStringList>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -21,6 +23,7 @@ public:
     void StopWorker();
 public slots:
     QVariantMap GetStatus();
+    QVariantMap GetDiagnostics();
     QVariantList SavedGamePads();
     void RemoveGamePad(const QString& mac);
     void RenameGamePad(const QString& mac, const QString& name);
@@ -41,11 +44,25 @@ private:
     barista::api::SessionStatus Status(bool ownedByCaller) const;
     void Poll();
     void ParseStatus();
+    void ProcessWorkerOutput();
+    void StartSupportRun(const QString& mode);
+    void RecordDiagnostic(const QString& code, const QString& component = "service", const QString& detail = {});
+    void CloseSupportRun();
+    QString BuildSupportReport() const;
+    QStringList SupportLogFiles() const;
+    void PruneSupportLogs();
     QProcess m_worker;
     QLocalSocket m_statusSocket;
     QTimer m_poll, m_inputTimer, m_statusTimeout;
     QByteArray m_response;
     QString m_owner, m_interface, m_endpoint, m_error, m_phase = "idle";
+    QString m_errorCode, m_sessionId, m_runLogName;
+    QString m_latestMediaTiming, m_latestTransportStats;
+    QStringList m_diagnosticEvents;
+    QByteArray m_workerOutput;
+    QFile m_runLog, m_pairingLog;
+    int m_pairingCycle = 0;
+    qint64 m_lastMediaTimingLog = 0, m_lastTransportStatsLog = 0;
     std::optional<barista::api::SessionMode> m_mode;
     uint m_uid = 0;
     bool m_authorizing = false, m_connected = false, m_stopping = false, m_batteryAvailable = false;

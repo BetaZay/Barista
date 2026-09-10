@@ -678,7 +678,12 @@ public:
 			m_channel = 36;
 		m_log_stream.open(m_log_path, std::ios::out | std::ios::trunc);
 		if (m_log_stream.good())
-			m_log_stream << "drcd diagnostic log\n";
+		{
+			m_log_stream << "Barista private engine log\n";
+			if (const char* session_id = std::getenv("BARISTA_SESSION_ID"))
+				m_log_stream << "session_id=" << session_id << '\n';
+			m_log_bytes = static_cast<size_t>(m_log_stream.tellp());
+		}
 		std::error_code control_error;
 		std::filesystem::create_directories(kHostapdControlPath, control_error);
 		if (!control_error)
@@ -817,6 +822,7 @@ public:
 			return AbortStart("all pairing channel attempts failed: " + last_channel_error);
 		}
 		m_channel = selected_channel;
+		QueueStatus("Pairing radio ready: channel=" + std::to_string(m_channel));
 		Log("pair-start: AP-ENABLED observed, arming WPS_PIN");
 
 		if (!ArmWpsPinAny(error))
@@ -928,6 +934,8 @@ private:
 			error = "adapter " + interface_name + " lacks required 5 GHz AP capability";
 			return false;
 		}
+		QueueStatus("Adapter ready: driver=" + driver_name + " ap=yes monitor=" +
+			(monitor ? "yes" : "no") + " 5ghz=yes");
 		return true;
 	}
 
@@ -2662,24 +2670,32 @@ private:
 		MaybeLogProbeSourceMac(phase, line);
 
 		const std::string message = "hostapd[" + phase + "]: " + line;
-		{
-			std::lock_guard lock(m_log_mutex);
-			if (m_log_stream.good())
-				m_log_stream << "drcd-backend: " << message << std::endl;
-		}
+		WritePrivateLog(message);
 		if (m_verbose_logging && IsImportantHostapdLine(line))
 			std::cerr << "drcd-backend: " << message << std::endl;
 	}
 
 	void Log(const std::string& message) const
 	{
-		{
-			std::lock_guard lock(m_log_mutex);
-			if (m_log_stream.good())
-				m_log_stream << "drcd-backend: " << message << std::endl;
-		}
+		WritePrivateLog(message);
 		if (m_verbose_logging)
 			std::cerr << "drcd-backend: " << message << std::endl;
+	}
+
+	void WritePrivateLog(const std::string& message) const
+	{
+		constexpr size_t MaximumPrivateLogBytes = 10 * 1024 * 1024;
+		std::lock_guard lock(m_log_mutex);
+		if (!m_log_stream.good()) return;
+		const size_t line_size = 15 + message.size() + 1;
+		if (m_log_bytes + line_size > MaximumPrivateLogBytes)
+		{
+			m_log_stream << "drcd-backend: private log size limit reached" << std::endl;
+			m_log_stream.close();
+			return;
+		}
+		m_log_stream << "drcd-backend: " << message << std::endl;
+		m_log_bytes += line_size;
 	}
 
 private:
@@ -2706,6 +2722,7 @@ private:
 	std::string m_credentials_path;
 	mutable std::mutex m_log_mutex;
 	mutable std::ofstream m_log_stream;
+	mutable size_t m_log_bytes = 0;
 
 	pid_t m_hostapd_pid = -1;
 	int m_hostapd_output_fd = -1;

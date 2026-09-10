@@ -1,5 +1,9 @@
 #include "control_client.h"
+#include "api/diagnostics.h"
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QDir>
+#include <QSysInfo>
 #include <QTimer>
 #include <QVariantMap>
 #ifdef BARISTA_LINUX_CONTROL
@@ -12,6 +16,25 @@
 
 namespace
 {
+#ifdef BARISTA_LINUX_CONTROL
+constexpr auto SupportLogDirectory = "/var/log/barista/support";
+
+QStringList LocalSupportLogFiles()
+{
+    return QDir(SupportLogDirectory).entryList({"*.log"}, QDir::Files, QDir::Time);
+}
+
+QString UnavailableSupportReport()
+{
+    const auto advice = barista::api::AdviceForDiagnostic("SERVICE_UNAVAILABLE");
+    return QString("Barista support report\nschema_version=1\ngenerated_utc=%1\nbarista_version=%2\nplatform=%3\nkernel=%4 %5\ndiagnostic_code=SERVICE_UNAVAILABLE\ndiagnosis=%6\nsuggested_action=%7\n\nPrivacy\nThis report excludes network addresses, pairing codes, credentials, usernames, and raw service logs.\n")
+        .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), QCoreApplication::applicationVersion(),
+            QSysInfo::prettyProductName(), QSysInfo::kernelType(), QSysInfo::kernelVersion(),
+            QString::fromUtf8(advice.summary.data(),static_cast<qsizetype>(advice.summary.size())),
+            QString::fromUtf8(advice.action.data(),static_cast<qsizetype>(advice.action.size())));
+}
+#endif
+
 barista::api::SessionStatus UnavailableStatus(const QString& message)
 {
     barista::api::SessionStatus status;
@@ -61,7 +84,9 @@ barista::api::SessionStatus DecodeStatus(const QVariantMap& value)
         status.health.missingTools.push_back(tool.toStdString());
     const auto error = value.value("error").toString();
     if (!error.isEmpty())
-        status.error = barista::api::Error{.code = barista::api::ErrorCode::Failed, .message = error.toStdString()};
+        status.error = barista::api::Error{.code = barista::api::ErrorCode::Failed, .message = error.toStdString(),
+            .diagnosticCode = value.value("errorCode").toString().toStdString(),
+            .action = value.value("errorAction").toString().toStdString()};
     return status;
 }
 }
@@ -118,6 +143,30 @@ void ControlClient::RefreshGamePads()
     });
 #else
     emit GamePads({});
+#endif
+}
+void ControlClient::RefreshDiagnostics()
+{
+#ifdef BARISTA_LINUX_CONTROL
+    auto message = QDBusMessage::createMethodCall(
+        "org.barista.Service1", "/org/barista/Service1", "org.barista.Service1", "GetDiagnostics");
+    message.setAutoStartService(true);
+    auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message, 25000), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](auto* completed) {
+        const QDBusPendingReply<QVariantMap> reply = *completed;
+        if (!reply.isError())
+            emit Diagnostics(reply.value().value("report").toString(),
+                reply.value().value("logDirectory").toString(), reply.value().value("logFiles").toStringList(),
+                reply.value().value("sessionId").toString());
+        else
+        {
+            const QString directory = QDir(SupportLogDirectory).exists() ? QString::fromLatin1(SupportLogDirectory) : QString();
+            emit Diagnostics(UnavailableSupportReport(), directory, LocalSupportLogFiles(), {});
+        }
+        completed->deleteLater();
+    });
+#else
+    emit Diagnostics({}, {}, {}, {});
 #endif
 }
 void ControlClient::Stop()

@@ -1,4 +1,5 @@
 #include "window.h"
+#include "api/diagnostics.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QCheckBox>
@@ -6,6 +7,9 @@
 #include <QComboBox>
 #include <QColor>
 #include <QDialogButtonBox>
+#include <QDialog>
+#include <QDesktopServices>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QDateTime>
@@ -32,6 +36,7 @@
 #include <array>
 #include <QFile>
 #include <QFileInfo>
+#include <QUrl>
 
 namespace {
 enum class Tone { Neutral, Good, Warning, Bad };
@@ -409,7 +414,9 @@ Window::Window(bool smokeTest)
     m_prepare = maintenance->addButton("Prepare system…",QDialogButtonBox::ActionRole);
     m_prepare->setObjectName("prepareButton");
     advancedLayout->addWidget(maintenance);
-    connect(refresh,&QPushButton::clicked,this,[this] { m_operationError.clear(); m_message->hide(); m_client.Retry(); });
+    connect(refresh,&QPushButton::clicked,this,[this] {
+        m_operationError.clear(); m_message->hide(); m_client.Retry(); RefreshDiagnostics();
+    });
     connect(m_prepare,&QPushButton::clicked,this,[this] {
         if (QMessageBox::question(this,"Prepare system?",
             "Start NetworkManager if needed and load virtual-controller support? This can affect existing network connections. No packages will be installed and no GamePad session will start.",
@@ -434,7 +441,60 @@ Window::Window(bool smokeTest)
     m_copy = new QPushButton("Copy AppHook launch prefix",advanced);
     connectorForm->addRow(QString(),m_copy);
     advancedLayout->addLayout(connectorForm);
+
+    auto* support = new QGroupBox("Support logs",advanced);
+    auto* supportLayout = new QVBoxLayout(support);
+    supportLayout->addWidget(FormHint(
+        "These logs contain coded session events and system details that are safe to share. Network addresses, pairing codes, credentials and raw Wi-Fi-helper output are excluded.", support));
+    m_supportId = new QLabel("Support ID: not available",support);
+    m_supportId->setObjectName("supportId");
+    m_supportId->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    supportLayout->addWidget(m_supportId);
+    m_logFiles = new QComboBox(support);
+    m_logFiles->setObjectName("supportLogFiles");
+    m_logFiles->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    supportLayout->addWidget(m_logFiles);
+    auto* supportButtons = new QDialogButtonBox(Qt::Horizontal,support);
+    m_viewLog = supportButtons->addButton("View log",QDialogButtonBox::ActionRole);
+    m_viewLog->setObjectName("viewLogButton");
+    m_openLogs = supportButtons->addButton("Open log folder",QDialogButtonBox::ActionRole);
+    m_openLogs->setObjectName("openLogsButton");
+    m_copyDiagnostics = supportButtons->addButton("Copy support report",QDialogButtonBox::ActionRole);
+    m_copyDiagnostics->setObjectName("copyDiagnosticsButton");
+    m_saveDiagnostics = supportButtons->addButton("Save support report…",QDialogButtonBox::ActionRole);
+    m_saveDiagnostics->setObjectName("saveDiagnosticsButton");
+    auto* refreshLogs = supportButtons->addButton("Refresh",QDialogButtonBox::ActionRole);
+    refreshLogs->setObjectName("refreshLogsButton");
+    supportLayout->addWidget(supportButtons);
+    advancedLayout->addWidget(support);
+    m_viewLog->setEnabled(false);
+    m_openLogs->setEnabled(false);
+    m_copyDiagnostics->setEnabled(false);
+    m_saveDiagnostics->setEnabled(false);
+    connect(m_viewLog,&QPushButton::clicked,this,&Window::ViewSelectedLog);
+    connect(m_openLogs,&QPushButton::clicked,this,[this] {
+        if (!m_logDirectory.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(m_logDirectory));
+    });
+    connect(m_copyDiagnostics,&QPushButton::clicked,this,[this] {
+        QApplication::clipboard()->setText(m_supportReport);
+        m_message->setText("Support report copied. You can paste it into a bug report.");
+        m_message->show();
+    });
+    connect(m_saveDiagnostics,&QPushButton::clicked,this,[this] {
+        const QString suggested = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) +
+            "/barista-support-" + QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss") + ".txt";
+        const QString path = QFileDialog::getSaveFileName(this,"Save Barista support report",suggested,"Text files (*.txt)");
+        if (path.isEmpty()) return;
+        QFile output(path);
+        if (!output.open(QIODevice::WriteOnly | QIODevice::Text) || output.write(m_supportReport.toUtf8()) < 0) {
+            QMessageBox::warning(this,"Could not save report",output.errorString());
+            return;
+        }
+        m_message->setText("Support report saved to " + path); m_message->show();
+    });
+    connect(refreshLogs,&QPushButton::clicked,this,&Window::RefreshDiagnostics);
     m_details = new QLabel(advanced);
+    m_details->setObjectName("supportDetails");
     m_details->setWordWrap(true);
     m_details->setTextFormat(Qt::PlainText);
     m_details->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -518,12 +578,29 @@ Window::Window(bool smokeTest)
 
     connect(&m_client,&ControlClient::Status,this,&Window::ApplyStatus);
     connect(&m_client,&ControlClient::GamePads,this,&Window::ApplyGamePads);
+    connect(&m_client,&ControlClient::Diagnostics,this,
+        [this](const QString& report,const QString& directory,const QStringList& files,const QString& sessionId) {
+            const QString selected = m_logFiles->currentText();
+            m_supportReport = report; m_logDirectory = directory;
+            m_logFiles->clear(); m_logFiles->addItems(files);
+            const int previous = m_logFiles->findText(selected);
+            if (previous >= 0) m_logFiles->setCurrentIndex(previous);
+            m_viewLog->setEnabled(!files.isEmpty());
+            m_openLogs->setEnabled(!directory.isEmpty());
+            m_copyDiagnostics->setEnabled(!report.isEmpty());
+            m_saveDiagnostics->setEnabled(!report.isEmpty());
+            m_supportId->setText(sessionId.isEmpty() ? "Support ID: not available" : "Support ID: " + sessionId.left(8));
+        });
     connect(&m_client,&ControlClient::Error,this,[this](const QString& error) {
         m_pairingRequested = false;
         if (!isVisible()) ShowWindow();
-        m_operationError = error;
+        const QString code = QString::fromLatin1(barista::api::ClassifyDiagnosticMessage(error.toStdString()));
+        const auto advice = barista::api::AdviceForDiagnostic(code.toStdString());
+        m_operationError = error + "\n\nCode: " + code + "\nTry this: " +
+            QString::fromUtf8(advice.action.data(),static_cast<qsizetype>(advice.action.size()));
         m_message->setText("That didn't complete. See Advanced for details.");
         m_message->show();
+        RefreshDiagnostics();
         ApplyStatus(m_lastStatus);
     });
     connect(&m_client,&ControlClient::Pending,this,[this](bool pending) {
@@ -535,6 +612,9 @@ Window::Window(bool smokeTest)
         if (m_quitting) QApplication::quit();
     });
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int) { ApplyStatus(m_lastStatus); });
+    connect(m_tabs,&QTabWidget::currentChanged,this,[this](int index) {
+        if (!m_smokeTest && m_tabs->widget(index)->objectName() == "advancedPanel") RefreshDiagnostics();
+    });
     barista::api::SessionStatus initialStatus;
     initialStatus.activating = !smokeTest;
     ApplyStatus(initialStatus);
@@ -612,6 +692,33 @@ void Window::RefreshSavedGamePads()
     ApplyGamePads({});
     m_client.RefreshGamePads();
 }
+void Window::RefreshDiagnostics()
+{
+    if (!m_smokeTest) m_client.RefreshDiagnostics();
+}
+
+void Window::ViewSelectedLog()
+{
+    const QString name = m_logFiles->currentText();
+    if (m_logDirectory.isEmpty() || name.isEmpty() || QFileInfo(name).fileName() != name) return;
+    QFile input(QDir(m_logDirectory).filePath(name));
+    if (!input.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this,"Could not open log",input.errorString());
+        return;
+    }
+    QDialog viewer(this);
+    viewer.setWindowTitle(name);
+    auto* layout = new QVBoxLayout(&viewer);
+    auto* text = new QPlainTextEdit(QString::fromUtf8(input.readAll()),&viewer);
+    text->setReadOnly(true);
+    text->setLineWrapMode(QPlainTextEdit::NoWrap);
+    layout->addWidget(text);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close,&viewer);
+    connect(buttons,&QDialogButtonBox::rejected,&viewer,&QDialog::reject);
+    layout->addWidget(buttons);
+    viewer.resize(820,560);
+    viewer.exec();
+}
 void Window::ApplyGamePads(const std::vector<barista::api::GamePad>& gamePads)
 {
     auto records = LoadSavedGamePadsCache();
@@ -628,6 +735,7 @@ void Window::ApplyGamePads(const std::vector<barista::api::GamePad>& gamePads)
 void Window::ApplyStatus(const barista::api::SessionStatus& status)
 {
     const auto previousPhase = m_lastStatus.phase;
+    const bool previousRunning = m_lastStatus.running;
     m_lastStatus = status;
     const bool available = status.available;
     const bool running = status.running;
@@ -636,6 +744,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     const bool connected = status.gamePadConnected;
     const auto phase = status.phase;
     const QString phaseText = QString::fromLatin1(barista::api::SessionPhaseName(phase));
+    if (previousRunning && !running) RefreshDiagnostics();
     if (m_pairingRequested && phase == barista::api::SessionPhase::Runtime &&
         previousPhase != barista::api::SessionPhase::Runtime) {
         RefreshSavedGamePads();
@@ -869,7 +978,14 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     const auto error = m_operationError.isEmpty()
         ? status.error ? QString::fromStdString(status.error->message) : QString()
         : m_operationError;
-    if (!error.isEmpty()) m_details->setText(error);
+    if (!error.isEmpty()) {
+        QString details = error;
+        if (status.error && !status.error->diagnosticCode.empty())
+            details += "\n\nCode: " + QString::fromStdString(status.error->diagnosticCode);
+        if (status.error && !status.error->action.empty())
+            details += "\nTry this: " + QString::fromStdString(status.error->action);
+        m_details->setText(details);
+    }
     else if (available && !supported) m_details->setText("Controller support cannot be prepared automatically. Check kernel module tools and uinput support.");
     else if (available) m_details->setText(QString("Service: %1\nSession: %2\nMode: %3")
         .arg(QString::fromStdString(status.platform),phaseText,

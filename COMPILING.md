@@ -66,6 +66,11 @@ Installation places the desktop file, D-Bus activation service, polkit policy,
 root-owned engine, and Barista's patched hostapd together. Open Barista as the
 regular desktop user; do not start the GUI with `sudo` or `pkexec`.
 
+Installed builds keep shareable per-run, per-pairing-cycle, and maintenance logs in
+`/var/log/barista/support`. The Advanced page can view these files and create a
+support report without elevated privileges. Raw engine logs are kept separately
+under `/var/log/barista/private`, remain root-only, and may contain network or
+pairing details.
 Before testing a GamePad, close tools that own the selected Wi-Fi adapter and
 prefer Ethernet or a second adapter for Internet access. Barista will warn
 before it takes the adapter over.
