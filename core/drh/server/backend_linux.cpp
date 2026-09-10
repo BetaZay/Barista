@@ -1,6 +1,7 @@
 #include "drh/server/interrupt.h"
 #include "drh/encoder/media_streamer.h"
 #include "drh/server/session_backend.h"
+#include "drh/server/wifi_capabilities.h"
 
 #include "drh/pairing.h"
 #include "drh/runtime_transport.h"
@@ -187,6 +188,18 @@ std::string ReadEnvOrDefault(const char* name, std::string_view default_value)
 	if (value == nullptr || value[0] == '\0')
 		return std::string(default_value);
 	return std::string(value);
+}
+
+std::string NormalizeCountryCode(std::string value)
+{
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+		return static_cast<char>(std::toupper(ch));
+	});
+	if (value.size() != 2 || value == "00" ||
+		!std::isalpha(static_cast<unsigned char>(value[0])) ||
+		!std::isalpha(static_cast<unsigned char>(value[1])))
+		return {};
+	return value;
 }
 
 std::vector<int> ParseChannelList(std::string_view text)
@@ -668,6 +681,7 @@ public:
 		, m_hostapd_raw_logging(ParseBoolEnv("DRCD_LOG_HOSTAPD_RAW", false))
 		, m_log_path(ReadEnvOrDefault("DRCD_LOG_FILE", "/tmp/drcd.log"))
 		, m_credentials_path(ReadEnvOrDefault("DRCD_CREDENTIALS_FILE", "/var/lib/drcd/credentials.conf"))
+		, m_regulatory_country(NormalizeCountryCode(ReadEnvOrDefault("DRCD_REGULATORY_COUNTRY", "")))
 		, m_pair_ignore_broadcast_probe_requests(ParseBoolEnv("DRCD_PAIR_IGNORE_BROADCAST_PROBES", false))
 		, m_pair_channel_sweep(ParseBoolEnv("DRCD_PAIR_CHANNEL_SWEEP", true))
 		, m_pair_channel_list_override(ReadEnvOrDefault("DRCD_PAIR_CHANNEL_LIST", ""))
@@ -715,11 +729,17 @@ public:
 			return Fail("invalid interface name");
 		if (!request.pairing_code.valid())
 			return Fail("invalid pairing code");
+		auto channel_plan = BuildPairingChannelPlan(
+			m_channel, m_pair_channel_sweep, m_pair_channel_list_override);
 		std::string compatibility_error;
-		if (!CheckAdapterCompatibility(request.interface_name, compatibility_error))
+		if (!CheckAdapterCompatibility(request.interface_name, channel_plan, false, compatibility_error) &&
+			!CanApplyRegulatoryCountry(compatibility_error))
 			return Fail(compatibility_error);
 
 		(void)stop_session();
+		if (!CheckAdapterWithRegulatoryRecovery(
+				request.interface_name, channel_plan, false, compatibility_error))
+			return AbortStart(compatibility_error);
 
 		m_base_interface = request.interface_name;
 		m_ap_interface = request.interface_name;
@@ -742,6 +762,8 @@ public:
 		{
 			Log("credentials: reusing saved credential set for AP " + m_ap_mac.to_string());
 		}
+		channel_plan = BuildPairingChannelPlan(
+			m_channel, m_pair_channel_sweep, m_pair_channel_list_override);
 		m_probe_seen.clear();
 		m_targeted_wps_pin_at.clear();
 		m_pairing_activity_seen.store(false);
@@ -762,13 +784,15 @@ public:
 		std::string error;
 		if (!PrepareInterfaceForAp(error))
 			return AbortStart("failed to prepare interface for AP mode: " + error);
+		if (!CheckAdapterWithRegulatoryRecovery(
+				request.interface_name, channel_plan, true, compatibility_error))
+			return AbortStart(compatibility_error);
 
 		if (!WritePairingCredentialsBlob(m_runtime_ssid, m_psk_hex, m_ap_mac, m_credential_blob_path, error))
 			return AbortStart("failed to build WPS credential blob: " + error);
 		Log("pair-start: wrote credential blob " + m_credential_blob_path);
 
 		const std::string pairing_ssid = barista::drh::build_pairing_ssid(m_ap_mac, m_pairing_code);
-		const auto channel_plan = BuildPairingChannelPlan(m_channel, m_pair_channel_sweep, m_pair_channel_list_override);
 		Log("pair-start: channel plan=" + JoinChannels(channel_plan));
 		int selected_channel = -1;
 		std::string last_channel_error;
@@ -858,10 +882,16 @@ public:
 			return Fail("operation cancelled");
 		if (!ValidateInterfaceName(request.interface_name))
 			return Fail("invalid interface name");
+		auto channel_plan = BuildPairingChannelPlan(
+			m_channel, m_pair_channel_sweep, m_pair_channel_list_override);
 		std::string compatibility_error;
-		if (!CheckAdapterCompatibility(request.interface_name, compatibility_error))
+		if (!CheckAdapterCompatibility(request.interface_name, channel_plan, false, compatibility_error) &&
+			!CanApplyRegulatoryCountry(compatibility_error))
 			return Fail(compatibility_error);
 		(void)stop_session();
+		if (!CheckAdapterWithRegulatoryRecovery(
+				request.interface_name, channel_plan, false, compatibility_error))
+			return AbortStart(compatibility_error);
 		m_base_interface = request.interface_name;
 		m_ap_interface = request.interface_name;
 		m_ap_mac = request.ap_mac;
@@ -870,9 +900,14 @@ public:
 		m_test_black_frames = request.test_black_frames;
 		if (!LoadCredentials())
 			return AbortStart("no saved credentials for AP " + request.ap_mac.to_string());
+		channel_plan = BuildPairingChannelPlan(
+			m_channel, m_pair_channel_sweep, m_pair_channel_list_override);
 		std::string error;
 		if (!PrepareInterfaceForAp(error))
 			return AbortStart("failed to prepare interface for runtime AP mode: " + error);
+		if (!CheckAdapterWithRegulatoryRecovery(
+				request.interface_name, channel_plan, true, compatibility_error))
+			return AbortStart(compatibility_error);
 		m_snapshot.phase = "pairing";
 		m_snapshot.base_interface = m_base_interface;
 		m_snapshot.ap_interface = m_ap_interface;
@@ -880,7 +915,91 @@ public:
 	}
 
 private:
-	bool CheckAdapterCompatibility(const std::string& interface_name, std::string& error)
+	bool CanApplyRegulatoryCountry(std::string_view compatibility_error) const
+	{
+		return !m_regulatory_country.empty() &&
+			compatibility_error.find("no-IR") != std::string_view::npos;
+	}
+
+	std::optional<std::string> CurrentRegulatoryCountry() const
+	{
+		std::string output;
+		if (!RunIw({"reg", "get"}, output))
+			return std::nullopt;
+		return ParseRegulatoryCountry(output);
+	}
+
+	bool ApplyRegulatoryCountry(std::string& error)
+	{
+		const auto current = CurrentRegulatoryCountry();
+		if (!current)
+		{
+			error = "wireless regulatory domain remains no-IR because its current country could not be inspected";
+			return false;
+		}
+		if (!m_previous_regulatory_country)
+		{
+			if (*current != "00")
+			{
+				Log("regulatory: preserving existing country " + *current +
+					" instead of applying requested " + m_regulatory_country);
+				return false;
+			}
+			m_previous_regulatory_country = *current;
+		}
+		else if (*current != *m_previous_regulatory_country && *current != m_regulatory_country)
+		{
+			Log("regulatory: country changed externally to " + *current + "; leaving it unchanged");
+			return false;
+		}
+		if (*current == m_regulatory_country)
+			return false;
+
+		std::string output;
+		if (!RunIw({"reg", "set", m_regulatory_country}, output))
+		{
+			error = "wireless regulatory domain remains no-IR because temporary country " +
+				m_regulatory_country + " could not be applied";
+			return false;
+		}
+		Log("regulatory: temporarily changed country from " + *current + " to " +
+			m_regulatory_country);
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		return true;
+	}
+
+	bool CheckAdapterWithRegulatoryRecovery(const std::string& interface_name,
+		std::span<const int> pairing_channels, bool announce_ready, std::string& error)
+	{
+		if (CheckAdapterCompatibility(interface_name, pairing_channels, announce_ready, error))
+			return true;
+		if (!CanApplyRegulatoryCountry(error) || !ApplyRegulatoryCountry(error))
+			return false;
+		return CheckAdapterCompatibility(interface_name, pairing_channels, announce_ready, error);
+	}
+
+	void RestoreRegulatoryCountry()
+	{
+		if (!m_previous_regulatory_country)
+			return;
+		const std::string previous = *m_previous_regulatory_country;
+		m_previous_regulatory_country.reset();
+		const auto current = CurrentRegulatoryCountry();
+		if (!current || !ShouldRestoreRegulatoryCountry(
+				previous, m_regulatory_country, *current))
+		{
+			Log("regulatory: current country changed after Barista's override; not restoring " + previous);
+			return;
+		}
+		std::string output;
+		if (RunIw({"reg", "set", previous}, output))
+			Log("regulatory: restored country " + previous);
+		else
+			Log("regulatory: could not restore country " + previous);
+	}
+
+	bool CheckAdapterCompatibility(const std::string& interface_name,
+		std::span<const int> pairing_channels, bool announce_ready, std::string& error)
 	{
 		std::error_code ec;
 		const auto driver = std::filesystem::canonical(
@@ -908,34 +1027,35 @@ private:
 			error = "could not inspect capabilities for " + interface_name;
 			return false;
 		}
-		const bool ap = phy_info.find("* AP\n") != std::string::npos ||
-			phy_info.find("* AP\r\n") != std::string::npos;
+		const auto capabilities = AnalyzeWifiApCapabilities(phy_info, pairing_channels);
 		const bool monitor = phy_info.find("* monitor\n") != std::string::npos ||
 			phy_info.find("* monitor\r\n") != std::string::npos;
-		bool five_ghz = false;
-		for (size_t pos = 0; (pos = phy_info.find(" MHz", pos)) != std::string::npos; pos += 4)
-		{
-			const size_t line_start = phy_info.rfind('\n', pos);
-			const size_t value_start = phy_info.find_first_of("0123456789", line_start == std::string::npos ? 0 : line_start + 1);
-			if (value_start != std::string::npos && value_start < pos)
-			{
-				try { five_ghz = std::stod(phy_info.substr(value_start, pos - value_start)) >= 5000.0; }
-				catch (...) {}
-				if (five_ghz) break;
-			}
-		}
 		Log("adapter-check: " + interface_name + " driver=" + driver_name +
-			" phy=phy" + wiphy + " ap=" + (ap ? "yes" : "no") +
+			" phy=phy" + wiphy + " ap=" + (capabilities.ap_mode ? "yes" : "no") +
 			" monitor=" + (monitor ? "yes" : "no") +
-			" 5ghz=" + (five_ghz ? "yes" : "no") +
+			" 5ghz=" + (capabilities.five_ghz ? "yes" : "no") +
+			" pairing-channel=" + (capabilities.usable_pairing_channel ? "ready" :
+				capabilities.pairing_channel_no_ir ? "no-ir" : "unavailable") +
 			" wps=runtime-test");
-		if (!ap || !five_ghz)
+		if (!capabilities.ap_mode || !capabilities.five_ghz)
 		{
 			error = "adapter " + interface_name + " lacks required 5 GHz AP capability";
 			return false;
 		}
-		QueueStatus("Adapter ready: driver=" + driver_name + " ap=yes monitor=" +
-			(monitor ? "yes" : "no") + " 5ghz=yes");
+		if (!capabilities.usable_pairing_channel && capabilities.pairing_channel_no_ir)
+		{
+			error = "adapter " + interface_name +
+				" has no usable 5 GHz AP channel because the wireless regulatory domain marks pairing channels no-IR";
+			return false;
+		}
+		if (!capabilities.usable_pairing_channel)
+		{
+			error = "adapter " + interface_name + " lacks required 5 GHz AP capability";
+			return false;
+		}
+		if (announce_ready)
+			QueueStatus("Adapter ready: driver=" + driver_name + " ap=yes monitor=" +
+				(monitor ? "yes" : "no") + " 5ghz=yes");
 		return true;
 	}
 
@@ -1042,6 +1162,7 @@ public:
 		RestoreRuntimeMediaQos();
 		StopHostapd();
 		RestoreInterface();
+		RestoreRegulatoryCountry();
 		CleanupTemporaryFiles();
 		m_probe_seen.clear();
 		m_targeted_wps_pin_at.clear();
@@ -1889,6 +2010,7 @@ private:
 		StopPairChannelSweep();
 		StopHostapd();
 		RestoreInterface();
+		RestoreRegulatoryCountry();
 		if (!ParseBoolEnv("DRCD_KEEP_FAILED_TEMP", false))
 			CleanupTemporaryFiles();
 		m_base_interface.clear();
@@ -2720,6 +2842,8 @@ private:
 	std::deque<std::string> m_status_events;
 	std::string m_log_path;
 	std::string m_credentials_path;
+	std::string m_regulatory_country;
+	std::optional<std::string> m_previous_regulatory_country;
 	mutable std::mutex m_log_mutex;
 	mutable std::ofstream m_log_stream;
 	mutable size_t m_log_bytes = 0;

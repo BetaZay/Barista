@@ -98,6 +98,15 @@ addresses, SSIDs, pairing codes, credentials, usernames, and raw hostapd output.
 Detailed private engine logs remain available to administrators for local
 investigation and should be reviewed before being shared.
 
+If Advanced reports `AP_REGULATORY_BLOCKED`, check the active country with
+`iw reg get`. A `country 00` world domain commonly marks 5 GHz channels
+`no IR`, so the kernel prevents hostapd from transmitting AP beacons; firewall
+changes do not affect this failure. The GUI suggests a two-letter country from
+the desktop locale and asks the user to confirm that it matches the machine's
+physical location. When confirmed, Barista can temporarily replace `00` for
+the session. It restores the previous domain at shutdown unless another
+component changed the setting in the meantime.
+
 ## Build and install
 
 See [COMPILING.md](COMPILING.md) for dependencies, a development build, tests,

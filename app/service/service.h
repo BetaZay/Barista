@@ -28,7 +28,9 @@ public slots:
     void RemoveGamePad(const QString& mac);
     void RenameGamePad(const QString& mac, const QString& name);
     void StartSession(const QString& interface, const QString& mode);
+    void StartSessionWithCountry(const QString& interface, const QString& mode, const QString& regulatoryCountry);
     void Pair(const QString& interface, const QString& code, const QString& mode);
+    void PairWithCountry(const QString& interface, const QString& code, const QString& mode, const QString& regulatoryCountry);
     void StopSession();
     void PrepareSystem();
 private:
@@ -40,7 +42,8 @@ private:
     void Authorize(std::function<QString(uint, const QString&)> operation);
     void Prepare(bool controller, const QString& caller, Completion done);
     void RunSetup(const QString& program, const QStringList& args, Completion done);
-    QString Start(const QString& interface, barista::api::SessionMode mode, const QString& code, uint uid, const QString& caller);
+    QString Start(const QString& interface, barista::api::SessionMode mode, const QString& code,
+        const QString& regulatoryCountry, uint uid, const QString& caller);
     barista::api::SessionStatus Status(bool ownedByCaller) const;
     void Poll();
     void ParseStatus();

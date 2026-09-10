@@ -20,20 +20,27 @@ must remain unprivileged.
 | `GetStatus` | none | Variant map described below |
 | `GetDiagnostics` | none | Privacy-safe support report and retained support-log metadata |
 | `SavedGamePads` | none | List of maps with `mac` and `name` |
-| `StartSession` | `interface: string`, `mode: string` | Empty on completion |
-| `Pair` | `interface: string`, `code: string`, `mode: string` | Empty on completion |
+| `StartSession` | `interface: string`, `mode: string` | Empty on completion; compatibility entry point without a country override |
+| `StartSessionWithCountry` | `interface: string`, `mode: string`, `regulatoryCountry: string` | Empty on completion |
+| `Pair` | `interface: string`, `code: string`, `mode: string` | Empty on completion; compatibility entry point without a country override |
+| `PairWithCountry` | `interface: string`, `code: string`, `mode: string`, `regulatoryCountry: string` | Empty on completion |
 | `StopSession` | none | Empty on completion |
 | `PrepareSystem` | none | Empty on completion |
 | `RenameGamePad` | `mac: string`, `name: string` | Empty |
 | `RemoveGamePad` | `mac: string` | Empty |
 
-`StartSession`, `Pair`, `StopSession`, and `PrepareSystem` use PolicyKit and may
+The session, pairing, stop, and preparation methods use PolicyKit and may
 hold the D-Bus reply while user authorization or setup completes. The bundled
 Qt client allows 150 seconds for mutations and 25 seconds for reads; those are
 client policy, not wire-level guarantees.
 
 `RenameGamePad` and `RemoveGamePad` currently return no structured persistence
 result. Call `SavedGamePads` afterward if confirmation matters.
+
+`regulatoryCountry` is empty or a two-letter country code. A configured code
+allows the engine to temporarily replace an unset `00` wireless regulatory
+domain; it never replaces another configured country. The engine restores its
+previous value when the session stops unless the value changed externally.
 
 ## Status map
 
@@ -127,10 +134,10 @@ busctl call org.barista.Service1 /org/barista/Service1 \
     org.barista.Service1 SavedGamePads
 
 busctl call org.barista.Service1 /org/barista/Service1 \
-    org.barista.Service1 StartSession ss wlan1 real
+    org.barista.Service1 StartSessionWithCountry sss wlan1 real US
 
 busctl call org.barista.Service1 /org/barista/Service1 \
-    org.barista.Service1 Pair sss wlan1 0123 real
+    org.barista.Service1 PairWithCountry ssss wlan1 0123 real US
 ```
 
 The last two calls can display an authorization prompt and alter the selected

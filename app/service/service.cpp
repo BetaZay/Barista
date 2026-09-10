@@ -597,32 +597,46 @@ void Service::AuthorizeAsync(std::function<void(uint,const QString&,Completion)>
 }
 void Service::StartSession(const QString& interface, const QString& mode)
 {
+    StartSessionWithCountry(interface,mode,{});
+}
+void Service::StartSessionWithCountry(const QString& interface, const QString& mode, const QString& regulatoryCountry)
+{
     const auto parsedMode = barista::api::ParseSessionMode(mode.toStdString());
-    AuthorizeAsync([this,interface,parsedMode](uint uid,const QString& caller,Completion done) {
+    const QString country = regulatoryCountry.trimmed().toUpper();
+    AuthorizeAsync([this,interface,parsedMode,country](uint uid,const QString& caller,Completion done) {
         if (!barista::api::ValidInterfaceName(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
             !parsedMode) { done("Choose an existing wireless adapter and supported mode"); return; }
+        if (!country.isEmpty() && !barista::api::ValidRegulatoryCountry(country.toStdString()))
+        { done("Choose a valid two-letter regulatory country code"); return; }
         if (m_worker.state() != QProcess::NotRunning) { done("Stop the current session before starting another one"); return; }
         m_error.clear(); m_errorCode.clear(); m_mode = *parsedMode; m_interface = interface;
         StartSupportRun(ModeName(*parsedMode));
-        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,mode=*parsedMode,uid,caller,done](QString error) {
+        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,mode=*parsedMode,country,uid,caller,done](QString error) {
             if (!error.isEmpty()) { done(error); CloseSupportRun(); return; }
-            done(Start(interface,mode,{},uid,caller));
+            done(Start(interface,mode,{},country,uid,caller));
         });
     });
 }
 void Service::Pair(const QString& interface, const QString& code, const QString& mode)
 {
+    PairWithCountry(interface,code,mode,{});
+}
+void Service::PairWithCountry(const QString& interface, const QString& code, const QString& mode, const QString& regulatoryCountry)
+{
     if (!barista::api::ParsePairCode(code.toStdString())) { sendErrorReply("org.barista.Error.Invalid", "Pairing code must be four digits 0–3"); return; }
     const auto parsedMode = barista::api::ParseSessionMode(mode.toStdString());
-    AuthorizeAsync([this,interface,code,parsedMode](uint uid,const QString& caller,Completion done) {
+    const QString country = regulatoryCountry.trimmed().toUpper();
+    AuthorizeAsync([this,interface,code,parsedMode,country](uint uid,const QString& caller,Completion done) {
         if (!barista::api::ValidInterfaceName(interface.toStdString()) || !QFileInfo::exists("/sys/class/net/" + interface + "/phy80211") ||
             !parsedMode) { done("Choose an existing wireless adapter and supported mode"); return; }
+        if (!country.isEmpty() && !barista::api::ValidRegulatoryCountry(country.toStdString()))
+        { done("Choose a valid two-letter regulatory country code"); return; }
         if (m_worker.state() != QProcess::NotRunning) { done("Stop the current session before starting another one"); return; }
         m_error.clear(); m_errorCode.clear(); m_mode = *parsedMode; m_interface = interface;
         StartSupportRun(ModeName(*parsedMode));
-        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,code,mode=*parsedMode,uid,caller,done](QString error) {
+        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,code,mode=*parsedMode,country,uid,caller,done](QString error) {
             if (!error.isEmpty()) { done(error); CloseSupportRun(); return; }
-            done(Start(interface,mode,code,uid,caller));
+            done(Start(interface,mode,code,country,uid,caller));
         });
     });
 }
@@ -691,7 +705,8 @@ void Service::StopSession()
         StopWorker(); return {};
     });
 }
-QString Service::Start(const QString& interface, barista::api::SessionMode mode, const QString& code, uint uid, const QString& caller)
+QString Service::Start(const QString& interface, barista::api::SessionMode mode, const QString& code,
+    const QString& regulatoryCountry, uint uid, const QString& caller)
 {
     if (m_worker.state() != QProcess::NotRunning) {
         RecordDiagnostic("SESSION_BUSY"); CloseSupportRun(); return "Stop the current session before changing mode or pairing";
@@ -747,6 +762,8 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
     env.insert("DRCD_LOG_FILE",QString::fromLatin1(RawLogDirectory) + "/private-" + m_runLogName);
     // Prefer the known-good non-DFS Wii U pairing channel before the fallback sweep.
     env.insert("DRCD_AP_CHANNEL","149");
+    if (!regulatoryCountry.isEmpty())
+        env.insert("DRCD_REGULATORY_COUNTRY",regulatoryCountry);
     env.insert("BARISTA_MUG_SOCKET",m_endpoint);
     env.insert("BARISTA_IDLE_I420","/run/barista/idle.i420");
     env.insert("BARISTA_CLIENT_UID",QString::number(mode == barista::api::SessionMode::Controller ? 0 : uid));

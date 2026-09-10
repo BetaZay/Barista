@@ -22,8 +22,9 @@ int main(int argc, char** argv)
         auto* stop = window.findChild<QPushButton*>("stopButton");
         auto* pair = window.findChild<QPushButton*>("pairButton");
         auto* pairInterface = window.findChild<QComboBox*>("pairInterfaceCombo");
+        auto* country = window.findChild<QLineEdit*>("regulatoryCountry");
         auto* advanced = window.findChild<QWidget*>("advancedPanel");
-        Check(start && stop && pair && pairInterface && advanced,"required controls");
+        Check(start && stop && pair && pairInterface && country && advanced,"required controls");
         Check(!window.findChild<QToolBar*>("sessionToolbar"),"session controls are not duplicated in a toolbar");
         Check(!start->isEnabled() && !stop->isEnabled(),"service missing disables actions");
         auto* tabs = window.findChild<QTabWidget*>();
@@ -69,7 +70,18 @@ int main(int argc, char** argv)
         auto* supportDetails = window.findChild<QLabel*>("supportDetails");
         Check(supportDetails && supportDetails->text().contains("ADAPTER_UNSUPPORTED") &&
             supportDetails->text().contains("Select another adapter"),"diagnostic guidance is shown");
+        status.running = true;
+        status.error = barista::api::Error{.code=barista::api::ErrorCode::Failed,.message="Regulatory domain blocked",
+            .diagnosticCode="AP_REGULATORY_BLOCKED",.action="Configure the country code."};
+        apply();
+        Check(pairingStatus->text().contains("regulatory domain") &&
+            !pairingStatus->text().contains("another GamePad session"),"regulatory failure replaces misleading running-session text");
+        status.running = false;
         status.error.reset(); apply();
+        country->setText("U"); apply();
+        Check(!start->isEnabled() && !pair->isEnabled(),"invalid regulatory country disables session actions");
+        country->setText("US"); apply();
+        Check(start->isEnabled() && pair->isEnabled(),"valid regulatory country enables session actions");
         int operations = 0;
         QObject::connect(client,&ControlClient::Pending,[&](bool pending) { if (pending) ++operations; });
         pairInterface->setCurrentText("wlan1");
@@ -87,7 +99,8 @@ int main(int argc, char** argv)
             const auto selectedInterface = selectedName(selectedCombo);
             QTimer::singleShot(0,[&] {
                 if (auto* dialog = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
-                    warned = dialog->text().contains("Internet access") && dialog->text().contains(selectedInterface);
+                    warned = dialog->text().contains("Internet access") && dialog->text().contains(selectedInterface) &&
+                        dialog->informativeText().contains("US") && dialog->informativeText().contains("system-wide");
                     safeDefault = dialog->defaultButton() == dialog->button(QMessageBox::Cancel);
                     dialog->reject();
                 }

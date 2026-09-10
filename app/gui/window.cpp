@@ -15,6 +15,7 @@
 #include <QDateTime>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QListWidget>
 #include <QInputDialog>
 #include <QMenu>
@@ -25,6 +26,8 @@
 #include <QPixmap>
 #include <QImage>
 #include <QPushButton>
+#include <QRegularExpression>
+#include <QRegularExpressionValidator>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -156,6 +159,11 @@ QPixmap AppLogoPreview(const QString& path)
         }
     }
     return QPixmap::fromImage(image);
+}
+
+QString SuggestedRegulatoryCountry()
+{
+    return QLocale::territoryToCode(QLocale::system().territory()).toUpper();
 }
 }
 
@@ -325,6 +333,22 @@ Window::Window(bool smokeTest)
         m_pairInterface->addItem(m_interface->itemText(i),m_interface->itemData(i));
     SelectInterface(m_pairInterface,InterfaceName(m_interface));
     pairingForm->addRow("&Wi-Fi adapter:",m_pairInterface);
+    m_country = new QLineEdit(pairing);
+    m_country->setObjectName("regulatoryCountry");
+    m_country->setMaxLength(2);
+    m_country->setValidator(new QRegularExpressionValidator(QRegularExpression("[A-Za-z]{0,2}"),m_country));
+    m_country->setPlaceholderText("System setting");
+    if (!smokeTest)
+        m_country->setText(QSettings().value("regulatoryCountry",SuggestedRegulatoryCountry()).toString().toUpper());
+    connect(m_country,&QLineEdit::textEdited,this,[this](const QString& value) {
+        const QString upper = value.toUpper();
+        if (upper != value) m_country->setText(upper);
+        ApplyStatus(m_lastStatus);
+    });
+    pairingForm->addRow("Regulatory &country:",m_country);
+    auto* countryHelp = new QLabel("Barista suggests the two-letter country from your desktop locale. Confirm it matches your physical location; a temporary radio setting is restored when the session stops.",pairing);
+    countryHelp->setWordWrap(true);
+    pairingLayout->addWidget(countryHelp);
     pairingLayout->addWidget(new QLabel("Choose four symbols below. Once Barista says “Pair now,” press SYNC on the GamePad and enter the same symbols there. The GamePad submits automatically after the fourth symbol.",pairing));
     m_pairSymbols = new QWidget(pairing);
     auto* symbols = new QHBoxLayout(m_pairSymbols);
@@ -539,8 +563,10 @@ Window::Window(bool smokeTest)
         settings.setValue("interface",interface);
         settings.setValue("pairInterface",interface);
         settings.setValue("mode",QString::fromLatin1(barista::api::SessionModeName(Mode())));
+        const QString country = m_country->text().trimmed().toUpper();
+        settings.setValue("regulatoryCountry",country);
         m_message->hide();
-        m_client.Start({interface.toStdString(), Mode()});
+        m_client.Start({interface.toStdString(), Mode(), country.toStdString()});
     });
     connect(m_stop,&QPushButton::clicked,&m_client,&ControlClient::Stop);
     connect(m_pair,&QPushButton::clicked,this,[this] {
@@ -549,11 +575,13 @@ Window::Window(bool smokeTest)
         QSettings settings;
         settings.setValue("interface",interface);
         settings.setValue("pairInterface",interface);
+        const QString country = m_country->text().trimmed().toUpper();
+        settings.setValue("regulatoryCountry",country);
         m_message->hide();
         m_pairingRequested = true;
         const auto code = barista::api::ParsePairCode(m_code->text().toStdString());
         if (!code) return;
-        m_client.Pair({{interface.toStdString(), Mode()}, *code});
+        m_client.Pair({{interface.toStdString(), Mode(), country.toStdString()}, *code});
     });
     connect(m_copy,&QPushButton::clicked,this,[this] {
         QApplication::clipboard()->setText("env BARISTA_MUG_SOCKET=" + m_endpoint->text() + " ");
@@ -672,9 +700,13 @@ bool Window::ConfirmWifi(bool pairing, const QString& interface)
     QMessageBox warning(QMessageBox::Warning, pairing ? "Pair your GamePad?" : "Start Barista?",
         QString("Barista will take over Wi-Fi adapter %1 for your GamePad. Internet access through this adapter will be interrupted. Use Ethernet or another Wi-Fi adapter to stay online.")
             .arg(interface), QMessageBox::NoButton, this);
-    warning.setInformativeText(pairing
+    QString information = pairing
         ? "This can replace your saved pairing and disconnect the GamePad from its Wii U. Stop releases the adapter; you may need to reconnect to your Wi-Fi network."
-        : "Stop releases the adapter; you may need to reconnect to your Wi-Fi network. Barista starts NetworkManager and loads controller support if needed. Your desktop may ask for permission.");
+        : "Stop releases the adapter; you may need to reconnect to your Wi-Fi network. Barista starts NetworkManager and loads controller support if needed. Your desktop may ask for permission.";
+    const QString country = m_country->text().trimmed().toUpper();
+    if (!country.isEmpty())
+        information += QString(" If the system is using the world regulatory domain, Barista will temporarily apply %1 system-wide and restore the prior setting when this session stops. Confirm %1 matches your physical location.").arg(country);
+    warning.setInformativeText(information);
     auto* proceed = warning.addButton(pairing ? "Pair GamePad" : "Start",QMessageBox::AcceptRole);
     auto* cancel = warning.addButton(QMessageBox::Cancel);
     warning.setDefaultButton(cancel);
@@ -905,9 +937,12 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     }
     const bool supported = Mode() != barista::api::SessionMode::Controller || status.capabilities.controller ||
         status.capabilities.controllerSetup;
-    m_start->setEnabled(available && !running && !busy && supported);
+    const std::string country = m_country->text().trimmed().toUpper().toStdString();
+    const bool validCountry = country.empty() || barista::api::ValidRegulatoryCountry(country);
+    m_start->setEnabled(available && !running && !busy && supported && validCountry);
     m_pair->setEnabled(available && !running && !busy && supported &&
-        barista::api::ParsePairCode(m_code->text().toStdString()).has_value());
+        barista::api::ParsePairCode(m_code->text().toStdString()).has_value() &&
+        validCountry);
     m_stop->setEnabled(available && running && !busy && owned && phase != barista::api::SessionPhase::Stopping);
     m_trayStart->setEnabled(m_start->isEnabled());
     m_trayStop->setEnabled(m_stop->isEnabled());
@@ -958,6 +993,9 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         pairStatus = QString("Pair now — the pairing network is ready on %1. Press SYNC on the GamePad and enter the four symbols selected above. The GamePad submits automatically after the fourth symbol.")
             .arg(pairInterface);
         pairStatusTone = Tone::Good;
+    } else if (status.error && status.error->diagnosticCode == "AP_REGULATORY_BLOCKED") {
+        pairStatus = "Pairing cannot start because the system blocks 5 GHz access-point channels. Configure the Wi-Fi regulatory domain for your actual country, then reconnect the adapter and try again.";
+        pairStatusTone = Tone::Bad;
     } else if (running) {
         pairStatus = "Pairing is unavailable while another GamePad session is running.";
         pairStatusTone = Tone::Warning;

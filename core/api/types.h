@@ -11,7 +11,7 @@
 
 namespace barista::api
 {
-inline constexpr uint32_t ApiVersion = 2;
+inline constexpr uint32_t ApiVersion = 3;
 
 enum class ErrorCode
 {
@@ -171,6 +171,7 @@ struct StartSessionRequest
 {
     std::string interfaceName;
     SessionMode mode = SessionMode::Real;
+    std::string regulatoryCountry;
 };
 
 struct PairRequest : StartSessionRequest
@@ -188,6 +189,13 @@ inline bool ValidInterfaceName(std::string_view name)
             (character >= '0' && character <= '9') ||
             character == '_' || character == '-' || character == '.';
     });
+}
+
+inline bool ValidRegulatoryCountry(std::string_view country)
+{
+    return country.size() == 2 &&
+        country[0] >= 'A' && country[0] <= 'Z' &&
+        country[1] >= 'A' && country[1] <= 'Z';
 }
 
 inline constexpr std::optional<std::array<uint8_t, 4>> ParsePairCode(std::string_view value)

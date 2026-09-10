@@ -34,7 +34,7 @@ private:
     ControlClient m_client;
     QTabWidget* m_tabs;
     QComboBox *m_interface, *m_pairInterface, *m_mode, *m_logFiles;
-    QLineEdit *m_code, *m_endpoint;
+    QLineEdit *m_code, *m_country, *m_endpoint;
     QLabel *m_status, *m_message, *m_description, *m_hint, *m_details, *m_pairStatus, *m_supportId;
     QLabel *m_gamepadState, *m_gamepadPhase, *m_gamepadMode, *m_gamepadIface, *m_gamepadBattery;
     QLabel *m_appName, *m_appLock, *m_appLastSeen, *m_appSocket, *m_appIdleLogo, *m_appLogo;

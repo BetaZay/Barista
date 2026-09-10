@@ -96,14 +96,16 @@ void ControlClient::Retry() { m_nextRetry = 0; Refresh(); }
 void ControlClient::Prepare() { Call("PrepareSystem"); }
 void ControlClient::Start(const barista::api::StartSessionRequest& request)
 {
-    Call("StartSession", {QString::fromStdString(request.interfaceName),
-        QString::fromLatin1(barista::api::SessionModeName(request.mode))});
+    Call("StartSessionWithCountry", {QString::fromStdString(request.interfaceName),
+        QString::fromLatin1(barista::api::SessionModeName(request.mode)),
+        QString::fromStdString(request.regulatoryCountry)});
 }
 void ControlClient::Pair(const barista::api::PairRequest& request)
 {
-    Call("Pair", {QString::fromStdString(request.interfaceName),
+    Call("PairWithCountry", {QString::fromStdString(request.interfaceName),
         QString::fromStdString(barista::api::PairCodeName(request.code)),
-        QString::fromLatin1(barista::api::SessionModeName(request.mode))});
+        QString::fromLatin1(barista::api::SessionModeName(request.mode)),
+        QString::fromStdString(request.regulatoryCountry)});
 }
 void ControlClient::RenameGamePad(const barista::api::RenameGamePadRequest& request)
 {

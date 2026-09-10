@@ -12,6 +12,9 @@ int main()
     check(barista::api::ValidInterfaceName("wlan1"));
     for (auto value : {"", "../wlan0", "-x", "a b", "a\nb", "abcdefghijklmnop", ".", ".."})
         check(!barista::api::ValidInterfaceName(value));
+    check(barista::api::ValidRegulatoryCountry("US"));
+    for (auto value : {"", "U", "USA", "us", "00", "U1"})
+        check(!barista::api::ValidRegulatoryCountry(value));
     check(barista::api::ParsePairCode("0123").has_value());
     check(barista::api::PairCodeName(*barista::api::ParsePairCode("0123")) == "0123");
     for (auto value : {"", "123", "4321", "0123\n", "-123"}) check(!barista::api::ParsePairCode(value));
@@ -34,6 +37,8 @@ int main()
     check(!barista::api::ParseSessionPhase("unknown"));
     check(barista::api::SessionPhaseName(barista::api::SessionPhase::Stopping) == "stopping");
     check(barista::api::ClassifyDiagnosticMessage("adapter wlan0 lacks required 5 GHz AP capability") == "ADAPTER_UNSUPPORTED");
+    check(barista::api::ClassifyDiagnosticMessage("adapter wlan0 has no usable 5 GHz AP channel because the wireless regulatory domain marks pairing channels no-IR") == "AP_REGULATORY_BLOCKED");
+    check(barista::api::AdviceForDiagnostic("AP_REGULATORY_BLOCKED").action.find("country code") != std::string_view::npos);
     check(barista::api::AdviceForDiagnostic("PAIRING_TIMEOUT").action.find("SYNC") != std::string_view::npos);
     check(barista::api::IsKnownDiagnosticCode("MEDIA_TRANSPORT_STATS"));
     check(!barista::api::IsKnownDiagnosticCode("SECRET_AABBCCDDEEFF"));

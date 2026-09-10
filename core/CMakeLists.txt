@@ -46,6 +46,7 @@ if(BARISTA_BUILD_ENGINE)
     add_library(barista_drh_server STATIC
         drh/server/interrupt.cpp
         drh/server/server_core.cpp
+        drh/server/wifi_capabilities.cpp
     )
     add_library(barista::drh_server ALIAS barista_drh_server)
     add_library(drcd_core ALIAS barista_drh_server)
@@ -170,6 +171,10 @@ if(BUILD_TESTING)
         add_executable(drcd_core_tests tests/server_core_tests.cpp)
         target_link_libraries(drcd_core_tests PRIVATE barista_drh_server)
         add_test(NAME drcd_core_tests COMMAND drcd_core_tests)
+
+        add_executable(drcd_wifi_capability_tests tests/wifi_capability_tests.cpp)
+        target_link_libraries(drcd_wifi_capability_tests PRIVATE barista_drh_server)
+        add_test(NAME drcd_wifi_capability_tests COMMAND drcd_wifi_capability_tests)
         add_test(NAME drcd_fast_encode_tests COMMAND drcd_core_tests)
         set_tests_properties(drcd_fast_encode_tests PROPERTIES ENVIRONMENT "DRCD_FAST_ENCODE=1")
         add_test(NAME drcd_no_intra_refresh_tests COMMAND drcd_core_tests)

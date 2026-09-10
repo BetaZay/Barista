@@ -20,7 +20,7 @@ inline constexpr bool IsKnownDiagnosticCode(std::string_view code)
         "SYSTEM_PREPARATION_SUCCEEDED", "SYSTEM_PREPARATION_FAILED",
         "SESSION_BUSY", "INVALID_REQUEST", "ENGINE_START_FAILED", "ENGINE_EXITED",
         "ADAPTER_UNSUPPORTED", "ADAPTER_INSPECTION_FAILED", "ADAPTER_READY",
-        "AP_START_FAILED", "PAIRING_CYCLE_STARTED", "PAIRING_READY",
+        "AP_START_FAILED", "AP_REGULATORY_BLOCKED", "PAIRING_CYCLE_STARTED", "PAIRING_READY",
         "PAIRING_RADIO_READY", "PAIRING_TIMEOUT", "PAIRING_SUCCEEDED",
         "GAMEPAD_SEARCH_STARTED", "GAMEPAD_ASSOCIATED", "GAMEPAD_CONNECTED",
         "GAMEPAD_DISCONNECTED", "RUNTIME_READY", "PROTOCOL_START_FAILED",
@@ -60,6 +60,8 @@ inline constexpr DiagnosticAdvice AdviceForDiagnostic(std::string_view code)
         return {"The selected Wi-Fi adapter passed the capability check.", "No adapter change is needed."};
     if (code == "AP_START_FAILED")
         return {"The GamePad Wi-Fi network could not be started.", "Stop programs using this adapter, reconnect it if necessary, and try again."};
+    if (code == "AP_REGULATORY_BLOCKED")
+        return {"The system's wireless regulatory settings block every supported 5 GHz pairing channel.", "Configure the Wi-Fi regulatory domain for your actual two-letter country code, reconnect the adapter, and try again."};
     if (code == "PAIRING_CYCLE_STARTED")
         return {"A GamePad pairing cycle started.", "Wait for Pair now, then press SYNC on the GamePad."};
     if (code == "PAIRING_READY")
@@ -110,7 +112,8 @@ inline constexpr std::string_view DiagnosticSeverity(std::string_view code)
     if (code == "SERVICE_UNAVAILABLE" || code == "AUTHORIZATION_DENIED" ||
         code == "ENGINE_START_FAILED" || code == "ENGINE_EXITED" ||
         code == "ADAPTER_UNSUPPORTED" || code == "ADAPTER_INSPECTION_FAILED" ||
-        code == "AP_START_FAILED" || code == "PROTOCOL_START_FAILED" ||
+        code == "AP_START_FAILED" || code == "AP_REGULATORY_BLOCKED" ||
+        code == "PROTOCOL_START_FAILED" ||
         code == "MEDIA_SEND_FAILED" || code == "CONTROLLER_UNAVAILABLE" ||
         code == "CONTROLLER_WRITE_FAILED" || code == "SYSTEM_PREPARATION_FAILED")
         return "error";
@@ -123,6 +126,9 @@ inline constexpr std::string_view DiagnosticSeverity(std::string_view code)
 
 inline std::string_view ClassifyDiagnosticMessage(std::string_view message)
 {
+    if (message.find("regulatory domain") != std::string_view::npos &&
+        message.find("no-IR") != std::string_view::npos)
+        return "AP_REGULATORY_BLOCKED";
     if (message.find("lacks required 5 GHz AP capability") != std::string_view::npos)
         return "ADAPTER_UNSUPPORTED";
     if (message.find("inspect wireless adapter") != std::string_view::npos ||
