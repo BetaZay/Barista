@@ -22,8 +22,13 @@ x86_64 only**. Ubuntu packages are not a promise of Debian compatibility.
 
 Download `barista.asc` from <https://betazay.github.io/Barista/barista.asc>.
 Inspect it with `gpg --show-keys --with-fingerprint barista.asc` and compare the
-full primary-key fingerprint with the maintainer's independently announced
-fingerprint. Keep signature verification enabled. These setup steps require
+full primary-key fingerprint with Barista's published fingerprint:
+
+```text
+F800 6F0E 1A05 DF68 1278  EE05 5E51 F167 59FC 98B9
+```
+
+Keep signature verification enabled. These setup steps require
 administrator privileges; the Barista GUI never does.
 
 Choose `stable` below, or replace **every** occurrence with `preview`. Subscribe
@@ -69,7 +74,7 @@ Import and locally trust only the verified Barista key:
 
 ```sh
 sudo pacman-key --add barista.asc
-sudo pacman-key --lsign-key VERIFIED_FULL_PRIMARY_FINGERPRINT
+sudo pacman-key --lsign-key F8006F0E1A05DF681278EE055E51F16759FC98B9
 ```
 
 Add this section to `/etc/pacman.conf`:
