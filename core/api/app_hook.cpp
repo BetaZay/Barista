@@ -204,7 +204,6 @@ public:
 
     void session(int fd, const ucred& cred)
     {
-        linked = true;
         std::vector<uint8_t> assembly;
         uint32_t assembly_id = 0, assembly_type = 0, frame_id = 0;
         uint64_t sent_idle = 0;
@@ -243,6 +242,8 @@ public:
             }
             write_lock_file(lock_path, current, allowed_uid);
         }
+
+        linked = true;
 
         while (!stopping)
         {
@@ -408,16 +409,18 @@ public:
             }
             if (!valid) break;
         }
-        linked = false;
         close(fd);
         if (server)
         {
             unlink(lock_path.c_str());
         }
-        std::lock_guard lock(mutex);
-        client_info = {};
-        audio.clear(); video.clear(); input_time = {}; input_pending = false;
-        if (server) { active = false; heartbeat = {}; }
+        {
+            std::lock_guard lock(mutex);
+            client_info = {};
+            audio.clear(); video.clear(); input_time = {}; input_pending = false;
+            if (server) { active = false; heartbeat = {}; }
+        }
+        linked = false;
     }
 
     void run()
