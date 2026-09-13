@@ -63,6 +63,18 @@ seconds to leave managed Wi-Fi mode and bring up the pairing access point;
 wait for Barista to report that pairing is ready before using SYNC. It was
 stable once the pairing AP was running in our testing.
 
+Intel adapters (`iwlwifi`) work, but their driver **self-manages its regulatory
+domain**, which needs one extra thing from the environment: the firmware adopts
+a country only after hearing it from a neighboring 5 GHz access point during a
+scan, and falls back to the restrictive `00` world domain when nothing keeps
+supplying one. Barista scans to recover this automatically, so no manual setup
+is required, but a machine in true radio isolation has nothing to learn a
+country from and cannot host the pairing AP. `iw reg set` and
+`DRCD_REGULATORY_COUNTRY` cannot substitute — a self-managed domain ignores
+both. Tested with the **AX200** (desktop M.2, no ACPI regulatory tables, the
+harder case; laptops seed the country from firmware). Two `runtime-qos` tuning
+calls report `Operation not supported` on this driver and are skipped safely.
+
 For additional confirmed and incompatible hardware reports, see
 [Vanilla Wii U's Wireless Compatibility wiki](https://github.com/vanilla-wiiu/vanilla/wiki/Wireless-Compatibility).
 
@@ -106,6 +118,24 @@ the desktop locale and asks the user to confirm that it matches the machine's
 physical location. When confirmed, Barista can temporarily replace `00` for
 the session. It restores the previous domain at shutdown unless another
 component changed the setting in the meantime.
+
+If `iw reg get` marks the phy itself `(self-managed)` — Intel `iwlwifi` does —
+then the country override above cannot apply, because such a driver ignores the
+kernel regulatory core. Barista instead scans to make the firmware re-adopt a
+country, which requires a neighboring 5 GHz access point within range. There is
+no module option to disable this behavior; `iwlwifi.lar_disable` was removed
+from the kernel years ago and is silently ignored.
+
+Two host settings produce failures that look like Barista faults:
+
+- A radio soft-block reports `AP_START_FAILED` even though the adapter passes
+  every capability check. Check `rfkill list` and clear it with
+  `rfkill unblock wifi`.
+- A host firewall that denies inbound traffic lets the GamePad associate and
+  complete its key handshake, then stalls with protocol command timeouts and no
+  `dhcp: sent OFFER` line, because the GamePad's DHCP and protocol replies are
+  dropped locally. Allow inbound UDP on the GamePad interface for port 67 and
+  the runtime ports 50010 and 50020-50025.
 
 ## Build and install
 
