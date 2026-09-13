@@ -26,7 +26,17 @@ limitations. Windows and macOS currently support the portable UI/core only.
 
 ## Getting started
 
-1. [Build and install Barista](COMPILING.md), then open it as your normal desktop user.
+Signed **Preview** repositories are available for Ubuntu 24.04, Fedora 44, and
+Arch Linux on x86_64. Follow [Package updates and release channels](docs/updates.md)
+to subscribe with APT, DNF, or Pacman; after that, Barista updates arrive through
+your normal system updater. Stable packages will use the same repositories once
+a tested Preview build is promoted.
+
+To build Barista yourself instead, follow the [compiling guide](COMPILING.md).
+
+After installation:
+
+1. Open Barista as your normal desktop user—never with `sudo` or `pkexec`.
 2. Select your Wi-Fi adapter and confirm your country in **Settings → General**.
 3. Open **GamePads → Pair a GamePad** and follow the instructions.
 4. For a saved GamePad, use **Connect GamePad** on Home.
@@ -52,8 +62,8 @@ broader testing. Camera, microphone, and NFC support are not implemented.
 
 ## Documentation
 
-- [Build and installation](COMPILING.md)
-- [Package updates and release channels](docs/updates.md)
+- [Install and update with APT, DNF, or Pacman](docs/updates.md)
+- [Compile from source](COMPILING.md)
 - [User guide](docs/user-guide.md)
 - [Wi-Fi compatibility](docs/hardware.md)
 - [Troubleshooting and support logs](docs/troubleshooting.md)

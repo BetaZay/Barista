@@ -1,5 +1,9 @@
 # Compiling Barista
 
+This guide is for contributors and people who deliberately want a source build.
+For a normal installation that receives updates through APT, DNF, or Pacman,
+use the [signed package repositories](docs/updates.md) instead.
+
 Barista has two build layers:
 
 - The portable Qt 6 UI/core can build without the GamePad radio engine.
@@ -51,6 +55,11 @@ ctest --test-dir build-desktop --output-on-failure
 It does not provide Wi-Fi pairing, radio streaming, or a virtual controller.
 
 ## Install on Linux
+
+Installing directly with CMake does not subscribe the machine to Barista's
+package repositories and will not provide automatic system-package upgrades.
+Prefer the [packaged installation](docs/updates.md) unless you are testing local
+source changes.
 
 Choose a prefix and use the normal CMake install step:
 
@@ -105,6 +114,12 @@ On Arch Linux, install the `makedepends` listed in
 BARISTA_SOURCE_DIR="$PWD" makepkg --force -p packaging/arch/PKGBUILD
 ```
 
-The GitHub **Continuous** workflow tests these packages and updates the rolling
-prerelease after a successful code-changing push to `main`. See the
-[CI guide](docs/ci.md) for PR checks and release behavior.
+Official builds use `major.minor.build` versions. The globally increasing build
+number is assigned by CI; local source builds default to build `0` unless a
+version is supplied at configure time.
+
+The GitHub **Continuous** workflow runs the required checks and publishes
+successful `main` builds to the Preview repositories. A Stable release promotes
+those exact tested packages without rebuilding them. Preview and Stable are
+update channels, not additional parts of the version number. See the [CI
+guide](docs/ci.md) for PR checks and release behavior.
