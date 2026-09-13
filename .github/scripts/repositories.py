@@ -188,6 +188,8 @@ def prepare():
     site = Path("site")
     site.mkdir(exist_ok=False)
     (site / "barista.asc").write_text(run("gpg", "--armor", "--export", fingerprint) + "\n")
+    shutil.copy2("install.sh", site / "install.sh")
+    (site / "install.sh").chmod(0o755)
     (site / "index.html").write_text('<!doctype html><title>Barista updates</title><h1>Barista package repositories</h1><p>See <a href="https://github.com/BetaZay/Barista/blob/main/docs/updates.md">setup instructions</a>.</p>')
     channels = {"preview": sorted(keep, key=version)}
     if stable:

@@ -108,6 +108,8 @@ echo test > %{buildroot}/usr/share/barista/test
             repositories.prepare()
             preview = json.loads(Path("site/updates/v1.json").read_text())
             self.assertNotIn("stable", preview["channels"])
+            self.assertEqual(Path("site/install.sh").read_bytes(), Path("install.sh").read_bytes())
+            self.assertTrue(Path("site/install.sh").stat().st_mode & 0o111)
             archive = repositories.verify_archive(Path("archives/0.1.123"))
             self.assertEqual(archive["version"], "0.1.123")
             # Validate actual signed APT, RPM metadata, and pacman databases.

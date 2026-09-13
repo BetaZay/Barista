@@ -48,13 +48,13 @@ jobs:
       - run: python3 .github/scripts/check_docs.py
       - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - run: |
-          for script in .github/scripts/*.sh packaging/linux/package-hooks.sh; do bash -n "$script"; done
+          for script in install.sh .github/scripts/*.sh packaging/linux/package-hooks.sh; do bash -n "$script"; done
       - name: Lint GitHub Actions workflow
         run: |
           docker run --rm -v "$PWD:/repo:ro" -w /repo \
             rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
           docker run --rm -v "$PWD:/repo:ro" -w /repo --entrypoint shellcheck \
-            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 .github/scripts/*.sh packaging/linux/package-hooks.sh
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 install.sh .github/scripts/*.sh packaging/linux/package-hooks.sh
 
   test:
     name: Linux build and tests

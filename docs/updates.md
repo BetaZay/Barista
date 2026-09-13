@@ -9,16 +9,36 @@ as the selected tested Preview.
 
 ## Availability
 
-Repository publication must first be enabled by the maintainer using the
-[release setup guide](releasing.md). Until the signing fingerprint and first
-Stable release are announced, use [source installation](../COMPILING.md).
-Do not import an unverified key or disable signature checks to work around an
-unavailable repository.
+The signed Preview repositories are live. Stable becomes available when a
+tested Preview build is promoted. Do not import an unverified key or disable
+signature checks to work around an unavailable repository.
 
 Initial package repositories support **Ubuntu 24.04, Fedora 44, and Arch Linux,
 x86_64 only**. Ubuntu packages are not a promise of Debian compatibility.
 
 ## Subscribe once
+
+The installer detects the supported distribution, verifies the repository key's
+full fingerprint, configures the native package manager, installs Barista, and
+records the selected update channel.
+
+Preview currently contains the latest tested build:
+
+```sh
+curl -fsSL https://betazay.github.io/Barista/install.sh | sudo sh -s -- preview
+```
+
+After a build has been promoted, use Stable instead:
+
+```sh
+curl -fsSL https://betazay.github.io/Barista/install.sh | sudo sh -s -- stable
+```
+
+The script runs as root because package-manager and repository configuration
+require administrator access. You can inspect [install.sh](../install.sh) before
+running it, or follow the manual steps below instead.
+
+## Manual setup
 
 Download `barista.asc` from <https://betazay.github.io/Barista/barista.asc>.
 Inspect it with `gpg --show-keys --with-fingerprint barista.asc` and compare the
@@ -31,8 +51,9 @@ F800 6F0E 1A05 DF68 1278  EE05 5E51 F167 59FC 98B9
 Keep signature verification enabled. These setup steps require
 administrator privileges; the Barista GUI never does.
 
-Choose `stable` below, or replace **every** occurrence with `preview`. Subscribe
-to only one channel. Both use the same `barista` package name.
+Choose `preview` until the first Stable promotion. After that, choose `stable`
+or replace **every** occurrence with `preview`. Subscribe to only one channel.
+Both use the same `barista` package name.
 
 ### Ubuntu 24.04
 

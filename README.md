@@ -26,11 +26,25 @@ limitations. Windows and macOS currently support the portable UI/core only.
 
 ## Getting started
 
-Signed **Preview** repositories are available for Ubuntu 24.04, Fedora 44, and
-Arch Linux on x86_64. Follow [Package updates and release channels](docs/updates.md)
-to subscribe with APT, DNF, or Pacman; after that, Barista updates arrive through
-your normal system updater. Stable packages will use the same repositories once
-a tested Preview build is promoted.
+Signed repositories support Ubuntu 24.04, Fedora 44, and Arch Linux on x86_64.
+Choose one update channel:
+
+Stable (recommended after the first Preview build is promoted):
+
+```sh
+curl -fsSL https://betazay.github.io/Barista/install.sh | sudo sh -s -- stable
+```
+
+Preview (available now):
+
+```sh
+curl -fsSL https://betazay.github.io/Barista/install.sh | sudo sh -s -- preview
+```
+
+The installer detects the supported distribution, verifies Barista's signing
+key, and configures APT, DNF, or Pacman. Afterward, updates arrive through the
+normal system updater. See [Package updates and release channels](docs/updates.md)
+for manual setup and security details.
 
 To build Barista yourself instead, follow the [compiling guide](COMPILING.md).
 
