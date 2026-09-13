@@ -32,6 +32,7 @@ public:
 	bool open() const { return m_open.load(); }
 	uint64_t revision() const { return m_revision.load(); }
 	uint8_t opacity() const;
+	bool rumble_enabled() const;
 	bool rumble_active() const;
 
 private:
@@ -42,6 +43,8 @@ private:
 	std::atomic_uint64_t m_revision{0};
 	std::atomic_int64_t m_rumble_until_ms{0};
 	uint32_t m_previous_buttons = 0;
+	bool m_touch_pressed = false;
+	bool m_touch_captured = false;
 	uint8_t m_selected_row = 0;
 	uint8_t m_brightness = 3;
 	bool m_rumble_enabled = true;

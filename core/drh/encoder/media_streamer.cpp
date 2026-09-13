@@ -1040,9 +1040,12 @@ void MediaStreamer::audio_loop()
 		// as a burst; schedule from the first available block after a stall.
 		next_packet = std::max(next_packet, std::chrono::steady_clock::now());
 		std::this_thread::sleep_until(next_packet);
+		const bool rumble_enabled = !m_home_menu_enabled || m_home_menu->rumble_enabled();
+		const bool requested_rumble = m_bridge && m_bridge->read_rumble();
+		const bool menu_rumble = m_home_menu_enabled && m_home_menu->rumble_active();
 		const auto packet = BuildAudioPacket(pcm, sequence++,
 			m_transport.timestamp_us() - audio_age_us,
-			m_home_menu_enabled && m_home_menu->rumble_active());
+			rumble_enabled && (requested_rumble || menu_rumble));
 		sequence &= 0x3ff;
 		std::string error;
 		(void)m_transport.send(barista::drh::RuntimeChannel::Audio, packet, error);

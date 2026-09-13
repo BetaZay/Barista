@@ -48,7 +48,9 @@ if(BARISTA_BUILD_ENGINE)
         BARISTA_HOME_MENU_SOUND="${CMAKE_INSTALL_FULL_DATADIR}/barista/sounds/ui.pcm"
         BARISTA_HOME_MENU_FONT_REGULAR="${CMAKE_INSTALL_FULL_DATADIR}/barista/fonts/Jost-Regular.ttf"
         BARISTA_HOME_MENU_FONT_SEMIBOLD="${CMAKE_INSTALL_FULL_DATADIR}/barista/fonts/Jost-SemiBold.ttf"
-        BARISTA_HOME_MENU_DEV_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts/jost/static")
+        BARISTA_HOME_MENU_LOGO="${CMAKE_INSTALL_FULL_DATADIR}/barista/images/barista-logo-56.rgba"
+        BARISTA_HOME_MENU_DEV_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts/jost/static"
+        BARISTA_HOME_MENU_DEV_LOGO="${PROJECT_SOURCE_DIR}/assets/images/barista-logo-56.rgba")
     install(FILES "${PROJECT_SOURCE_DIR}/assets/sounds/ui.pcm"
         DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/sounds)
     install(FILES
@@ -58,6 +60,8 @@ if(BARISTA_BUILD_ENGINE)
     install(FILES "${PROJECT_SOURCE_DIR}/assets/fonts/jost/OFL.txt"
         DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/barista
         RENAME Jost-OFL.txt)
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/images/barista-logo-56.rgba"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/images)
 
     add_library(barista_drh_server STATIC
         drh/server/interrupt.cpp

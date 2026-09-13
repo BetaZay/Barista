@@ -229,9 +229,16 @@ int main(int argc, char** argv)
             window.findChild<QComboBox*>("modeCombo")->currentData() == "controller","segmented mode updates session mode");
         screenMode->click();
         Check(pairingContent->isHidden() && pair->text() == "Pair","pairing is initially instruction-only");
+        auto* startDialog = window.findChild<QDialog*>("waitingDialog");
+        auto* startStatus = window.findChild<QLabel*>("waitingStatus");
+        Check(startDialog && startStatus,"standard start popup has a live status heading");
+        startDialog->show();
+        QApplication::processEvents();
         status.busy = true; apply();
         Check(pairingStage->text() == "Waiting for permission…" && pairingSymbols->isHidden(),
             "pending authorization hides symbols even before the service phase changes");
+        Check(startStatus->text() == "Waiting for permission…",
+            "standard start popup reports pending authorization");
         status.busy = false; status.phase = barista::api::SessionPhase::Preparing; apply();
         Check(pairingStage->text() == "Starting pairing…" && !pair->isEnabled() && pairingSymbols->isHidden(),
             "the service Preparing phase shows progress and prevents a duplicate request");
@@ -244,7 +251,15 @@ int main(int argc, char** argv)
             status.pairingStep = step; apply();
             Check(pairingStage->text() == message && pairingSymbols->isHidden() && !pair->isEnabled(),
                 "live startup steps replace symbols until pairing is ready");
+            Check(startStatus->text() == message,
+                "standard start popup reports the detailed live startup step");
         }
+        auto* startBreathing = startStatus->findChild<QPropertyAnimation*>("pairingBreathing");
+        Check(startBreathing && startBreathing->state() == QAbstractAnimation::Running,
+            "visible standard startup status breathes");
+        startDialog->hide();
+        Check(startBreathing->state() == QAbstractAnimation::Stopped,
+            "hidden standard start popup stops its status animation");
         const QString frozenPattern = pattern->text();
         Check(pattern->text() == originalPattern,"pairing pattern cannot change during startup");
         window.OpenPairing();

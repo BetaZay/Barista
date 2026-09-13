@@ -223,6 +223,7 @@ Service::Service(QObject* parent) : QObject(parent)
         if (!m_input) return;
         std::array<uint8_t,128> raw{};
         const auto state = m_input->read_input(raw) ? barista::DecodeInput(raw) : barista::ControllerState{};
+        m_input->submit_rumble(m_controller.RumbleActive());
         if (!m_controller.Submit(state)) {
             m_error = "Virtual controller write failed; session stopped";
             m_errorCode = "CONTROLLER_WRITE_FAILED";

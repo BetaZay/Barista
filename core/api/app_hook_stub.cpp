@@ -12,8 +12,10 @@ void AppHook::set_active(bool) {}
 bool AppHook::set_idle_frame(std::span<const uint8_t>) { return false; }
 void AppHook::submit_rgb(std::vector<uint8_t>, unsigned, unsigned, bool) {}
 void AppHook::submit_pcm(std::span<const int16_t>) {}
+void AppHook::submit_rumble(bool) {}
 void AppHook::submit_input(std::span<const uint8_t>) {}
 bool AppHook::read_input(std::array<uint8_t, 128>&) const { return false; }
+bool AppHook::read_rumble() const { return false; }
 bool AppHook::read_video(std::span<uint8_t>, bool& active) { active = false; return false; }
 void AppHook::read_pcm(std::span<uint8_t> pcm) { std::fill(pcm.begin(), pcm.end(), 0); }
 AppHook::ConnectedAppInfo AppHook::connected_app() const { return {}; }

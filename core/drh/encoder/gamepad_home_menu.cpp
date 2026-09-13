@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -60,6 +62,42 @@ uint32_t ReadButtons(std::span<const uint8_t> report)
 		(static_cast<uint32_t>(report[2]) << 8) | report[3];
 }
 
+struct TouchPoint
+{
+	bool pressed = false;
+	int x = 0;
+	int y = 0;
+};
+
+TouchPoint ReadTouch(std::span<const uint8_t> report)
+{
+	if (report.size() != 128)
+		return {};
+	int raw_x = 0;
+	int raw_y = 0;
+	for (size_t point = 0; point < 10; ++point)
+	{
+		const size_t base = 36 + point * 4;
+		raw_x += ((report[base + 1] & 0x0f) << 8) | report[base];
+		raw_y += ((report[base + 3] & 0x0f) << 8) | report[base + 2];
+	}
+	raw_x /= 10;
+	raw_y /= 10;
+	int pressure = 0;
+	for (size_t point = 0; point < 4; ++point)
+		pressure |= ((report[37 + point * 4] >> 4) & 7) << (point * 3);
+	if (pressure == 0)
+		return {};
+
+	// These are the GamePad's built-in pre-UIC calibration points, also used
+	// by libdrc. Convert the raw 12-bit samples to the 854x480 touch surface.
+	const int calibrated_x = 20 + (raw_x - 195) * (834 - 20) / (3877 - 195);
+	const int calibrated_y = 20 + (raw_y - 3818) * (460 - 20) / (373 - 3818);
+	return {true,
+		std::clamp(calibrated_x, 0, 853) * static_cast<int>(kWidth - 1) / 853,
+		std::clamp(calibrated_y, 0, 479)};
+}
+
 void ClearButtons(std::span<uint8_t> report)
 {
 	if (report.size() <= 80)
@@ -67,6 +105,13 @@ void ClearButtons(std::span<uint8_t> report)
 	report[2] = 0;
 	report[3] = 0;
 	report[80] = 0;
+}
+
+void ClearTouch(std::span<uint8_t> report)
+{
+	if (report.size() != 128)
+		return;
+	std::fill(report.begin() + 36, report.begin() + 76, 0);
 }
 
 class Canvas
@@ -166,6 +211,36 @@ public:
 				const float coverage = std::clamp(width / 2 + 0.5f -
 					std::sqrt(dx * dx + dy * dy), 0.0f, 1.0f);
 				pixel(x, y, color, static_cast<uint8_t>(alpha * coverage));
+			}
+	}
+
+	void arc(float center_x, float center_y, float radius, float start, float end,
+		float width, Color color, uint8_t alpha = 255)
+	{
+		constexpr int kSegments = 18;
+		float previous_x = center_x + std::cos(start) * radius;
+		float previous_y = center_y + std::sin(start) * radius;
+		for (int segment = 1; segment <= kSegments; ++segment)
+		{
+			const float angle = start + (end - start) * segment / kSegments;
+			const float x = center_x + std::cos(angle) * radius;
+			const float y = center_y + std::sin(angle) * radius;
+			line(previous_x, previous_y, x, y, width, color, alpha);
+			previous_x = x;
+			previous_y = y;
+		}
+	}
+
+	void rgba_image(int x, int y, int width, int height, std::span<const uint8_t> rgba)
+	{
+		if (rgba.size() != static_cast<size_t>(width * height * 4))
+			return;
+		for (int row = 0; row < height; ++row)
+			for (int column = 0; column < width; ++column)
+			{
+				const size_t offset = static_cast<size_t>(row * width + column) * 4;
+				pixel(x + column, y + row,
+					{rgba[offset], rgba[offset + 1], rgba[offset + 2]}, rgba[offset + 3]);
 			}
 	}
 
@@ -303,14 +378,18 @@ void DrawSun(Canvas& canvas, int x, int y, Color color)
 
 void DrawRumble(Canvas& canvas, int x, int y, Color color)
 {
-	canvas.rounded_rect(x - 18, y - 11, 36, 23, 9, color);
-	canvas.circle(x - 9, y, 4, kWarmWhite);
-	canvas.line(x - 13, y, x - 5, y, 2, color);
-	canvas.line(x - 9, y - 4, x - 9, y + 4, 2, color);
-	canvas.circle(x + 7, y - 3, 2, kWarmWhite);
-	canvas.circle(x + 12, y + 3, 2, kWarmWhite);
-	canvas.line(x - 27, y - 14, x - 31, y - 19, 3, color, 140);
-	canvas.line(x + 27, y - 14, x + 31, y - 19, 3, color, 140);
+	// A recognizable controller body surrounded by symmetric vibration waves.
+	canvas.circle(x - 13, y + 7, 10, color);
+	canvas.circle(x + 13, y + 7, 10, color);
+	canvas.rounded_rect(x - 21, y - 9, 42, 25, 10, color);
+	canvas.line(x - 14, y + 2, x - 6, y + 2, 2, kWarmWhite);
+	canvas.line(x - 10, y - 2, x - 10, y + 6, 2, kWarmWhite);
+	canvas.circle(x + 9, y - 1, 2, kWarmWhite);
+	canvas.circle(x + 14, y + 4, 2, kWarmWhite);
+	canvas.arc(x - 19, y + 2, 10, 2.15f, 4.13f, 2.5f, color, 180);
+	canvas.arc(x - 19, y + 2, 16, 2.25f, 4.03f, 2.5f, color, 120);
+	canvas.arc(x + 19, y + 2, 10, -1.0f, 1.0f, 2.5f, color, 180);
+	canvas.arc(x + 19, y + 2, 16, -0.9f, 0.9f, 2.5f, color, 120);
 }
 
 void DrawBattery(Canvas& canvas, int x, int y, int percent)
@@ -329,6 +408,7 @@ struct GamepadHomeMenu::FontData
 	FT_Library library = nullptr;
 	FT_Face regular = nullptr;
 	FT_Face semibold = nullptr;
+	std::vector<uint8_t> logo;
 
 	FontData()
 	{
@@ -345,6 +425,15 @@ struct GamepadHomeMenu::FontData
 			for (const auto& path : paths)
 				if (FT_New_Face(library, path.c_str(), 0, face) == 0)
 					break;
+		for (const std::filesystem::path path : {std::filesystem::path(BARISTA_HOME_MENU_LOGO),
+			std::filesystem::path(BARISTA_HOME_MENU_DEV_LOGO)})
+		{
+			std::ifstream input(path, std::ios::binary);
+			logo.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+			if (logo.size() == 56 * 56 * 4)
+				break;
+			logo.clear();
+		}
 	}
 
 	~FontData()
@@ -365,11 +454,15 @@ HomeMenuUpdate GamepadHomeMenu::process_input(std::span<uint8_t> report)
 {
 	HomeMenuUpdate update;
 	const uint32_t buttons = ReadButtons(report);
+	const TouchPoint touch = ReadTouch(report);
 	std::lock_guard lock(m_mutex);
 	const uint32_t pressed = buttons & ~m_previous_buttons;
 	m_previous_buttons = buttons;
+	const bool touch_started = touch.pressed && !m_touch_pressed;
+	m_touch_pressed = touch.pressed;
 	const bool was_open = m_open.load();
 	bool is_open = was_open;
+	bool touch_changed = false;
 
 	if ((pressed & kButtonHome) != 0)
 		is_open = !is_open;
@@ -399,11 +492,44 @@ HomeMenuUpdate GamepadHomeMenu::process_input(std::span<uint8_t> report)
 		{
 			m_rumble_enabled = !m_rumble_enabled;
 		}
+
+		if (touch.pressed && touch.y >= 139 && touch.y < 245)
+		{
+			if (m_selected_row != 0)
+			{
+				m_selected_row = 0;
+				touch_changed = true;
+			}
+			if (touch.x >= 590 && touch.x <= 812)
+			{
+				const uint8_t level = static_cast<uint8_t>(std::clamp(
+					(touch.x - 590) * 5 / 222 + 1, 1, 5));
+				if (level != m_brightness)
+				{
+					m_brightness = level;
+					update.brightness = level;
+					touch_changed = true;
+				}
+			}
+		}
+		else if (touch_started && touch.y >= 259 && touch.y < 365)
+		{
+			m_selected_row = 1;
+			m_rumble_enabled = !m_rumble_enabled;
+			touch_changed = true;
+		}
+		else if (touch_started && touch.y >= 403 && touch.y < 465 &&
+			touch.x >= 530)
+		{
+			is_open = false;
+			touch_changed = true;
+		}
 	}
 
 	const bool controls_changed = pressed & (kButtonUp | kButtonDown | kButtonLeft |
 		kButtonRight | kButtonA | kButtonB | kButtonHome);
-	update.display_changed = was_open != is_open || (is_open && controls_changed != 0);
+	update.display_changed = was_open != is_open || touch_changed ||
+		(is_open && controls_changed != 0);
 	if (was_open != is_open)
 	{
 		const int64_t now = SteadyMilliseconds();
@@ -426,12 +552,30 @@ HomeMenuUpdate GamepadHomeMenu::process_input(std::span<uint8_t> report)
 
 	if (was_open || is_open || (buttons & kButtonHome) != 0)
 		ClearButtons(report);
+	bool consume_touch = was_open || is_open || m_touch_captured;
+	if (touch.pressed && (was_open || is_open))
+	{
+		m_touch_captured = true;
+		consume_touch = true;
+	}
+	else if (!touch.pressed && m_touch_captured)
+	{
+		m_touch_captured = false;
+	}
+	if (consume_touch)
+		ClearTouch(report);
 	return update;
 }
 
 bool GamepadHomeMenu::rumble_active() const
 {
 	return SteadyMilliseconds() < m_rumble_until_ms.load();
+}
+
+bool GamepadHomeMenu::rumble_enabled() const
+{
+	std::lock_guard lock(m_mutex);
+	return m_rumble_enabled;
 }
 
 uint8_t GamepadHomeMenu::opacity() const
@@ -460,7 +604,10 @@ void GamepadHomeMenu::render(std::span<uint8_t> frame, bool battery_valid,
 		Canvas canvas;
 		canvas.clear(kCream);
 		canvas.rounded_rect(0, 0, kWidth, 72, 0, kBrown);
-		DrawCoffeeMark(canvas);
+		if (m_fonts->logo.size() == 56 * 56 * 4)
+			canvas.rgba_image(12, 8, 56, 56, m_fonts->logo);
+		else
+			DrawCoffeeMark(canvas);
 		canvas.text(m_fonts->semibold, 72, 45, "Barista", 28, kWarmWhite);
 		canvas.text(m_fonts->regular, 342, 43, "GamePad quick settings", 19,
 			Color{226, 210, 198});
@@ -501,8 +648,8 @@ void GamepadHomeMenu::render(std::span<uint8_t> frame, bool battery_valid,
 		card(259, m_selected_row == 1);
 		canvas.circle(91, 312, 29, m_selected_row == 1 ? Color{226, 246, 253} : kCream);
 		DrawRumble(canvas, 91, 312, m_selected_row == 1 ? kBlue : kMidBrown);
-		canvas.text(m_fonts->semibold, 138, 304, "Menu rumble", 22, kBrown);
-		canvas.text(m_fonts->regular, 138, 331, "Tactile feedback while navigating", 15,
+		canvas.text(m_fonts->semibold, 138, 304, "Rumble", 22, kBrown);
+		canvas.text(m_fonts->regular, 138, 331, "Allow vibration from games and apps", 15,
 			kMuted);
 		const Color toggle_color = m_rumble_enabled ? kGreen : Color{188, 174, 163};
 		canvas.rounded_rect(700, 288, 84, 46, 23, toggle_color);
@@ -518,7 +665,7 @@ void GamepadHomeMenu::render(std::span<uint8_t> frame, bool battery_valid,
 				kWarmWhite);
 			canvas.text(m_fonts->regular, x + button_size + 10, 436, label, 15, kMidBrown);
 		};
-		hint(64, 58, "D-PAD", "Navigate / change");
+		hint(64, 58, "TOUCH", "Tap controls directly");
 		hint(390, 28, "A", "Change");
 		hint(560, 28, "B", "Close");
 		hint(682, 64, "HOME", "Close");

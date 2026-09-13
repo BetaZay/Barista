@@ -25,6 +25,24 @@ void SetButtons(std::array<uint8_t, 128>& report, uint32_t buttons)
 	report[3] = static_cast<uint8_t>(buttons);
 	report[80] = static_cast<uint8_t>(buttons >> 16);
 }
+
+void SetTouch(std::array<uint8_t, 128>& report, int x, int y, bool pressed)
+{
+	std::fill(report.begin() + 36, report.begin() + 76, 0);
+	if (!pressed)
+		return;
+	const int raw_x = 195 + x * (3877 - 195) / 853;
+	const int raw_y = 3818 + y * (373 - 3818) / 479;
+	for (size_t point = 0; point < 10; ++point)
+	{
+		const size_t base = 36 + point * 4;
+		report[base] = static_cast<uint8_t>(raw_x);
+		report[base + 1] = static_cast<uint8_t>((raw_x >> 8) & 0x0f);
+		report[base + 2] = static_cast<uint8_t>(raw_y);
+		report[base + 3] = static_cast<uint8_t>((raw_y >> 8) & 0x0f);
+	}
+	report[37] |= 0x10;
+}
 }
 
 int main()
@@ -48,6 +66,31 @@ int main()
 	update = menu.process_input(report);
 	Expect(update.brightness == 4, "right did not increase brightness");
 	Expect(report[2] == 0 && report[3] == 0, "menu controls leaked to the application");
+	Expect(menu.rumble_enabled(), "rumble should default on");
+
+	SetButtons(report, 0);
+	menu.process_input(report);
+	SetButtons(report, 0x0100);
+	menu.process_input(report);
+	SetButtons(report, 0);
+	menu.process_input(report);
+	SetButtons(report, 0x8000);
+	menu.process_input(report);
+	Expect(!menu.rumble_enabled(), "rumble toggle did not disable vibration");
+
+	SetButtons(report, 0);
+	SetTouch(report, 700, 190, true);
+	update = menu.process_input(report);
+	Expect(update.brightness == 3, "touch did not select a brightness level");
+	Expect(std::all_of(report.begin() + 36, report.begin() + 76,
+		[](uint8_t value) { return value == 0; }), "menu touch leaked to the application");
+	SetTouch(report, 0, 0, false);
+	menu.process_input(report);
+	SetTouch(report, 400, 312, true);
+	menu.process_input(report);
+	Expect(menu.rumble_enabled(), "touch did not toggle rumble");
+	SetTouch(report, 0, 0, false);
+	menu.process_input(report);
 
 	std::vector<uint8_t> frame(barista::drh::DrcVideoFrameBytes, 0);
 	menu.render(frame, true, 88);
@@ -71,6 +114,25 @@ int main()
 	Expect(menu.opacity() > 0, "closing transition disappeared immediately");
 	std::this_thread::sleep_for(std::chrono::milliseconds(260));
 	Expect(menu.opacity() == 0, "closing transition did not finish");
+
+	SetButtons(report, 0);
+	SetTouch(report, 400, 312, true);
+	menu.process_input(report);
+	Expect(std::any_of(report.begin() + 36, report.begin() + 76,
+		[](uint8_t value) { return value != 0; }), "gameplay touch was consumed while closed");
+	SetTouch(report, 0, 0, false);
+	menu.process_input(report);
+	SetButtons(report, 0x0002);
+	menu.process_input(report);
+	SetButtons(report, 0);
+	menu.process_input(report);
+	SetTouch(report, 600, 430, true);
+	menu.process_input(report);
+	Expect(!menu.open(), "touching the close hint did not close the menu");
+	SetTouch(report, 600, 430, true);
+	menu.process_input(report);
+	Expect(std::all_of(report.begin() + 36, report.begin() + 76,
+		[](uint8_t value) { return value == 0; }), "captured touch leaked before release");
 
 	std::cout << "GamePad home menu input and rendering passed\n";
 }

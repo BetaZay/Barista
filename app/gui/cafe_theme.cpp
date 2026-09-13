@@ -56,6 +56,7 @@ void ApplyCafeTheme(QWidget* widget)
         QDialog#pairingDialog QLabel { color: #38261a; }
         QDialog#pairingDialog QLabel#pairingHint { color: #78604b; font-size: 12px; }
         QDialog#pairingDialog QLabel#pairingStage { font-size: 18px; }
+        QDialog#waitingDialog QLabel#waitingStatus { color: #38261a; font-size: 20px; font-weight: 700; }
         QDialog#pairingDialog QLabel[pairSymbol="true"] { font-size: 54px; background: #fff8ef; border: 1px solid #deccba; border-radius: 12px; }
         QListWidget#savedGamePads { background: transparent; border: 0; padding: 0; }
         QListWidget::item { padding: 14px 10px; border-bottom: 1px solid #deccba; }

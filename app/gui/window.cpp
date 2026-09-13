@@ -636,7 +636,9 @@ Window::Window(bool smokeTest)
     auto* waitingLayout = new QVBoxLayout(m_waitingDialog);
     waitingLayout->setContentsMargins(28,24,28,24);
     waitingLayout->setSpacing(16);
-    m_waitingStatus = new QLabel("Waiting for your GamePad",m_waitingDialog);
+    m_waitingStatus = new PairingProgressLabel(m_waitingDialog);
+    m_waitingStatus->setText("Waiting for your GamePad");
+    m_waitingStatus->setObjectName("waitingStatus");
     m_waitingStatus->setProperty("heading",true);
     m_waitingStatus->setAlignment(Qt::AlignCenter);
     m_waitingStatus->setWordWrap(true);
@@ -1341,9 +1343,28 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     m_hint->setText(hint);
     SetTone(m_hint,sessionTone);
     m_hint->show();
-    m_waitingStatus->setText(busy ? "Preparing your connection…" : "Waiting for your GamePad");
+    const bool startingConnection = activating || busy ||
+        phase == barista::api::SessionPhase::Starting ||
+        phase == barista::api::SessionPhase::Preparing;
+    QString waitingStage = "Waiting for your GamePad";
+    if (activating) {
+        waitingStage = "Starting Barista service…";
+    } else if (busy && phase == barista::api::SessionPhase::Idle) {
+        waitingStage = "Waiting for permission…";
+    } else if (startingConnection) {
+        switch (status.pairingStep)
+        {
+        case barista::api::PairingStep::CheckingAdapter: waitingStage = "Checking adapter…"; break;
+        case barista::api::PairingStep::SettingUpAdapter: waitingStage = "Setting up adapter…"; break;
+        case barista::api::PairingStep::CreatingNetwork: waitingStage = "Creating network…"; break;
+        case barista::api::PairingStep::None: waitingStage = "Starting connection…"; break;
+        }
+    }
+    m_waitingStatus->setText(waitingStage);
+    static_cast<PairingProgressLabel*>(m_waitingStatus)->SetBreathing(startingConnection);
     m_waitingAdapter->setText("GamePad Wi-Fi adapter\n" + InterfaceName(m_interface));
-    if (connected || (!running && !busy) || phase == barista::api::SessionPhase::Failed)
+    if (connected || (!running && !busy && !startingConnection) ||
+        phase == barista::api::SessionPhase::Failed)
         m_waitingDialog->hide();
 
     const auto sessionMode = status.mode.value_or(barista::api::SessionMode::Real);
