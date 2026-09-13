@@ -16,6 +16,11 @@ A newer commit cancels the previous run for the same PR.
   Unknown history and manual/merge-queue runs use the full pipeline.
 - Code changes run Linux Debug tests, a separate UI/core-only build, and
   Debian, Fedora RPM, and Arch Release builds with CTest.
+  Fedora builds a pinned, minimal upstream FFmpeg for tests only. Its packaged
+  OpenH264 decoder crops frames to 854×480 even with cropping disabled, while
+  reconstruction checks require all 864×480 coded pixels. The tests explicitly
+  select FFmpeg's native `h264` decoder; neither checks nor padding comparisons
+  are skipped. This reference decoder is not shipped in Barista packages.
 - Each package is installed using its native package manager in a fresh runtime
   container. Checks cover dependency resolution, dynamic libraries, privileged
   binary ownership/permissions, D-Bus/systemd installation, desktop entries, and

@@ -18,14 +18,15 @@ def main():
         for source in (cavlc, cabac):
             output = source.with_suffix(".yuv")
             subprocess.run([
-                ffmpeg, "-v", "error", "-xerror", "-apply_cropping", "0", "-i", str(source),
+                ffmpeg, "-v", "error", "-xerror", "-apply_cropping", "0", "-c:v", "h264", "-i", str(source),
                 "-pix_fmt", "yuv420p",
                 "-f", "rawvideo", str(output),
             ], check=True)
             decoded.append(output.read_bytes())
         expected = 300 * 864 * 480 * 3 // 2
         if any(len(data) != expected for data in decoded):
-            raise RuntimeError("decoder did not produce exactly 300 complete frames")
+            raise RuntimeError(f"decoder did not produce 300 uncropped 864x480 frames: "
+                               f"got {[len(data) for data in decoded]} bytes, expected {expected} each")
         if decoded[0] != decoded[1]:
             offset = next(i for i, (a, b) in enumerate(zip(*decoded)) if a != b)
             raise RuntimeError(f"CABAC reconstruction differs at decoded byte {offset}")

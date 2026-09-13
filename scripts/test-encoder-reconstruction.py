@@ -56,10 +56,14 @@ def check(args, source, count, fast):
     if probe_pos != len(probe.stdout) or worker_pos != len(worker.stdout):
         raise ValueError('Unexpected trailing encoder output')
     decoded = subprocess.run([args.ffmpeg, '-nostdin', '-v', 'error', '-xerror', '-err_detect',
-        'explode', '-apply_cropping', '0', '-f', 'h264', '-i', 'pipe:0', '-pix_fmt', 'yuv420p',
-        '-f', 'rawvideo', 'pipe:1'], input=annex, capture_output=True, check=True, timeout=30)
+        'explode', '-apply_cropping', '0', '-c:v', 'h264', '-f', 'h264', '-i', 'pipe:0', '-pix_fmt', 'yuv420p',
+        '-f', 'rawvideo', 'pipe:1'], input=annex, capture_output=True, timeout=30)
+    if decoded.returncode:
+        raise RuntimeError('Native H.264 decoding failed: ' + decoded.stderr.decode(errors='replace'))
     if decoded.stdout != reference:
-        raise ValueError('Decoded YUV pixels differ from internal reconstructed references')
+        raise ValueError('Decoded YUV pixels differ from internal reconstructed references '
+                         f'(decoded {len(decoded.stdout)} bytes, expected {len(reference)}; '
+                         'requires uncropped 864x480 output from the native h264 decoder)')
     print(f'native {"fast" if fast else "default"}: '
           f'{count} frames, production bytes and all reconstructed YUV pixels match; chroma=0')
     return reference, len(worker.stdout)

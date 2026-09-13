@@ -160,12 +160,17 @@ jobs:
           persist-credentials: false
       - name: Install build dependencies
         run: |
-          dnf -y install cmake ninja-build git python3 ffmpeg-free nasm gcc gcc-c++ make \
+          dnf -y install cmake ninja-build git python3 nasm gcc gcc-c++ make \
             qt6-qtbase-devel qt6-qtsvg-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd shadow-utils util-linux
+      - name: Build native H.264 reference decoder for tests
+        run: |
+          bash .github/scripts/build-test-ffmpeg.sh "$RUNNER_TEMP/barista-test-ffmpeg" \
+            2>&1 | tee "$RUNNER_TEMP/barista-test-ffmpeg.log"
       - name: Build and test package
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DDRCD_TEST_FFMPEG="$RUNNER_TEMP/barista-test-ffmpeg/bin/ffmpeg"
           cmake --build build --parallel 4
           useradd --create-home tester
           chown -R tester:tester build
@@ -181,6 +186,7 @@ jobs:
         with:
           name: rpm-failure-logs
           path: |
+            ${{ runner.temp }}/barista-test-ffmpeg.log
             build/Testing/Temporary/
             build/CMakeFiles/CMakeConfigureLog.yaml
             dist/_CPack_Packages/**/*.log
