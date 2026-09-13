@@ -149,7 +149,9 @@ For a source installation, check `type -a barista` first. A binary in
 original build's `install_manifest.txt` to identify its installed files. Remove
 only reviewed source-installed files, then install the package. Do not remove
 `/var/lib/barista` or your user settings. Barista will not delete source installs
-automatically.
+automatically. On Arch-based systems, `install.sh` can safely adopt Barista's
+known, unowned `/usr` files during the first package installation; it never
+overwrites a path owned by another package.
 
 ## Interrupted upgrades
 

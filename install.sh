@@ -140,7 +140,35 @@ case "$package_manager" in
         if ! grep -Fqx 'Include = /etc/pacman.d/barista.conf' /etc/pacman.conf; then
             printf '\nInclude = /etc/pacman.d/barista.conf\n' >> /etc/pacman.conf
         fi
-        pacman -Syu --needed --noconfirm barista
+
+        # Pacman will not replace files from an older CMake installation because
+        # they are not owned by a package. Permit only Barista's known install
+        # paths, and only when no installed package owns them.
+        migrating_source_install=false
+        set -- --needed --noconfirm
+        while IFS= read -r path; do
+            if { [ -e "$path" ] || [ -L "$path" ]; } && ! pacman -Qo "$path" >/dev/null 2>&1; then
+                printf 'Adopting file from an existing Barista source installation: %s\n' "$path"
+                set -- "$@" --overwrite "${path#/}"
+                migrating_source_install=true
+            fi
+        done <<'EOF'
+/usr/bin/barista
+/usr/lib/systemd/system/barista.service
+/usr/libexec/barista/barista-engine
+/usr/libexec/barista/barista-hostapd
+/usr/libexec/barista/barista-service
+/usr/share/applications/org.barista.Barista.desktop
+/usr/share/barista/build-info
+/usr/share/dbus-1/system-services/org.barista.Service1.service
+/usr/share/dbus-1/system.d/org.barista.Service1.conf
+/usr/share/pixmaps/org.barista.Barista.png
+/usr/share/polkit-1/actions/org.barista.manage-session.policy
+EOF
+        if [ "$migrating_source_install" = true ] && systemctl cat barista.service >/dev/null 2>&1; then
+            systemctl stop barista.service || fail "could not stop the existing Barista service"
+        fi
+        pacman -Syu "$@" barista
         ;;
 esac
 
