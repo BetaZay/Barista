@@ -84,6 +84,9 @@ public:
 	bool consume_video_resync_event();
 	RuntimeTransportStats stats() const;
 	void report_status(std::string status);
+	// Queue a peripheral command on the transport worker. The GamePad accepts
+	// five LCD levels, where 1 is dimmest and 5 is brightest.
+	void set_lcd_brightness(uint8_t level);
 	// Best available reading of the AP TSF clock, in microseconds. A sysfs TSF
 	// exporter is preferred, followed by radiotap samples from the configured
 	// monitor interface. It is zero-based only when neither source is available.

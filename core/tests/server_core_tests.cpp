@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 
 namespace
@@ -166,7 +167,12 @@ int main()
 		expect(automatic_core.handle_line("pair-start wlan0 f8:54:f6:7a:5c:ae 2232").ok,
 			"automatic pair-start should succeed");
 		backend_ptr->signal_pairing_complete();
+		std::ostringstream events;
+		auto* previous_output = std::cout.rdbuf(events.rdbuf());
 		automatic_core.process_backend_events();
+		std::cout.rdbuf(previous_output);
+		expect(contains(events.str(), "BARISTA_EVENT|info|pairing|PAIRING_SUCCEEDED"),
+			"pairing completion should emit a structured diagnostic event");
 		const auto response = automatic_core.handle_line("status");
 		expect(contains(response.payload, "phase=runtime"),
 			"WPS completion event should enter runtime automatically");

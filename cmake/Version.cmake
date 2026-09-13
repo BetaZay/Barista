@@ -1,0 +1,22 @@
+# The third component is a global CI build counter, not a patch release.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/../VERSION" BARISTA_VERSION_SERIES LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../VERSION")
+if(NOT BARISTA_VERSION_SERIES MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+    message(FATAL_ERROR "VERSION must contain major.minor")
+endif()
+if(NOT DEFINED BARISTA_VERSION OR BARISTA_VERSION STREQUAL "")
+    set(BARISTA_VERSION "${BARISTA_VERSION_SERIES}.0")
+endif()
+if(NOT BARISTA_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+    message(FATAL_ERROR "BARISTA_VERSION must be numeric major.minor.build")
+endif()
+set(BARISTA_SOURCE_REVISION "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/.."
+        OUTPUT_VARIABLE revision OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(revision MATCHES "^[0-9a-f]+$")
+        set(BARISTA_SOURCE_REVISION "${revision}")
+    endif()
+endif()

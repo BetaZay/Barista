@@ -1,4 +1,5 @@
 #include "drh/encoder/media_streamer.h"
+#include "drh/encoder/gamepad_home_menu.h"
 #include "drh/encoder/encoder.h"
 #include "drh/encoder/x264/encoder.h"
 #include "real_replay.h"
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <span>
 #include <vector>
@@ -105,10 +107,12 @@ bool ReadExact(FILE* pipe, std::span<uint8_t> output)
 	return true;
 }
 
-std::vector<uint8_t> BuildAudioPacket(std::span<const uint8_t> pcm, uint16_t sequence, uint32_t timestamp)
+std::vector<uint8_t> BuildAudioPacket(std::span<const uint8_t> pcm, uint16_t sequence,
+	uint32_t timestamp, bool vibrate = false)
 {
 	std::vector<uint8_t> packet(8 + pcm.size());
-	packet[0] = static_cast<uint8_t>(0x20 | ((sequence >> 8) & 3)); // PCM 48 kHz, stereo, audio data
+	packet[0] = static_cast<uint8_t>(0x20 | (vibrate ? 0x08 : 0) |
+		((sequence >> 8) & 3)); // PCM 48 kHz, stereo, audio data
 	packet[1] = static_cast<uint8_t>(sequence);
 	packet[2] = static_cast<uint8_t>(pcm.size() >> 8);
 	packet[3] = static_cast<uint8_t>(pcm.size());
@@ -247,7 +251,28 @@ bool WriteBinaryFile(const std::filesystem::path& path, std::span<const uint8_t>
 
 MediaStreamer::MediaStreamer(barista::drh::RuntimeTransport& transport, std::string path,
 	bool black_frames)
-	: m_transport(transport), m_path(std::move(path)), m_black_frames(black_frames) {}
+	: m_transport(transport), m_path(std::move(path)), m_black_frames(black_frames),
+	  m_home_menu_enabled(DefaultEnabled("BARISTA_HOME_MENU")),
+	  m_home_menu(std::make_unique<GamepadHomeMenu>())
+{
+	const char* configured_sound = std::getenv("BARISTA_HOME_MENU_SOUND");
+	const std::filesystem::path sound_path = configured_sound && *configured_sound
+		? configured_sound : BARISTA_HOME_MENU_SOUND;
+	std::ifstream input(sound_path, std::ios::binary);
+	std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)),
+		std::istreambuf_iterator<char>());
+	if (bytes.size() % 4 == 0)
+	{
+		m_home_menu_sound.reserve(bytes.size() / 2);
+		for (size_t offset = 0; offset < bytes.size(); offset += 2)
+		{
+			const uint16_t sample = static_cast<uint16_t>(bytes[offset]) |
+				(static_cast<uint16_t>(bytes[offset + 1]) << 8);
+			m_home_menu_sound.push_back(static_cast<int16_t>(sample));
+		}
+		m_home_menu_sound_cursor = m_home_menu_sound.size();
+	}
+}
 
 MediaStreamer::~MediaStreamer() { stop(); }
 
@@ -547,6 +572,12 @@ bool MediaStreamer::protocol_self_test(std::string& error)
 		error = "ASTRM PCM packet layout validation failed";
 		return false;
 	}
+	const auto vibrating_audio = BuildAudioPacket(pcm, 0x321, 0x12345678, true);
+	if (vibrating_audio[0] != 0x2b)
+	{
+		error = "ASTRM vibration flag validation failed";
+		return false;
+	}
 
 	std::vector<std::vector<uint8_t>> chunk_bytes;
 	for (const auto& chunk : chunks)
@@ -594,6 +625,7 @@ void MediaStreamer::video_loop()
 	bool external_active = false;
 	bool external_connected = false;
 	uint64_t external_idle_revision = 0;
+	uint64_t home_menu_revision = 0;
 	uint64_t encode_failures = 0;
 	uint64_t late_video_starts = 0; // Serial sender only.
 	uint64_t interval_encode_us = 0;
@@ -692,6 +724,19 @@ void MediaStreamer::video_loop()
 		}
 		if (m_generated_pattern)
 			GeneratePattern(frame, frame_number);
+		const uint64_t current_menu_revision = m_home_menu_enabled ? m_home_menu->revision() : 0;
+		if (current_menu_revision != home_menu_revision)
+		{
+			home_menu_revision = current_menu_revision;
+			force_idr = true;
+		}
+		const uint8_t menu_opacity = m_home_menu_enabled ? m_home_menu->opacity() : 0;
+		if (menu_opacity != 0)
+		{
+			const auto stats = m_transport.stats();
+			m_home_menu->render(frame, stats.battery_charge_valid, stats.battery_charge,
+				menu_opacity);
+		}
 		uint64_t frame_recovery_generation;
 		{
 			std::lock_guard lock(recovery_mutex);
@@ -958,9 +1003,43 @@ void MediaStreamer::input_loop()
 			auto packet = m_transport.receive();
 			if (!packet) break;
 			if (packet->channel == barista::drh::RuntimeChannel::Input)
+			{
+				if (m_home_menu_enabled)
+				{
+					auto update = m_home_menu->process_input(packet->payload);
+					if (update.brightness)
+						m_transport.set_lcd_brightness(*update.brightness);
+					if (update.play_sound)
+						play_home_menu_sound();
+				}
 				m_bridge->submit_input(packet->payload);
+			}
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+}
+
+void MediaStreamer::play_home_menu_sound()
+{
+	std::lock_guard lock(m_home_menu_sound_mutex);
+	if (!m_home_menu_sound.empty())
+		m_home_menu_sound_cursor = 0;
+}
+
+void MediaStreamer::mix_home_menu_sound(std::span<uint8_t> pcm)
+{
+	std::lock_guard lock(m_home_menu_sound_mutex);
+	for (size_t offset = 0; offset + 1 < pcm.size() &&
+		m_home_menu_sound_cursor < m_home_menu_sound.size(); offset += 2)
+	{
+		const uint16_t bits = static_cast<uint16_t>(pcm[offset]) |
+			(static_cast<uint16_t>(pcm[offset + 1]) << 8);
+		const int mixed = static_cast<int16_t>(bits) +
+			m_home_menu_sound[m_home_menu_sound_cursor++];
+		const uint16_t output = static_cast<uint16_t>(static_cast<int16_t>(
+			std::clamp(mixed, -32768, 32767)));
+		pcm[offset] = static_cast<uint8_t>(output);
+		pcm[offset + 1] = static_cast<uint8_t>(output >> 8);
 	}
 }
 
@@ -988,11 +1067,17 @@ void MediaStreamer::audio_loop()
 			m_bridge->read_pcm(pcm);
 		if (m_generated_pattern)
 			GenerateTone(pcm, tone_phase);
+		mix_home_menu_sound(pcm);
 		// FFmpeg startup and reads may block. Do not replay missed audio slots
 		// as a burst; schedule from the first available block after a stall.
 		next_packet = std::max(next_packet, std::chrono::steady_clock::now());
 		std::this_thread::sleep_until(next_packet);
-		const auto packet = BuildAudioPacket(pcm, sequence++, m_transport.timestamp_us() - audio_age_us);
+		const bool rumble_enabled = !m_home_menu_enabled || m_home_menu->rumble_enabled();
+		const bool requested_rumble = m_bridge && m_bridge->read_rumble();
+		const bool menu_rumble = m_home_menu_enabled && m_home_menu->rumble_active();
+		const auto packet = BuildAudioPacket(pcm, sequence++,
+			m_transport.timestamp_us() - audio_age_us,
+			rumble_enabled && (requested_rumble || menu_rumble));
 		sequence &= 0x3ff;
 		std::string error;
 		(void)m_transport.send(barista::drh::RuntimeChannel::Audio, packet, error);

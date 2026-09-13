@@ -11,7 +11,7 @@
 
 namespace barista::api
 {
-inline constexpr uint32_t ApiVersion = 1;
+inline constexpr uint32_t ApiVersion = 3;
 
 enum class ErrorCode
 {
@@ -27,6 +27,8 @@ struct Error
 {
     ErrorCode code = ErrorCode::Failed;
     std::string message;
+    std::string diagnosticCode;
+    std::string action;
 };
 
 enum class SessionMode
@@ -53,6 +55,29 @@ inline constexpr std::optional<SessionMode> ParseSessionMode(std::string_view va
         return SessionMode::Real;
     if (value == "controller")
         return SessionMode::Controller;
+    return std::nullopt;
+}
+
+// Fixed, credential-free progress values; never expose engine log text as status.
+enum class PairingStep { None, CheckingAdapter, SettingUpAdapter, CreatingNetwork };
+
+inline constexpr std::string_view PairingStepName(PairingStep step)
+{
+    switch (step)
+    {
+    case PairingStep::None: return "none";
+    case PairingStep::CheckingAdapter: return "checking-adapter";
+    case PairingStep::SettingUpAdapter: return "setting-up-adapter";
+    case PairingStep::CreatingNetwork: return "creating-network";
+    }
+    return "none";
+}
+
+inline constexpr std::optional<PairingStep> ParsePairingStep(std::string_view value)
+{
+    for (auto step : {PairingStep::None, PairingStep::CheckingAdapter,
+                     PairingStep::SettingUpAdapter, PairingStep::CreatingNetwork})
+        if (PairingStepName(step) == value) return step;
     return std::nullopt;
 }
 
@@ -147,10 +172,12 @@ struct GamePad
 struct SessionStatus
 {
     uint32_t apiVersion = ApiVersion;
+    std::string serviceVersion;
     bool available = false;
     bool activating = false;
     std::string platform;
     SessionPhase phase = SessionPhase::Idle;
+    PairingStep pairingStep = PairingStep::None;
     std::optional<SessionMode> mode;
     bool running = false;
     bool gamePadConnected = false;
@@ -169,6 +196,7 @@ struct StartSessionRequest
 {
     std::string interfaceName;
     SessionMode mode = SessionMode::Real;
+    std::string regulatoryCountry;
 };
 
 struct PairRequest : StartSessionRequest
@@ -186,6 +214,13 @@ inline bool ValidInterfaceName(std::string_view name)
             (character >= '0' && character <= '9') ||
             character == '_' || character == '-' || character == '.';
     });
+}
+
+inline bool ValidRegulatoryCountry(std::string_view country)
+{
+    return country.size() == 2 &&
+        country[0] >= 'A' && country[0] <= 'Z' &&
+        country[1] >= 'A' && country[1] <= 'Z';
 }
 
 inline constexpr std::optional<std::array<uint8_t, 4>> ParsePairCode(std::string_view value)

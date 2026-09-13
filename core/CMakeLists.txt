@@ -8,6 +8,7 @@ target_link_libraries(barista_core INTERFACE barista_api)
 target_compile_features(barista_core INTERFACE cxx_std_20)
 
 if(BARISTA_BUILD_ENGINE)
+    find_package(Freetype REQUIRED)
     add_library(drc_host STATIC
         drh/mac_address.cpp
         drh/pairing.cpp
@@ -28,6 +29,7 @@ if(BARISTA_BUILD_ENGINE)
     target_link_libraries(drc_ipc PUBLIC pthread)
 
     add_library(barista_drh_encoder STATIC
+        drh/encoder/gamepad_home_menu.cpp
         drh/encoder/x264/bit_writer.cpp
         drh/encoder/x264/cabac.cpp
         drh/encoder/x264/contexts.cpp
@@ -39,13 +41,32 @@ if(BARISTA_BUILD_ENGINE)
     target_include_directories(barista_drh_encoder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(barista_drh_encoder
         PUBLIC barista_api
-        PRIVATE drc_host drc_ipc m pthread dl
+        PRIVATE drc_host drc_ipc Freetype::Freetype m pthread dl
     )
     target_compile_features(barista_drh_encoder PUBLIC cxx_std_20)
+    target_compile_definitions(barista_drh_encoder PRIVATE
+        BARISTA_HOME_MENU_SOUND="${CMAKE_INSTALL_FULL_DATADIR}/barista/sounds/ui.pcm"
+        BARISTA_HOME_MENU_FONT_REGULAR="${CMAKE_INSTALL_FULL_DATADIR}/barista/fonts/Jost-Regular.ttf"
+        BARISTA_HOME_MENU_FONT_SEMIBOLD="${CMAKE_INSTALL_FULL_DATADIR}/barista/fonts/Jost-SemiBold.ttf"
+        BARISTA_HOME_MENU_LOGO="${CMAKE_INSTALL_FULL_DATADIR}/barista/images/barista-logo-56.rgba"
+        BARISTA_HOME_MENU_DEV_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts/jost/static"
+        BARISTA_HOME_MENU_DEV_LOGO="${PROJECT_SOURCE_DIR}/assets/images/barista-logo-56.rgba")
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/sounds/ui.pcm"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/sounds)
+    install(FILES
+        "${PROJECT_SOURCE_DIR}/assets/fonts/jost/static/Jost-Regular.ttf"
+        "${PROJECT_SOURCE_DIR}/assets/fonts/jost/static/Jost-SemiBold.ttf"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/fonts)
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/fonts/jost/OFL.txt"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/barista
+        RENAME Jost-OFL.txt)
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/images/barista-logo-56.rgba"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/images)
 
     add_library(barista_drh_server STATIC
         drh/server/interrupt.cpp
         drh/server/server_core.cpp
+        drh/server/wifi_capabilities.cpp
     )
     add_library(barista::drh_server ALIAS barista_drh_server)
     add_library(drcd_core ALIAS barista_drh_server)
@@ -125,6 +146,10 @@ if(BUILD_TESTING)
         target_link_libraries(barista_datagram_retry_tests PRIVATE barista_drh_encoder)
         add_test(NAME barista_datagram_retry_tests COMMAND barista_datagram_retry_tests)
 
+        add_executable(drcd_home_menu_tests tests/gamepad_home_menu_tests.cpp)
+        target_link_libraries(drcd_home_menu_tests PRIVATE barista_drh_encoder)
+        add_test(NAME drcd_home_menu_tests COMMAND drcd_home_menu_tests)
+
         add_executable(drcd_x264_encoder_tests tests/x264_encoder_tests.cpp)
         target_link_libraries(drcd_x264_encoder_tests PRIVATE barista_drh_encoder)
         add_test(NAME drcd_x264_encoder_tests COMMAND drcd_x264_encoder_tests)
@@ -177,6 +202,10 @@ if(BUILD_TESTING)
         add_executable(drcd_core_tests tests/server_core_tests.cpp)
         target_link_libraries(drcd_core_tests PRIVATE barista_drh_server)
         add_test(NAME drcd_core_tests COMMAND drcd_core_tests)
+
+        add_executable(drcd_wifi_capability_tests tests/wifi_capability_tests.cpp)
+        target_link_libraries(drcd_wifi_capability_tests PRIVATE barista_drh_server)
+        add_test(NAME drcd_wifi_capability_tests COMMAND drcd_wifi_capability_tests)
         add_test(NAME drcd_fast_encode_tests COMMAND drcd_core_tests)
         set_tests_properties(drcd_fast_encode_tests PROPERTIES ENVIRONMENT "DRCD_FAST_ENCODE=1")
         add_test(NAME drcd_no_intra_refresh_tests COMMAND drcd_core_tests)

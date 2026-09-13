@@ -1,0 +1,2 @@
+version=@BARISTA_VERSION@
+revision=@BARISTA_SOURCE_REVISION@

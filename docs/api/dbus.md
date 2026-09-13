@@ -18,21 +18,29 @@ must remain unprivileged.
 | Method | Arguments | Reply |
 | --- | --- | --- |
 | `GetStatus` | none | Variant map described below |
+| `GetDiagnostics` | none | Privacy-safe support report and retained support-log metadata |
 | `SavedGamePads` | none | List of maps with `mac` and `name` |
-| `StartSession` | `interface: string`, `mode: string` | Empty on completion |
-| `Pair` | `interface: string`, `code: string`, `mode: string` | Empty on completion |
+| `StartSession` | `interface: string`, `mode: string` | Empty on completion; compatibility entry point without a country override |
+| `StartSessionWithCountry` | `interface: string`, `mode: string`, `regulatoryCountry: string` | Empty on completion |
+| `Pair` | `interface: string`, `code: string`, `mode: string` | Empty on completion; compatibility entry point without a country override |
+| `PairWithCountry` | `interface: string`, `code: string`, `mode: string`, `regulatoryCountry: string` | Empty on completion |
 | `StopSession` | none | Empty on completion |
 | `PrepareSystem` | none | Empty on completion |
 | `RenameGamePad` | `mac: string`, `name: string` | Empty |
 | `RemoveGamePad` | `mac: string` | Empty |
 
-`StartSession`, `Pair`, `StopSession`, and `PrepareSystem` use PolicyKit and may
+The session, pairing, stop, and preparation methods use PolicyKit and may
 hold the D-Bus reply while user authorization or setup completes. The bundled
 Qt client allows 150 seconds for mutations and 25 seconds for reads; those are
 client policy, not wire-level guarantees.
 
 `RenameGamePad` and `RemoveGamePad` currently return no structured persistence
 result. Call `SavedGamePads` afterward if confirmation matters.
+
+`regulatoryCountry` is empty or a two-letter country code. A configured code
+allows the engine to temporarily replace an unset `00` wireless regulatory
+domain; it never replaces another configured country. The engine restores its
+previous value when the session stops unless the value changed externally.
 
 ## Status map
 
@@ -53,6 +61,8 @@ unknown keys so fields can be added compatibly.
 | `ownedByCaller` | `ownedByCaller` | Boolean |
 | `busy` | `busy` | Boolean |
 | `error` | `error.message` | String; empty when no current error |
+| `errorCode` | `error.diagnosticCode` | Stable diagnostic identifier; empty when no current error |
+| `errorAction` | `error.action` | Suggested recovery step; empty when no current error |
 | `mediaEndpoint` | `mediaEndpoint` | String, disclosed only to the owning caller in real mode |
 | `appConnected` | `application.connected` | Boolean |
 | `appName` | `application.name` | String |
@@ -74,6 +84,24 @@ unknown keys so fields can be added compatibly.
 
 The Qt adapter currently derives `capabilities.mediaStreaming = true`; there is
 no separate `mediaStreaming` key in the D-Bus map.
+
+## Diagnostics map
+
+`GetDiagnostics` is read-only and does not require PolicyKit authorization. It
+returns these keys:
+
+| Key | Value |
+| --- | --- |
+| `schemaVersion` | Support-report schema version |
+| `report` | Bounded plain-text support report suitable for copying or saving |
+| `logDirectory` | User-readable support-log directory |
+| `logFiles` | Newest-first list of retained run and pairing-cycle log names |
+| `latestLog` | Newest retained log name, or empty |
+| `sessionId` | Correlation ID for the current or most recent service session |
+
+The report and listed support logs include sanitized engine and hostapd details.
+They redact MAC and IP addresses, SSIDs, pairing codes, credentials, usernames,
+and raw packet/key output. Private engine logs are not returned over D-Bus.
 
 ## Errors and authorization
 
@@ -100,13 +128,16 @@ busctl call org.barista.Service1 /org/barista/Service1 \
     org.barista.Service1 GetStatus
 
 busctl call org.barista.Service1 /org/barista/Service1 \
+    org.barista.Service1 GetDiagnostics
+
+busctl call org.barista.Service1 /org/barista/Service1 \
     org.barista.Service1 SavedGamePads
 
 busctl call org.barista.Service1 /org/barista/Service1 \
-    org.barista.Service1 StartSession ss wlan1 real
+    org.barista.Service1 StartSessionWithCountry sss wlan1 real US
 
 busctl call org.barista.Service1 /org/barista/Service1 \
-    org.barista.Service1 Pair sss wlan1 0123 real
+    org.barista.Service1 PairWithCountry ssss wlan1 0123 real US
 ```
 
 The last two calls can display an authorization prompt and alter the selected

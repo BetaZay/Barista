@@ -28,13 +28,21 @@ interface itself is synchronous.
 barista::api::StartSessionRequest start{
     .interfaceName = "wlan1",
     .mode = barista::api::SessionMode::Real,
+    .regulatoryCountry = "US",
 };
 
 barista::api::PairRequest pair;
 pair.interfaceName = "wlan1";
 pair.mode = barista::api::SessionMode::Real;
+pair.regulatoryCountry = "US";
 pair.code = {0, 1, 2, 3};
 ```
+
+`regulatoryCountry` is optional. When it is an uppercase ISO 3166-1 alpha-2
+code and the current Linux regulatory domain is the unset world domain (`00`),
+the Linux engine applies it for the session and restores `00` at shutdown. It
+does not replace an already configured country, and it skips restoration if
+another component changes the domain while Barista is running.
 
 Session modes are serialized as:
 
@@ -72,8 +80,9 @@ Adapters should treat them as data, not shell fragments or paths.
 | `Failed` | The operation failed for another reason; inspect `message` |
 
 An adapter should preserve the error category where its transport supports
-structured errors. The current D-Bus adapter exposes named D-Bus errors, while
-its status map contains only the human-readable error message.
+structured errors. `diagnosticCode` gives failures a stable support identifier,
+and `action` supplies user-facing recovery guidance. The D-Bus status map
+exposes both fields alongside the human-readable message.
 
 ## Ownership and lifecycle rules
 

@@ -1,5 +1,9 @@
 # Compiling Barista
 
+This guide is for contributors and people who deliberately want a source build.
+For a normal installation that receives updates through APT, DNF, or Pacman,
+use the [signed package repositories](docs/updates.md) instead.
+
 Barista has two build layers:
 
 - The portable Qt 6 UI/core can build without the GamePad radio engine.
@@ -10,12 +14,14 @@ Barista has two build layers:
 
 Install a C++20 compiler, CMake 3.20 or newer, Ninja, Git, Python 3, Qt 6 Core/
 Widgets/Network/DBus development packages, OpenSSL development headers, and
-the `libnl` development packages required by hostapd. On Linux, `pkcheck`,
+FreeType development headers for the GamePad UI, plus the `libnl` development
+packages required by hostapd. On Linux, `pkcheck`,
 `modprobe`, and `systemctl` must be available for the full service build.
 
 Package names vary. On Debian/Ubuntu-like distributions the relevant package
 families are commonly `build-essential`, `cmake`, `ninja-build`, `git`,
-`python3`, `qt6-base-dev`, `libssl-dev`, `libnl-3-dev`, and
+`python3`, `qt6-base-dev`, `qt6-svg-dev`, `libfreetype-dev`, `libssl-dev`,
+`libnl-3-dev`, and
 `libnl-genl-3-dev`. Install the matching Qt 6 DBus development package if your
 distribution splits it out.
 
@@ -52,6 +58,11 @@ It does not provide Wi-Fi pairing, radio streaming, or a virtual controller.
 
 ## Install on Linux
 
+Installing directly with CMake does not subscribe the machine to Barista's
+package repositories and will not provide automatic system-package upgrades.
+Prefer the [packaged installation](docs/updates.md) unless you are testing local
+source changes.
+
 Choose a prefix and use the normal CMake install step:
 
 ```sh
@@ -75,6 +86,11 @@ before and after installation. `drcctl` and `drcd_reencode_replay` remain legacy
 diagnostic tools, not the service engine. Old `app/drcd` files in existing build
 directories are stale artifacts and should not be installed.
 
+Installed builds keep shareable per-run, per-pairing-cycle, and maintenance logs in
+`/var/log/barista/support`. Settings → Support can view these files and create a
+support report without elevated privileges. Raw engine logs are kept separately
+under `/var/log/barista/private`, remain root-only, and may contain network or
+pairing details.
 Before testing a GamePad, close tools that own the selected Wi-Fi adapter and
 prefer Ethernet or a second adapter for Internet access. Barista will warn
 before it takes the adapter over.
@@ -109,5 +125,12 @@ On Arch Linux, install the `makedepends` listed in
 BARISTA_SOURCE_DIR="$PWD" makepkg --force -p packaging/arch/PKGBUILD
 ```
 
-The GitHub **Continuous** workflow performs these three builds and replaces the
-single rolling prerelease after a successful push to `main`.
+Official builds use `major.minor.build` versions. The globally increasing build
+number is assigned by CI; local source builds default to build `0` unless a
+version is supplied at configure time.
+
+The GitHub **Continuous** workflow runs the required checks and publishes
+successful `main` builds to the Preview repositories. A Stable release promotes
+those exact tested packages without rebuilding them. Preview and Stable are
+update channels, not additional parts of the version number. See the [CI
+guide](docs/ci.md) for PR checks and release behavior.

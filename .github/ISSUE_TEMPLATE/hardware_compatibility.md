@@ -33,7 +33,7 @@ Describe what happens, including whether pairing, connection, input, video, audi
 
 ## Diagnostics
 
-Paste relevant, sanitized logs or status output. Remove MAC addresses, IP addresses, pairing details, and other sensitive data.
+In Barista, open **Advanced** and select **Copy support report**, then paste the report here. Attach the relevant run or pairing-cycle support log if it adds useful detail.
 
 ## Additional context
 

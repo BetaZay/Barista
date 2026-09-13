@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = barista
+
+[Action]
+Description = Release the Barista Wi-Fi adapter before upgrading
+When = PreTransaction
+Exec = /usr/libexec/barista/package-pre-upgrade
+AbortOnFail

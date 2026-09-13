@@ -1,5 +1,6 @@
 #include "drh/server/server_core.h"
 
+#include "api/diagnostics.h"
 #include "drh/mac_address.h"
 #include "drh/pairing.h"
 
@@ -12,6 +13,51 @@ namespace barista::drh
 {
 namespace
 {
+void EmitDiagnostic(std::string_view code, std::string_view component = "engine", std::string_view detail = {})
+{
+	std::cout << "BARISTA_EVENT|" << barista::api::DiagnosticSeverity(code) << '|'
+		<< component << '|' << code;
+	if (!detail.empty()) std::cout << '|' << detail;
+	std::cout << std::endl;
+}
+
+void EmitBackendFailure(std::string_view message)
+{
+	EmitDiagnostic(barista::api::ClassifyDiagnosticMessage(message), "wifi");
+}
+
+void ClassifyStatusEvent(std::string_view message)
+{
+	if (message.find("MUG AppHook client connected") != std::string_view::npos)
+		EmitDiagnostic("MEDIA_CLIENT_CONNECTED", "media");
+	else if (message.find("MUG AppHook client disconnected") != std::string_view::npos)
+		EmitDiagnostic("MEDIA_CLIENT_DISCONNECTED", "media");
+	else if (message.find("Video send backpressure") != std::string_view::npos)
+		EmitDiagnostic("MEDIA_BACKPRESSURE", "media");
+	else if (message.find("Video send failed") != std::string_view::npos ||
+		message.find("Video sender failed") != std::string_view::npos ||
+		message.find("Test media failed") != std::string_view::npos)
+		EmitDiagnostic("MEDIA_SEND_FAILED", "media");
+	else if (message.find("Wi-Fi AP was stopped externally") != std::string_view::npos)
+		EmitDiagnostic("AP_START_FAILED", "wifi");
+	else if (message.rfind("Runtime AP ready on channel ", 0) == 0)
+	{
+		constexpr std::string_view prefix = "Runtime AP ready on channel ";
+		const size_t end = message.find(';');
+		const std::string detail = "channel=" + std::string(message.substr(prefix.size(),
+			end == std::string_view::npos ? end : end - prefix.size()));
+		EmitDiagnostic("RUNTIME_READY", "wifi", detail);
+	}
+	else if (message.rfind("Adapter ready: ", 0) == 0)
+		EmitDiagnostic("ADAPTER_READY", "wifi", message);
+	else if (message.rfind("Pairing radio ready: ", 0) == 0)
+		EmitDiagnostic("PAIRING_RADIO_READY", "pairing", message);
+	else if (message.rfind("Video encode timing: ", 0) == 0)
+		EmitDiagnostic("MEDIA_TIMING", "media", message);
+	else if (message.rfind("Media UDP: ", 0) == 0)
+		EmitDiagnostic("MEDIA_TRANSPORT_STATS", "media", message);
+}
+
 struct CommandResult
 {
 	bool ok = false;
@@ -255,11 +301,15 @@ CommandResponse ServerCore::handle_line(std::string_view line)
 void ServerCore::process_backend_events()
 {
 	while (const auto status = m_backend->consume_status_event())
+	{
 		std::cout << *status << std::endl;
+		ClassifyStatusEvent(*status);
+	}
 
 	if (m_backend->consume_gamepad_connected_event())
 	{
 		std::cout << "Gamepad found" << std::endl;
+		EmitDiagnostic("GAMEPAD_CONNECTED", "gamepad");
 		if (m_state_machine.state().phase == barista::drh::SessionPhase::Runtime)
 			(void)m_state_machine.mark_gamepad_connected(true);
 	}
@@ -271,11 +321,13 @@ void ServerCore::process_backend_events()
 		m_phase_deadline = std::max(m_phase_deadline,
 			std::chrono::steady_clock::now() + std::chrono::seconds(20));
 		std::cout << "GamePad associated; extending protocol startup grace period" << std::endl;
+		EmitDiagnostic("GAMEPAD_ASSOCIATED", "gamepad");
 	}
 	if (m_backend->consume_gamepad_disconnected_event() &&
 		m_state_machine.state().phase == barista::drh::SessionPhase::Runtime)
 	{
 		std::cout << "Gamepad disconnected; waiting for it to reconnect" << std::endl;
+		EmitDiagnostic("GAMEPAD_DISCONNECTED", "gamepad");
 		(void)m_state_machine.mark_gamepad_connected(false);
 		if (m_automatic.has_value())
 			m_phase_deadline = std::max(
@@ -287,6 +339,7 @@ void ServerCore::process_backend_events()
 		m_backend->consume_pairing_complete_event())
 	{
 		std::cout << "Gamepad paired" << std::endl;
+		EmitDiagnostic("PAIRING_SUCCEEDED", "pairing");
 		if (m_automatic.has_value())
 			m_pairing_suppressed_until = std::chrono::steady_clock::now() +
 				m_automatic->post_pair_grace_duration;
@@ -299,6 +352,7 @@ void ServerCore::process_backend_events()
 		}
 		else if (m_automatic.has_value())
 		{
+			EmitBackendFailure(backend_result.message);
 			m_phase_deadline = std::chrono::steady_clock::now() + m_automatic->check_duration;
 		}
 	}
@@ -340,13 +394,19 @@ void ServerCore::start_pairing_cycle()
 	}
 	(void)m_backend->stop_session();
 	m_state_machine.reset();
+	EmitDiagnostic("PAIRING_CYCLE_STARTED", "pairing");
 	if (!m_state_machine.start_pairing(m_automatic->request.interface_name,
 		m_automatic->request.ap_mac, m_automatic->request.pairing_code))
 		return;
 	std::cout << "Running sync with pattern: " << m_automatic->request.pairing_code.symbols_utf8() << std::endl;
 	const BackendResult result = m_backend->start_pairing(m_automatic->request);
 	if (!result.ok)
+	{
+		EmitBackendFailure(result.message);
 		m_state_machine.reset();
+	}
+	else
+		EmitDiagnostic("PAIRING_READY", "pairing");
 	m_phase_deadline = std::chrono::steady_clock::now() + m_automatic->pairing_duration;
 }
 
@@ -354,9 +414,12 @@ void ServerCore::start_check_cycle()
 {
 	if (!m_automatic.has_value())
 		return;
+	if (m_state_machine.state().phase == barista::drh::SessionPhase::Pairing)
+		EmitDiagnostic("PAIRING_TIMEOUT", "pairing");
 	(void)m_backend->stop_session();
 	m_state_machine.reset();
 	std::cout << "Checking for gamepads" << std::endl;
+	EmitDiagnostic("GAMEPAD_SEARCH_STARTED", "gamepad");
 	if (m_state_machine.start_pairing(m_automatic->request.interface_name,
 		m_automatic->request.ap_mac, m_automatic->request.pairing_code))
 	{

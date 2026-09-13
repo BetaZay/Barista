@@ -4,145 +4,333 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Only PR runs are cancelled. Publishing must not be interrupted mid-update.
+concurrency:
+  group: continuous-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  test:
-    name: Linux build and tests
+  changes:
+    name: Detect changes
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.changes.outputs.build }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - id: changes
+        run: python3 .github/scripts/changes.py
+      - id: version
+        run: python3 .github/scripts/version.py
+
+  docs:
+    name: Documentation and CI checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 .github/scripts/check_docs.py
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - run: |
+          for script in install.sh .github/scripts/*.sh packaging/linux/package-hooks.sh; do bash -n "$script"; done
+      - name: Lint GitHub Actions workflow
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+          docker run --rm -v "$PWD:/repo:ro" -w /repo --entrypoint shellcheck \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 install.sh .github/scripts/*.sh packaging/linux/package-hooks.sh
+
+  test:
+    name: Linux build and tests
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build git python3 ffmpeg nasm pkg-config \
-            qt6-base-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+            qt6-base-dev qt6-svg-dev libfreetype-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel 4
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: debug-failure-logs
+          path: |
+            build/Testing/Temporary/
+            build/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 14
+
+  desktop:
+    name: UI and core without radio engine
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-svg-dev libfreetype-dev
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBARISTA_BUILD_ENGINE=OFF
+      - run: cmake --build build --parallel 4
+      - run: ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-failure-logs
+          path: |
+            build/Testing/Temporary/
+            build/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 14
 
   deb:
-    name: Debian package
+    name: Debian package and Release tests
+    needs: changes
+    env:
+      BARISTA_VERSION: ${{ needs.changes.outputs.version }}
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build git python3 nasm pkg-config \
-            qt6-base-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
-      - name: Build package
+          sudo apt-get install -y cmake ninja-build git python3 ffmpeg nasm pkg-config file dpkg-dev \
+            qt6-base-dev qt6-svg-dev libfreetype-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+      - name: Build and test package
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-          cmake --build build --parallel
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DBARISTA_VERSION="$BARISTA_VERSION"
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
           cpack --config build/CPackConfig.cmake -G DEB -B dist
-          ARCH="$(uname -m)"
-          for f in dist/*.deb; do
-            if [ -f "$f" ] && [ "$f" != "dist/barista-${ARCH}.deb" ]; then
-              mv "$f" "dist/barista-${ARCH}.deb"
-            fi
-          done
       - uses: actions/upload-artifact@v4
         with:
-          name: deb
+          name: package-deb
           path: dist/*.deb
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: deb-failure-logs
+          path: |
+            build/Testing/Temporary/
+            build/CMakeFiles/CMakeConfigureLog.yaml
+            dist/_CPack_Packages/**/*.log
+          retention-days: 14
 
   rpm:
-    name: RPM package
+    name: Fedora package and Release tests
+    needs: changes
+    env:
+      BARISTA_VERSION: ${{ needs.changes.outputs.version }}
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    container: fedora:latest
+    timeout-minutes: 30
+    container: fedora:44
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install build dependencies
         run: |
           dnf -y install cmake ninja-build git python3 nasm gcc gcc-c++ make \
-            qt6-qtbase-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd
-      - name: Build package
+            qt6-qtbase-devel qt6-qtsvg-devel freetype-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd shadow-utils util-linux
+      - name: Build native H.264 reference decoder for tests
+        run: |
+          bash .github/scripts/build-test-ffmpeg.sh "$RUNNER_TEMP/barista-test-ffmpeg" \
+            2>&1 | tee "$RUNNER_TEMP/barista-test-ffmpeg.log"
+      - name: Build and test package
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-          cmake --build build --parallel
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DBARISTA_VERSION="$BARISTA_VERSION" \
+            -DDRCD_TEST_FFMPEG="$RUNNER_TEMP/barista-test-ffmpeg/bin/ffmpeg"
+          cmake --build build --parallel 4
+          useradd --create-home tester
+          chown -R tester:tester build
+          runuser -u tester -- ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
           cpack --config build/CPackConfig.cmake -G RPM -B dist
-          ARCH="$(uname -m)"
-          for f in dist/*.rpm; do
-            if [ -f "$f" ] && [ "$f" != "dist/barista-${ARCH}.rpm" ]; then
-              mv "$f" "dist/barista-${ARCH}.rpm"
-            fi
-          done
       - uses: actions/upload-artifact@v4
         with:
-          name: rpm
+          name: package-rpm
           path: dist/*.rpm
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: rpm-failure-logs
+          path: |
+            ${{ runner.temp }}/barista-test-ffmpeg.log
+            build/Testing/Temporary/
+            build/CMakeFiles/CMakeConfigureLog.yaml
+            dist/_CPack_Packages/**/*.log
+          retention-days: 14
 
   arch:
-    name: Arch package
+    name: Arch package and Release tests
+    needs: changes
+    env:
+      BARISTA_VERSION: ${{ needs.changes.outputs.version }}
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     container: archlinux:latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install build dependencies
+          persist-credentials: false
+      - name: Install build and package dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel cmake ninja git python ffmpeg \
-            nasm qt6-base openssl libnl polkit systemd
-          command -v pkcheck
-      - name: Build package
+            nasm qt6-base qt6-svg freetype2 openssl libnl polkit systemd networkmanager kmod iw iproute2
+      - name: Build and test package
         run: |
-          git config --system --add safe.directory '*'
           useradd --create-home builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          su builder -s /bin/bash -c "cd '$GITHUB_WORKSPACE/packaging/arch' && BARISTA_SOURCE_DIR='$GITHUB_WORKSPACE' makepkg --noconfirm --force --nodeps"
+          # Expansion is intentionally performed by the builder's shell.
+          # shellcheck disable=SC2016
+          su builder -s /bin/bash -c 'cd "$1/packaging/arch" && BARISTA_SOURCE_DIR="$1" makepkg --noconfirm --force' -- bash "$GITHUB_WORKSPACE"
           mkdir -p dist
-          ARCH="$(uname -m)"
-          pkg_file=$(find packaging/arch -maxdepth 1 -name 'barista-*.pkg.tar.*' | head -n 1)
-          if [ -n "$pkg_file" ]; then
-            ext="${pkg_file#*pkg.tar.}"
-            cp "$pkg_file" "dist/barista-${ARCH}.pkg.tar.${ext}"
-          fi
+          # Exclude makepkg's optional barista-debug split package.
+          cp packaging/arch/barista-[0-9]*.pkg.tar.zst dist/
       - uses: actions/upload-artifact@v4
         with:
-          name: arch
-          path: dist/*.pkg.tar.*
+          name: package-arch
+          path: dist/*.pkg.tar.zst
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: arch-failure-logs
+          path: |
+            packaging/arch/src/build/Testing/Temporary/
+            packaging/arch/src/build/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 14
 
-  release:
-    name: Update Continuous release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, deb, rpm, arch]
+  install:
+    name: Install ${{ matrix.package }} in clean container
+    needs: [changes, deb, rpm, arch]
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: deb
+            image: ubuntu:24.04
+          - package: rpm
+            image: fedora:44
+          - package: arch
+            image: archlinux:latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
+          name: package-${{ matrix.package }}
           path: dist
-          merge-multiple: true
-      - name: Replace rolling prerelease
+      - name: Install package and check installed files
         env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
+          IMAGE: ${{ matrix.image }}
+          PACKAGE: ${{ matrix.package }}
+          EXPECTED_VERSION: ${{ needs.changes.outputs.version }}
         run: |
-          gh release delete continuous --yes --cleanup-tag 2>/dev/null || true
-          gh release create continuous dist/* \
-            --target "$SHA" \
-            --title 'Continuous' \
-            --notes "Automated build from $SHA" \
-            --prerelease
+          docker run --rm -e EXPECTED_VERSION -v "$PWD/dist:/packages:ro" -v "$PWD/.github/scripts:/checks:ro" \
+            "$IMAGE" bash /checks/install-package.sh "$PACKAGE" 2>&1 | tee install.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: install-${{ matrix.package }}-failure-logs
+          path: install.log
+          retention-days: 14
+
+  repositories-test:
+    name: Signed repository integration
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test with disposable signing keys and fake GitHub storage
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            -e BARISTA_REPOSITORY_TOOLS_TEST=1 ubuntu:24.04 bash -c \
+            'apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 apt-utils rpm createrepo-c gnupg pacman-package-manager makepkg libarchive-tools zstd file binutils && python3 -m unittest discover -s .github/scripts -p test_repository_tools.py'
+
+  required:
+    name: CI required
+    if: always()
+    needs: [changes, docs, test, desktop, deb, rpm, arch, install, repositories-test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce all applicable checks
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          jobs = json.loads(os.environ["NEEDS"])
+          assert jobs["changes"]["result"] == "success", "Change detection failed"
+          assert jobs["docs"]["result"] == "success", "Documentation/CI checks failed"
+          full = jobs["changes"]["outputs"].get("build")
+          assert full in ("true", "false"), "Missing build decision"
+          for job in ("test", "desktop", "deb", "rpm", "arch", "install", "repositories-test"):
+              expected = "success" if full == "true" else "skipped"
+              assert jobs[job]["result"] == expected, f"{job}: {jobs[job]['result']}"
+          print("All applicable checks passed")
+          PY
+
+  release:
+    name: Publish Preview repositories
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true' && vars.BARISTA_REPOSITORIES_ENABLED == 'true'
+    needs: [changes, required]
+    uses: ./.github/workflows/repositories.yml
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    with:
+      version: ${{ needs.changes.outputs.version }}
+      source: ${{ github.sha }}
+    secrets: inherit

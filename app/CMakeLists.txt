@@ -15,13 +15,35 @@ if(NOT BARISTA_BUILD_DESKTOP)
     return()
 endif()
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network Svg)
 set(CMAKE_AUTOMOC ON)
-add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/control_client.cpp gui/control_client.h
-    gui/single_instance.cpp gui/single_instance.h)
-target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network barista_core)
+set(BARISTA_INTERFACE_ICONS
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/dropdown.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/home.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/gamepad-alt.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/computer.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/signal-high.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/cog.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/info-circle.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/plus.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/caret-right.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/stop.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/reload.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/external.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/save.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/pencil.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/trash.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/exit.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/copy.svg"
+)
+add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/cafe_icons.cpp gui/cafe_icons.h
+    gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h gui/control_client.cpp gui/control_client.h
+    gui/single_instance.cpp gui/single_instance.h gui/update_checker.cpp gui/update_checker.h)
+target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
 qt_add_resources(barista branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
     FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
+qt_add_resources(barista interface_icons PREFIX "/barista/icons" BASE "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons"
+    FILES ${BARISTA_INTERFACE_ICONS})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 REQUIRED COMPONENTS DBus)
     target_link_libraries(barista PRIVATE Qt6::DBus)
@@ -35,11 +57,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         file(REAL_PATH "${BARISTA_MODPROBE_DIR}" BARISTA_MODPROBE_DIR)
         get_filename_component(BARISTA_MODPROBE_NAME "${BARISTA_MODPROBE}" NAME)
         add_executable(barista-service service/main.cpp service/service.cpp service/service.h
+            service/log_sanitizer.cpp service/log_sanitizer.h
             branding/idle_screen.cpp
             service/uinput_output.cpp service/uinput_output.h)
         qt_add_resources(barista-service service_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
             FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
         if(BUILD_TESTING)
+            add_executable(barista_log_sanitizer_test service/log_sanitizer_test.cpp
+                service/log_sanitizer.cpp service/log_sanitizer.h)
+            target_link_libraries(barista_log_sanitizer_test PRIVATE Qt6::Core)
+            add_test(NAME barista_log_sanitizer COMMAND barista_log_sanitizer_test)
             add_executable(barista_idle_test branding/idle_screen_test.cpp branding/idle_screen.cpp)
             target_link_libraries(barista_idle_test PRIVATE Qt6::Gui drc_ipc)
             qt_add_resources(barista_idle_test idle_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
@@ -58,7 +85,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         install(PROGRAMS "${DRC_HOSTAPD_BINARY}" DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-hostapd)
         configure_file(../packaging/linux/barista.service.in barista.service @ONLY)
         configure_file(../packaging/linux/org.barista.Service1.service.in org.barista.Service1.service @ONLY)
-        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/barista.service DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/system)
+        # systemd units are not architecture-specific libraries (lib64 or a
+        # Debian multiarch lib directory are not vendor unit search paths).
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/barista.service DESTINATION lib/systemd/system)
         install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.barista.Service1.service DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system-services)
         install(FILES ../packaging/linux/org.barista.Service1.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system.d)
         install(FILES ../packaging/linux/org.barista.manage-session.policy DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions)
@@ -68,14 +97,21 @@ install(TARGETS barista RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ../packaging/org.barista.Barista.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES ../barista-logo.png DESTINATION ${CMAKE_INSTALL_DATADIR}/pixmaps RENAME org.barista.Barista.png)
 if(BUILD_TESTING)
+    add_executable(barista_update_test gui/update_checker_test.cpp gui/update_checker.cpp gui/update_checker.h)
+    target_link_libraries(barista_update_test PRIVATE Qt6::Network)
+    add_test(NAME barista_updates COMMAND barista_update_test)
     add_executable(barista_instance_test gui/single_instance_test.cpp gui/single_instance.cpp gui/single_instance.h)
     target_link_libraries(barista_instance_test PRIVATE Qt6::Network)
     add_test(NAME barista_single_instance COMMAND barista_instance_test)
     set_tests_properties(barista_single_instance PROPERTIES TIMEOUT 10)
-    add_executable(barista_window_test gui/window_test.cpp gui/window.cpp gui/window.h gui/control_client.cpp gui/control_client.h)
-    target_link_libraries(barista_window_test PRIVATE Qt6::Widgets Qt6::Network barista_core)
+    add_executable(barista_window_test gui/window_test.cpp gui/window.cpp gui/window.h
+        gui/cafe_icons.cpp gui/cafe_icons.h gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h
+        gui/control_client.cpp gui/control_client.h gui/update_checker.cpp gui/update_checker.h)
+    target_link_libraries(barista_window_test PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
     qt_add_resources(barista_window_test test_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
         FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
+    qt_add_resources(barista_window_test test_interface_icons PREFIX "/barista/icons" BASE "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons"
+        FILES ${BARISTA_INTERFACE_ICONS})
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(barista_window_test PRIVATE Qt6::DBus)
         target_compile_definitions(barista_window_test PRIVATE BARISTA_LINUX_CONTROL=1)
@@ -85,5 +121,9 @@ if(BUILD_TESTING)
     add_test(NAME barista_gui_smoke COMMAND barista --smoke-test)
     add_test(NAME barista_pairing_smoke COMMAND barista --smoke-test --smoke-pairing)
     add_test(NAME barista_advanced_smoke COMMAND barista --smoke-test --smoke-advanced)
-    set_tests_properties(barista_gui_smoke barista_pairing_smoke barista_advanced_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+    add_test(NAME barista_settings_smoke COMMAND barista --smoke-test --smoke-settings)
+    add_test(NAME barista_connection_smoke COMMAND barista --smoke-test --smoke-connection)
+    add_test(NAME barista_about_smoke COMMAND barista --smoke-test --smoke-about)
+    set_tests_properties(barista_gui_smoke barista_pairing_smoke barista_advanced_smoke
+        barista_settings_smoke barista_connection_smoke barista_about_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
 endif()

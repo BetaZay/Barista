@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+@BARISTA_PACKAGE_HOOKS@
+@BARISTA_PACKAGE_ACTION@

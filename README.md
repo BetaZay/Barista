@@ -2,120 +2,88 @@
 
 <p align="center"><img src="barista-logo.png" width="220" alt="Barista logo"></p>
 
-Barista lets a Wii U GamePad act as a wireless second screen, controller, and
-audio device for a desktop application. It owns pairing, the dedicated Wi-Fi
-access point, low-latency media delivery, GamePad input, and a Qt 6 desktop
-application. It is not affiliated with Nintendo.
+Use a Wii U GamePad as a wireless second screen, controller, and audio device
+for your Linux desktop. Barista handles pairing and streaming, with a desktop
+app for managing your GamePads and connections.
 
-## What it does
+Barista is experimental software and is not affiliated with Nintendo.
 
-- Pair and reconnect a real Wii U GamePad from the desktop app.
-- Show Barista's logo while no application is streaming.
-- Run in **Screen + controller** mode: an application sends video/audio to the
-  GamePad and receives its input.
-- Run in **Controller-only** mode: expose standard buttons, sticks, triggers,
-  and D-pad through Linux `uinput`.
-- Keep the privileged radio/service work behind a D-Bus + polkit boundary; the
-  Qt application runs as the regular desktop user.
+## Features
 
-The application connector is **AppHook**, internally nicknamed **MUG** (Media
-User Gateway). It is a Linux-local Unix `SOCK_SEQPACKET` protocol, not an
-emulator-specific integration. It carries RGB video, stereo PCM, and GamePad
-input reports. Other applications can implement AppHook instead of embedding
-any radio or pairing logic.
+- Pair a real Wii U GamePad and reconnect using saved credentials.
+- Stream video and audio from compatible applications, with GamePad input.
+- Use the GamePad as a controller through Linux `uinput`.
+- Integrate other applications through [AppHook](docs/api/README.md).
 
-## Projects that work with Barista
+## Requirements
 
-These are experimental forks, not features of or endorsements by their
-upstream projects.
+Real GamePad connections require **Linux and a compatible 5 GHz Wi-Fi adapter**.
+Barista temporarily takes over the selected adapter, so use Ethernet or a
+second adapter if you also need Internet access.
 
-- [BetaZay/Cemu](https://github.com/BetaZay/Cemu), branch
-  `barista-connector-prototype` — Wii U GamePad video, audio, controls, and
-  touchscreen integration.
-- [BetaZay/Azahar](https://github.com/BetaZay/Azahar) — 3DS top/bottom-screen
-  layouts, video, audio, controls, touchscreen, motion, and C-stick support.
+See [Wi-Fi compatibility](docs/hardware.md) for tested adapters and driver
+limitations. Windows and macOS currently support the portable UI/core only.
 
-The prototypes use Barista's default per-user session socket,
-`/run/barista/media-<uid>.sock`, automatically. Other clients can use that
-endpoint directly or set `BARISTA_MUG_SOCKET` as a development override.
+## Getting started
 
-## Wi-Fi requirements
+Signed repositories support Ubuntu 24.04, Fedora 44, Arch Linux, and compatible
+derivatives such as CachyOS on x86_64. Choose one update channel:
 
-The GamePad uses a dedicated **5 GHz** access point. Barista needs a Linux Wi-Fi
-adapter and driver that can create a 5 GHz AP using `nl80211`/hostapd, remain
-stable at the selected channel, and support the GamePad's required association
-and encryption behavior. This is not ordinary home Wi-Fi: starting a session
-temporarily takes over the selected adapter from NetworkManager.
-
-Use wired Ethernet or a second Wi-Fi adapter if the machine needs Internet
-access while Barista is active. Keep the GamePad close to the adapter while
-testing; radio conditions still directly affect video quality and latency.
-
-Development and physical GamePad streaming were tested with the Realtek
-**RTL8852BE** (`rtw89_8852be`) on Linux. That proves this adapter/driver can
-work; it is not a guarantee for every firmware, kernel, access-point channel,
-or adapter. macOS and Windows currently provide the portable UI/core only—the
-real GamePad radio backend is Linux-only.
-
-The [TP-Link Nano AC600](https://www.amazon.com/dp/B07PB1X4CN) USB adapter
-(`rtw_8821au`) is also a recommended tested option. It can take several
-seconds to leave managed Wi-Fi mode and bring up the pairing access point;
-wait for Barista to report that pairing is ready before using SYNC. It was
-stable once the pairing AP was running in our testing.
-
-For additional confirmed and incompatible hardware reports, see
-[Vanilla Wii U's Wireless Compatibility wiki](https://github.com/vanilla-wiiu/vanilla/wiki/Wireless-Compatibility).
-
-## Use
-
-Install Barista, then open it normally from the desktop launcher. The system
-service is activated on demand; use **Start** to authorize the Wi-Fi takeover.
-Use **Pair GamePad** only when pairing is needed. Closing the window keeps it in
-the tray by default.
-
-The Advanced page displays the automatically managed AppHook endpoint. Clients
-should use that default endpoint; the environment variable is only an optional
-development override:
+Stable (recommended after the first Preview build is promoted):
 
 ```sh
-your-app
+curl -fsSL https://betazay.github.io/Barista/install.sh | sudo sh -s -- stable
 ```
 
-The endpoint exists only while a Screen + controller session is active. It is
-owned and permissioned for the desktop user; applications must not run as root.
+Preview (available now):
 
-## Build and install
+```sh
+curl -fsSL https://betazay.github.io/Barista/install.sh | sudo sh -s -- preview
+```
 
-See [COMPILING.md](COMPILING.md) for dependencies, a development build, tests,
-and system installation.
+The installer detects the supported distribution, verifies Barista's signing
+key, and configures APT, DNF, or Pacman. Afterward, updates arrive through the
+normal system updater. See [Package updates and release channels](docs/updates.md)
+for manual setup and security details.
 
-Developers integrating an application, control client, or future backend should
-start with the [API documentation](docs/api/README.md).
+To build Barista yourself instead, follow the [compiling guide](COMPILING.md).
 
-## Status
+After installation:
 
-Barista is active development software. The primary Linux pairing, streaming,
-and AppHook paths have been exercised with real hardware, but adapter/driver
-compatibility and media recovery still need broader hardware testing.
+1. Open Barista as your normal desktop user—never with `sudo` or `pkexec`.
+2. Select your Wi-Fi adapter and confirm your country in **Settings → General**.
+3. Open **GamePads → Pair a GamePad** and follow the instructions.
+4. For a saved GamePad, use **Connect GamePad** on Home.
 
-### What's working
+See the [user guide](docs/user-guide.md) for pairing, play modes, and running
+compatible applications. If something fails, open **Settings → Support** and
+check the [troubleshooting guide](docs/troubleshooting.md).
 
-- Pairing
-- Basic A/V streaming
-- Inputs from buttons and sticks
-- AppHook for third-party apps
+## Community
 
-### Needs work
+Join the [Barista Discord server](https://discord.gg/HNhEUW2tWj) for help,
+development discussion, and project updates.
 
-- Video still has artifacts and can get behind and stutter.
-- Audio occasionally stutters.
-- The GamePad still requests recovery much more often than it does with a real
-  Wii U connection.
-- Touch needs broader application and calibration testing.
-- Gyro needs broader application and orientation testing.
+## Compatible projects
 
-### Not started
+Experimental integrations are available in these forks; they are not features
+of or endorsements by the upstream projects:
 
-- Camera
-- Microphone
-- NFC
+- [Cemu](https://github.com/BetaZay/Cemu), branch `barista-connector-prototype`
+- [Azahar](https://github.com/BetaZay/Azahar)
+
+## Project status
+
+Pairing, basic video/audio streaming, controller input, and AppHook have been
+tested with real hardware. Video can still show artifacts or fall behind;
+audio can stutter, and recovery needs improvement. Touch and motion need
+broader testing. Camera, microphone, and NFC support are not implemented.
+
+## Documentation
+
+- [Install and update with APT, DNF, or Pacman](docs/updates.md)
+- [Compile from source](COMPILING.md)
+- [User guide](docs/user-guide.md)
+- [Wi-Fi compatibility](docs/hardware.md)
+- [Troubleshooting and support logs](docs/troubleshooting.md)
+- [Developer API and application integration](docs/api/README.md)

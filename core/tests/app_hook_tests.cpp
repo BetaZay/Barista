@@ -30,7 +30,8 @@ int main()
         check(barista::api::AppHook::rgb_to_i420({}, 0, 0).empty(), "invalid conversion");
         barista::api::AppHook server(true), client(false), duplicate(true);
         std::string error;
-        check(server.start(path, error), error.c_str());
+        const bool server_started = server.start(path, error);
+        check(server_started, error.c_str());
         check(!duplicate.start(path, error), "must not replace existing socket");
         bool idleActive = true;
         std::vector<uint8_t> idleFrame(barista::api::FrameBytes);
@@ -40,7 +41,8 @@ int main()
             "server fallback before any connector");
         check(server.set_idle_frame({}), "clear server fallback for legacy behavior");
         client.submit_rgb(black, 6, 6, true);
-        check(client.start(path, error), error.c_str());
+        const bool client_started = client.start(path, error);
+        check(client_started, error.c_str());
         wait_for([&] { return server.connected() && client.connected(); });
         bool active = false;
         std::vector<uint8_t> frame(barista::api::FrameBytes);
@@ -55,10 +57,16 @@ int main()
         check(audio[2] == 0x38 && audio[3] == 0xfe, "PCM endian/stereo");
         std::array<uint8_t, 128> input{}; input[2] = 42; server.submit_input(input);
         wait_for([&] { return client.read_input(input) && input[2] == 42; });
+        check(!server.read_rumble(), "rumble defaults off");
+        client.submit_rumble(true);
+        wait_for([&] { return server.read_rumble(); });
+        client.submit_rumble(false);
+        wait_for([&] { return !server.read_rumble(); });
         client.set_active(false);
         wait_for([&] { return server.read_video(frame, active) && !active && frame[0] == 16; });
         client.stop();
         wait_for([&] { return !server.connected(); });
+        check(!server.read_rumble(), "rumble cleared on disconnect");
         check(!client.read_input(input), "stale input disconnected");
         check(client.start(path, error), "reconnect start");
         wait_for([&] { return server.connected() && client.connected(); });

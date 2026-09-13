@@ -1,14 +1,16 @@
 # Maintainer: Barista maintainers
 pkgname=barista
-pkgver=0.1.0
+pkgver=${BARISTA_VERSION:-$(head -n 1 "${BARISTA_SOURCE_DIR:-${startdir}/../..}/VERSION").0}
 pkgrel=1
 pkgdesc='Wii U GamePad desktop bridge'
 arch=('x86_64')
 license=('custom')
-depends=('qt6-base' 'networkmanager' 'polkit' 'kmod' 'iw' 'iproute2' 'openssl' 'libnl')
+depends=('qt6-base' 'qt6-svg' 'freetype2' 'networkmanager' 'polkit' 'kmod' 'iw' 'iproute2' 'openssl' 'libnl')
 makedepends=('cmake' 'ninja' 'git' 'python' 'nasm' 'make' 'gcc' 'polkit')
+checkdepends=('ffmpeg')
 source=()
 sha256sums=()
+install=../linux/package-hooks.sh
 
 # Build from a checkout. CI sets BARISTA_SOURCE_DIR explicitly; local users
 # can run `cd packaging/arch && BARISTA_SOURCE_DIR="../.." makepkg -f`.
@@ -27,9 +29,11 @@ build() {
 }
 
 check() {
-    ctest --test-dir build --output-on-failure
+    ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
 }
 
 package() {
     DESTDIR="$pkgdir" cmake --install build --prefix /usr
+    install -Dm755 build/packaging/pre-upgrade "$pkgdir/usr/libexec/barista/package-pre-upgrade"
+    install -Dm644 "$(_barista_source)/packaging/arch/barista-pre-upgrade.hook" "$pkgdir/usr/share/libalpm/hooks/barista-pre-upgrade.hook"
 }

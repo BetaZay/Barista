@@ -1,6 +1,7 @@
 #pragma once
 #include "api/types.h"
 #include <QObject>
+#include <QStringList>
 #include <QVariantList>
 
 // Transport seam: the widget layer has no D-Bus, polkit, uinput or Unix headers.
@@ -15,6 +16,7 @@ public:
     void Prepare();
     void Retry();
     void RefreshGamePads();
+    void RefreshDiagnostics();
     void RenameGamePad(const barista::api::RenameGamePadRequest& request);
     void RemoveGamePad(const barista::api::RemoveGamePadRequest& request);
 signals:
@@ -23,6 +25,7 @@ signals:
     void Error(const QString& message);
     void Pending(bool pending);
     void Stopped(bool success);
+    void Diagnostics(const QString& report, const QString& directory, const QStringList& files, const QString& sessionId);
 private:
     void Call(const QString& method, const QVariantList& arguments = {});
     bool m_pollPending = false, m_operationPending = false;
