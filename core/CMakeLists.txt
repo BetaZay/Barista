@@ -28,6 +28,7 @@ if(BARISTA_BUILD_ENGINE)
     target_link_libraries(drc_ipc PUBLIC pthread)
 
     add_library(barista_drh_encoder STATIC
+        drh/encoder/gamepad_home_menu.cpp
         drh/encoder/x264/bit_writer.cpp
         drh/encoder/x264/cabac.cpp
         drh/encoder/x264/contexts.cpp
@@ -42,6 +43,10 @@ if(BARISTA_BUILD_ENGINE)
         PRIVATE drc_host drc_ipc m pthread dl
     )
     target_compile_features(barista_drh_encoder PUBLIC cxx_std_20)
+    target_compile_definitions(barista_drh_encoder PRIVATE
+        BARISTA_HOME_MENU_SOUND="${CMAKE_INSTALL_FULL_DATADIR}/barista/sounds/ui.pcm")
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/sounds/ui.pcm"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/sounds)
 
     add_library(barista_drh_server STATIC
         drh/server/interrupt.cpp
@@ -118,6 +123,10 @@ if(BUILD_TESTING)
         add_executable(drcd_packet_schedule_tests tests/video_packet_schedule_tests.cpp)
         target_link_libraries(drcd_packet_schedule_tests PRIVATE barista_drh_encoder)
         add_test(NAME drcd_packet_schedule_tests COMMAND drcd_packet_schedule_tests)
+
+        add_executable(drcd_home_menu_tests tests/gamepad_home_menu_tests.cpp)
+        target_link_libraries(drcd_home_menu_tests PRIVATE barista_drh_encoder)
+        add_test(NAME drcd_home_menu_tests COMMAND drcd_home_menu_tests)
 
         add_executable(drcd_x264_encoder_tests tests/x264_encoder_tests.cpp)
         target_link_libraries(drcd_x264_encoder_tests PRIVATE barista_drh_encoder)

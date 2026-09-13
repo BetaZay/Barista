@@ -799,6 +799,7 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
         env.insert("DRCD_REGULATORY_COUNTRY",regulatoryCountry);
     env.insert("BARISTA_MUG_SOCKET",m_endpoint);
     env.insert("BARISTA_IDLE_I420","/run/barista/idle.i420");
+    env.insert("BARISTA_HOME_MENU",mode == barista::api::SessionMode::Real ? "1" : "0");
     env.insert("BARISTA_CLIENT_UID",QString::number(mode == barista::api::SessionMode::Controller ? 0 : uid));
     env.insert("BARISTA_SESSION_ID",m_sessionId);
     env.insert("DRCD_LOG_STDERR","1");

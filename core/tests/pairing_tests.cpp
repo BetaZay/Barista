@@ -138,6 +138,37 @@ bool receive_and_answer_command(int fd, int timeout_ms, uint16_t wanted_query,
 	return true;
 }
 
+bool receive_and_answer_brightness(int fd, int timeout_ms, uint8_t expected_level)
+{
+	pollfd descriptor{fd, POLLIN, 0};
+	if (::poll(&descriptor, 1, timeout_ms) <= 0)
+		return false;
+	std::array<uint8_t, 1024> request{};
+	sockaddr_in console{};
+	socklen_t console_size = sizeof(console);
+	const ssize_t size = ::recvfrom(fd, request.data(), request.size(), 0,
+		reinterpret_cast<sockaddr*>(&console), &console_size);
+	if (size != 21 || read_le16(request.data()) != 0 ||
+		read_le16(request.data() + 2) != 0)
+		return false;
+	expect(read_le16(request.data() + 4) == 13, "brightness command payload size mismatch");
+	expect(request[8] == 0x7e && request[9] == 0x01 && request[14] == 0x05 &&
+		request[15] == 0x14 && request[18] == 0 && request[19] == 1 &&
+		request[20] == expected_level, "brightness generic command mismatch");
+	const uint16_t sequence = read_le16(request.data() + 6);
+	const auto ack = command_packet(1, 0, sequence);
+	expect(::sendto(fd, ack.data(), ack.size(), 0,
+		reinterpret_cast<sockaddr*>(&console), console_size) == static_cast<ssize_t>(ack.size()),
+		"could not ACK brightness command");
+	std::array<uint8_t, 12> payload{0x7e, 0x01, 0x00, 0x08, 0x00, 0x00,
+		0x05, 0x14, 0x00, 0x00, 0x00, 0x00};
+	const auto response = command_packet(2, 0, sequence, payload);
+	expect(::sendto(fd, response.data(), response.size(), 0,
+		reinterpret_cast<sockaddr*>(&console), console_size) == static_cast<ssize_t>(response.size()),
+		"could not answer brightness command");
+	return true;
+}
+
 void test_runtime_keepalive()
 {
 	using namespace std::chrono;
@@ -215,6 +246,13 @@ void test_runtime_keepalive()
 	expect(stats.uvc_uac_replies >= 1, "transport did not retain the UVC/UAC reply");
 	expect(stats.waiting_for_streaming, "HID waiting-for-streaming bit was not decoded");
 	expect(stats.battery_charge_valid && stats.battery_charge == 73, "HID battery charge was not decoded");
+
+	transport.set_lcd_brightness(5);
+	bool brightness_answered = false;
+	const auto brightness_deadline = steady_clock::now() + seconds(1);
+	while (!brightness_answered && steady_clock::now() < brightness_deadline)
+		brightness_answered = receive_and_answer_brightness(command_fd, 100, 5);
+	expect(brightness_answered, "transport did not issue the LCD brightness command");
 
 	bool saw_big_endian_sequence = false;
 	while (auto status = transport.consume_status_event())

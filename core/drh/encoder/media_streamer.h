@@ -3,11 +3,15 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <span>
 #include <string>
 #include <thread>
+#include <vector>
 #include <iosfwd>
 
 namespace barista::drh { class RuntimeTransport; class VideoEncoder; }
+namespace barista::drh { class GamepadHomeMenu; }
 namespace barista::api { class AppHook; }
 
 namespace barista::drh
@@ -32,18 +36,25 @@ private:
 	void video_loop();
 	void audio_loop();
 	void input_loop();
+	void play_home_menu_sound();
+	void mix_home_menu_sound(std::span<uint8_t> pcm);
 
 	barista::drh::RuntimeTransport& m_transport;
 	std::string m_path;
 	bool m_black_frames = false;
 	bool m_generated_pattern = false;
+	bool m_home_menu_enabled = true;
 	std::unique_ptr<barista::api::AppHook> m_bridge;
 	std::unique_ptr<VideoEncoder> m_encoder;
+	std::unique_ptr<GamepadHomeMenu> m_home_menu;
 	std::thread m_video_thread;
 	std::thread m_audio_thread;
 	std::thread m_input_thread;
 	std::atomic_bool m_stop{false};
 	std::atomic_bool m_running{false};
 	std::atomic_uint64_t m_audio_packets{0};
+	std::mutex m_home_menu_sound_mutex;
+	std::vector<int16_t> m_home_menu_sound;
+	size_t m_home_menu_sound_cursor = 0;
 };
 }
