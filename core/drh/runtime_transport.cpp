@@ -229,6 +229,13 @@ std::vector<uint8_t> BuildUicConfigQuery()
 	return {0x7e, 0x01, 0x00, 0x08, 0x00, 0x40, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00};
 }
 
+std::vector<uint8_t> BuildLcdBrightnessCommand(uint8_t level)
+{
+	// Generic peripheral command, service 5 method 0x14, one-byte level.
+	return {0x7e, 0x01, 0x00, 0x08, 0x00, 0x40, 0x05, 0x14,
+		0x00, 0x00, 0x00, 0x01, static_cast<uint8_t>(std::clamp<int>(level, 1, 5))};
+}
+
 std::vector<uint8_t> BuildUvcUacQuery()
 {
 	std::vector<uint8_t> payload(48);
@@ -260,30 +267,47 @@ std::string_view CommandQueryTypeName(uint16_t type)
 	}
 }
 
-bool ValidateCommandReply(uint16_t query_type, std::span<const uint8_t> payload,
+enum class CommandKind
+{
+	UicConfig,
+	UvcUac,
+	LcdBrightness,
+};
+
+bool ValidateGenericReply(std::span<const uint8_t> payload, uint8_t method,
+	size_t expected_inner_size, std::string& reason)
+{
+	if (payload.size() != 12 + expected_inner_size)
+	{
+		reason = "generic reply size " + std::to_string(payload.size()) + " (expected " +
+			std::to_string(12 + expected_inner_size) + ")";
+		return false;
+	}
+	if (payload[0] != 0x7e || payload[1] != 0x01 || payload[6] != 0x05 ||
+		payload[7] != method || payload[8] != 0 || payload[9] != 0)
+	{
+		reason = "generic-command header mismatch";
+		return false;
+	}
+	const size_t inner_size = (static_cast<size_t>(payload[10]) << 8) | payload[11];
+	if (inner_size != expected_inner_size)
+	{
+		reason = "generic-command inner payload length mismatch";
+		return false;
+	}
+	return true;
+}
+
+bool ValidateCommandReply(CommandKind kind, std::span<const uint8_t> payload,
 	std::string& reason)
 {
-	if (query_type == 0)
+	if (kind == CommandKind::UicConfig)
 	{
-		if (payload.size() != 0x310)
-		{
-			reason = "UIC reply size " + std::to_string(payload.size()) + " (expected 784)";
-			return false;
-		}
-		if (payload[0] != 0x7e || payload[1] != 0x01 || payload[6] != 0x05 ||
-			payload[7] != 0x06 || payload[8] != 0 || payload[9] != 0)
-		{
-			reason = "UIC generic-command header mismatch";
-			return false;
-		}
-		const size_t inner_size = (static_cast<size_t>(payload[10]) << 8) | payload[11];
-		if (inner_size != payload.size() - 12)
-		{
-			reason = "UIC inner payload length mismatch";
-			return false;
-		}
+		return ValidateGenericReply(payload, 0x06, 0x304, reason);
 	}
-	else if (query_type == 1 && payload.size() != 16)
+	if (kind == CommandKind::LcdBrightness)
+		return ValidateGenericReply(payload, 0x14, 0, reason);
+	if (payload.size() != 16)
 	{
 		reason = "UVC/UAC reply size " + std::to_string(payload.size()) + " (expected 16)";
 		return false;
@@ -317,6 +341,7 @@ enum class CommandStage
 
 struct CommandTransaction
 {
+	CommandKind kind = CommandKind::UicConfig;
 	uint16_t query_type = 0;
 	uint16_t sequence = 0;
 	std::vector<uint8_t> payload;
@@ -325,6 +350,7 @@ struct CommandTransaction
 	std::chrono::steady_clock::time_point first_sent{};
 	std::chrono::steady_clock::time_point last_sent{};
 	std::chrono::steady_clock::time_point next_due{};
+	uint64_t generation = 0;
 };
 
 int MakeSocket(const RuntimeTransportConfig& config, uint16_t port, bool media_socket,
@@ -448,11 +474,17 @@ public:
 		m_last_waiting_for_streaming = true;
 		m_last_input_report = {};
 		m_next_sequence = 0;
+		m_brightness_request_generation.store(0);
+		m_brightness_completed_generation = 0;
 		m_clock_origin = std::chrono::steady_clock::now();
 		const auto now = std::chrono::steady_clock::now();
 		m_command_transactions = {{
-			{.query_type = 0, .payload = BuildUicConfigQuery(), .next_due = now},
-			{.query_type = 1, .payload = BuildUvcUacQuery(), .next_due = now},
+			{.kind = CommandKind::UicConfig, .query_type = 0,
+				.payload = BuildUicConfigQuery(), .next_due = now},
+			{.kind = CommandKind::UvcUac, .query_type = 1,
+				.payload = BuildUvcUacQuery(), .next_due = now},
+			{.kind = CommandKind::LcdBrightness, .query_type = 0,
+				.next_due = std::chrono::steady_clock::time_point::max()},
 		}};
 		m_uic_response.clear();
 		m_uvc_uac_response.clear();
@@ -578,6 +610,12 @@ public:
 		};
 	}
 
+	void set_lcd_brightness(uint8_t level)
+	{
+		m_requested_brightness.store(static_cast<uint8_t>(std::clamp<int>(level, 1, 5)));
+		++m_brightness_request_generation;
+	}
+
 	uint32_t timestamp_us() const
 	{
 		if (m_ap_clock)
@@ -663,6 +701,7 @@ private:
 			const auto now = steady_clock::now();
 			service_command(m_command_transactions[0], now, m_uic_reply_seen.load());
 			service_command(m_command_transactions[1], now, false);
+			service_brightness(now);
 			if (m_protocol_ready.load() && last_protocol_packet != steady_clock::time_point{} &&
 				now - last_protocol_packet > seconds(3))
 			{
@@ -794,7 +833,7 @@ private:
 			std::string reason;
 			const std::span<const uint8_t> response(packet.data() + kCommandHeaderSize,
 				payload_size);
-			if (!ValidateCommandReply(query_type, response, reason))
+			if (!ValidateCommandReply(transaction->kind, response, reason))
 			{
 				queue_status("Command reply query=" +
 					std::string(CommandQueryTypeName(query_type)) + " seq=" +
@@ -809,13 +848,13 @@ private:
 				std::to_string(transaction->attempts - 1));
 			transaction->stage = CommandStage::Idle;
 			transaction->next_due = now + kCommandTimeout;
-			if (query_type == 0)
+			if (transaction->kind == CommandKind::UicConfig)
 			{
 				m_uic_response.assign(response.begin(), response.end());
 				if (!m_uic_reply_seen.exchange(true))
 					queue_status("UIC configuration synchronized");
 			}
-			else if (query_type == 1)
+			else if (transaction->kind == CommandKind::UvcUac)
 			{
 				m_uvc_uac_response.assign(response.begin(), response.end());
 				SynchronizeUvcUacRequest(transaction->payload, response);
@@ -823,6 +862,12 @@ private:
 				if (!m_uvc_uac_reply_seen.exchange(true))
 					queue_status("UVC/UAC keepalive synchronized; media may start");
 				maybe_mark_session_ready();
+			}
+			else if (transaction->kind == CommandKind::LcdBrightness)
+			{
+				m_brightness_completed_generation = transaction->generation;
+				queue_status("GamePad LCD brightness set to level " +
+					std::to_string(transaction->payload.back()));
 			}
 		}
 		return true;
@@ -862,6 +907,21 @@ private:
 			std::to_string(transaction.sequence) + " payload=" +
 			std::to_string(transaction.payload.size()) + " retry=" +
 			std::to_string(transaction.attempts - 1));
+	}
+
+	void service_brightness(std::chrono::steady_clock::time_point now)
+	{
+		const uint64_t requested = m_brightness_request_generation.load();
+		if (requested == 0 || requested == m_brightness_completed_generation)
+			return;
+		CommandTransaction& transaction = m_command_transactions[2];
+		if (transaction.stage == CommandStage::Idle && transaction.generation != requested)
+		{
+			transaction.generation = requested;
+			transaction.payload = BuildLcdBrightnessCommand(m_requested_brightness.load());
+			transaction.next_due = now;
+		}
+		service_command(transaction, now, false);
 	}
 
 	void service_command(CommandTransaction& transaction,
@@ -1155,7 +1215,10 @@ private:
 	std::chrono::steady_clock::time_point m_last_input_report{};
 	std::chrono::steady_clock::time_point m_clock_origin{};
 	uint16_t m_next_sequence = 0;
-	std::array<CommandTransaction, 2> m_command_transactions{};
+	std::array<CommandTransaction, 3> m_command_transactions{};
+	std::atomic_uint8_t m_requested_brightness{3};
+	std::atomic_uint64_t m_brightness_request_generation{0};
+	uint64_t m_brightness_completed_generation = 0;
 	std::vector<uint8_t> m_uic_response;
 	std::vector<uint8_t> m_uvc_uac_response;
 	mutable std::mutex m_queue_mutex;
@@ -1175,5 +1238,6 @@ bool RuntimeTransport::consume_disconnected_event() { return m_impl->consume_dis
 bool RuntimeTransport::consume_video_resync_event() { return m_impl->consume_video_resync_event(); }
 RuntimeTransportStats RuntimeTransport::stats() const { return m_impl->stats(); }
 void RuntimeTransport::report_status(std::string status) { m_impl->report_status(std::move(status)); }
+void RuntimeTransport::set_lcd_brightness(uint8_t level) { m_impl->set_lcd_brightness(level); }
 uint32_t RuntimeTransport::timestamp_us() const { return m_impl->timestamp_us(); }
 }

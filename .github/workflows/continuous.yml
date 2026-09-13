@@ -71,7 +71,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build git python3 ffmpeg nasm pkg-config \
-            qt6-base-dev qt6-svg-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+            qt6-base-dev qt6-svg-dev libfreetype-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build
@@ -99,7 +99,7 @@ jobs:
           persist-credentials: false
       - run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-svg-dev
+          sudo apt-get install -y cmake ninja-build qt6-base-dev qt6-svg-dev libfreetype-dev
       - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBARISTA_BUILD_ENGINE=OFF
       - run: cmake --build build --parallel 4
       - run: ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
@@ -129,7 +129,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build git python3 ffmpeg nasm pkg-config file dpkg-dev \
-            qt6-base-dev qt6-svg-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+            qt6-base-dev qt6-svg-dev libfreetype-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
       - name: Build and test package
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DBARISTA_VERSION="$BARISTA_VERSION"
@@ -168,7 +168,7 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf -y install cmake ninja-build git python3 nasm gcc gcc-c++ make \
-            qt6-qtbase-devel qt6-qtsvg-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd shadow-utils util-linux
+            qt6-qtbase-devel qt6-qtsvg-devel freetype-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd shadow-utils util-linux
       - name: Build native H.264 reference decoder for tests
         run: |
           bash .github/scripts/build-test-ffmpeg.sh "$RUNNER_TEMP/barista-test-ffmpeg" \
@@ -217,7 +217,7 @@ jobs:
       - name: Install build and package dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel cmake ninja git python ffmpeg \
-            nasm qt6-base qt6-svg openssl libnl polkit systemd networkmanager kmod iw iproute2
+            nasm qt6-base qt6-svg freetype2 openssl libnl polkit systemd networkmanager kmod iw iproute2
       - name: Build and test package
         run: |
           useradd --create-home builder

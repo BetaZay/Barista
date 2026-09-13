@@ -27,7 +27,7 @@ namespace
 using Clock = std::chrono::steady_clock;
 constexpr size_t Chunk = 16384;
 constexpr size_t MaxAudioSamples = 4800 * 2; // bounded to 100ms, never grow latency
-enum Type : uint32_t { Video = 1, Idle = 2, Active = 3, Pcm = 4, Input = 5, Reject = 6 };
+enum Type : uint32_t { Video = 1, Idle = 2, Active = 3, Pcm = 4, Input = 5, Reject = 6, Rumble = 7 };
 // Fixed little-endian local protocol: magic, type, frame ID, byte offset.
 void put(uint8_t* p, uint32_t v) { for (unsigned i = 0; i < 4; ++i) p[i] = v >> (8 * i); }
 uint32_t get(const uint8_t* p)
@@ -166,7 +166,7 @@ public:
     std::deque<int16_t> audio;
     std::array<uint8_t, 128> input{};
     Clock::time_point input_time{}, video_time{}, heartbeat{};
-    bool active = false, input_pending = false;
+    bool active = false, rumble = false, input_pending = false;
     uint64_t idle_revision = 0;
     int listener = -1;
     std::string path;
@@ -251,12 +251,13 @@ public:
             {
                 Rgb frame, logo;
                 std::vector<uint8_t> pcm;
-                bool game_active;
+                bool game_active, game_rumble;
                 {
                     std::lock_guard lock(mutex);
                     frame = std::move(pending); pending = {};
                     if (sent_idle != idle_revision) { logo = idle_rgb; sent_idle = idle_revision; }
                     game_active = active;
+                    game_rumble = rumble;
                     while (!audio.empty() && pcm.size() + 2 <= Chunk)
                     {
                         uint16_t v = static_cast<uint16_t>(audio.front()); audio.pop_front();
@@ -267,6 +268,8 @@ public:
                 {
                     const std::array<uint8_t, 1> flag{static_cast<uint8_t>(game_active)};
                     if (!send_packet(fd, Active, 0, 0, flag)) break;
+                    const std::array<uint8_t, 1> vibration{static_cast<uint8_t>(game_rumble)};
+                    if (!send_packet(fd, Rumble, 0, 0, vibration)) break;
                     next_heartbeat = Clock::now() + std::chrono::milliseconds(100);
                 }
                 if (!logo.bytes.empty() && !send_frame(fd, Idle, ++frame_id,
@@ -400,6 +403,11 @@ public:
                             audio.push_back(static_cast<int16_t>(uint16_t(payload[i]) | uint16_t(payload[i + 1]) << 8));
                     while (audio.size() > MaxAudioSamples) audio.pop_front();
                 }
+                else if (server && type == Rumble && payload.size() == 1 && payload[0] <= 1)
+                {
+                    std::lock_guard lock(mutex);
+                    rumble = payload[0] != 0;
+                }
                 else if (!server && type == Input && payload.size() == 128)
                 {
                     std::lock_guard lock(mutex);
@@ -418,7 +426,7 @@ public:
             std::lock_guard lock(mutex);
             client_info = {};
             audio.clear(); video.clear(); input_time = {}; input_pending = false;
-            if (server) { active = false; heartbeat = {}; }
+            if (server) { active = false; rumble = false; heartbeat = {}; }
         }
         linked = false;
     }
@@ -535,7 +543,7 @@ bool AppHook::connected() const { return m_impl->linked; }
 void AppHook::set_active(bool active)
 {
     std::lock_guard lock(m_impl->mutex); m_impl->active = active;
-    if (!active) { m_impl->audio.clear(); m_impl->pending = {}; }
+    if (!active) { m_impl->audio.clear(); m_impl->pending = {}; m_impl->rumble = false; }
 }
 bool AppHook::set_idle_frame(std::span<const uint8_t> i420)
 {
@@ -560,6 +568,11 @@ void AppHook::submit_pcm(std::span<const int16_t> stereo)
     m_impl->audio.insert(m_impl->audio.end(), stereo.begin(), stereo.end());
     while (m_impl->audio.size() > MaxAudioSamples) m_impl->audio.pop_front();
 }
+void AppHook::submit_rumble(bool active)
+{
+    std::lock_guard lock(m_impl->mutex);
+    m_impl->rumble = active;
+}
 void AppHook::submit_input(std::span<const uint8_t> report)
 {
     if (report.size() != 128) return;
@@ -571,6 +584,12 @@ bool AppHook::read_input(std::array<uint8_t, 128>& report) const
     std::lock_guard lock(m_impl->mutex);
     if (!m_impl->linked || Clock::now() - m_impl->input_time > std::chrono::milliseconds(500)) return false;
     report = m_impl->input; return true;
+}
+bool AppHook::read_rumble() const
+{
+    std::lock_guard lock(m_impl->mutex);
+    return m_impl->linked && m_impl->rumble &&
+        Clock::now() - m_impl->heartbeat < std::chrono::seconds(1);
 }
 bool AppHook::read_video(std::span<uint8_t> i420, bool& active)
 {
