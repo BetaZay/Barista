@@ -59,6 +59,7 @@ private:
     QTimer m_poll, m_inputTimer, m_statusTimeout;
     QByteArray m_response;
     QString m_owner, m_interface, m_endpoint, m_error, m_phase = "idle";
+    barista::api::PairingStep m_pairingStep = barista::api::PairingStep::None;
     QString m_errorCode, m_sessionId, m_runLogName;
     QString m_latestMediaTiming, m_latestTransportStats;
     QStringList m_diagnosticEvents;

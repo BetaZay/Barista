@@ -1,4 +1,5 @@
 #include "drh/server/interrupt.h"
+#include "api/types.h"
 #include "drh/encoder/media_streamer.h"
 #include "drh/server/session_backend.h"
 #include "drh/server/wifi_capabilities.h"
@@ -729,6 +730,10 @@ public:
 			return Fail("invalid interface name");
 		if (!request.pairing_code.valid())
 			return Fail("invalid pairing code");
+		const auto reportStep = [](barista::api::PairingStep step) {
+			std::cerr << "BARISTA_PAIRING_STEP|" << barista::api::PairingStepName(step) << std::endl;
+		};
+		reportStep(barista::api::PairingStep::CheckingAdapter);
 		auto channel_plan = BuildPairingChannelPlan(
 			m_channel, m_pair_channel_sweep, m_pair_channel_list_override);
 		std::string compatibility_error;
@@ -737,6 +742,7 @@ public:
 			return Fail(compatibility_error);
 
 		(void)stop_session();
+		reportStep(barista::api::PairingStep::SettingUpAdapter);
 		if (!CheckAdapterWithRegulatoryRecovery(
 				request.interface_name, channel_plan, false, compatibility_error))
 			return AbortStart(compatibility_error);
@@ -788,6 +794,7 @@ public:
 				request.interface_name, channel_plan, true, compatibility_error))
 			return AbortStart(compatibility_error);
 
+		reportStep(barista::api::PairingStep::CreatingNetwork);
 		if (!WritePairingCredentialsBlob(m_runtime_ssid, m_psk_hex, m_ap_mac, m_credential_blob_path, error))
 			return AbortStart("failed to build WPS credential blob: " + error);
 		Log("pair-start: wrote credential blob " + m_credential_blob_path);

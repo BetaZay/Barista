@@ -58,6 +58,29 @@ inline constexpr std::optional<SessionMode> ParseSessionMode(std::string_view va
     return std::nullopt;
 }
 
+// Fixed, credential-free progress values; never expose engine log text as status.
+enum class PairingStep { None, CheckingAdapter, SettingUpAdapter, CreatingNetwork };
+
+inline constexpr std::string_view PairingStepName(PairingStep step)
+{
+    switch (step)
+    {
+    case PairingStep::None: return "none";
+    case PairingStep::CheckingAdapter: return "checking-adapter";
+    case PairingStep::SettingUpAdapter: return "setting-up-adapter";
+    case PairingStep::CreatingNetwork: return "creating-network";
+    }
+    return "none";
+}
+
+inline constexpr std::optional<PairingStep> ParsePairingStep(std::string_view value)
+{
+    for (auto step : {PairingStep::None, PairingStep::CheckingAdapter,
+                     PairingStep::SettingUpAdapter, PairingStep::CreatingNetwork})
+        if (PairingStepName(step) == value) return step;
+    return std::nullopt;
+}
+
 enum class SessionPhase
 {
     Idle,
@@ -153,6 +176,7 @@ struct SessionStatus
     bool activating = false;
     std::string platform;
     SessionPhase phase = SessionPhase::Idle;
+    PairingStep pairingStep = PairingStep::None;
     std::optional<SessionMode> mode;
     bool running = false;
     bool gamePadConnected = false;

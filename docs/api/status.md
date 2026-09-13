@@ -13,6 +13,7 @@ the fields they can support.
 | `activating` | `bool` | An adapter is being activated but is not ready yet |
 | `platform` | `string` | Backend platform identifier, currently `linux` for the installed service |
 | `phase` | `SessionPhase` | Current lifecycle phase |
+| `pairingStep` | `PairingStep` | Safe startup progress: `none`, `checking-adapter`, `setting-up-adapter`, or `creating-network`; only populated during startup |
 | `mode` | optional `SessionMode` | Active/requested mode, absent while idle |
 | `running` | `bool` | The session engine is running |
 | `gamePadConnected` | `bool` | A physical GamePad is linked |

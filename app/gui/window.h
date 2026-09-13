@@ -13,10 +13,13 @@ class QAction;
 class QCloseEvent;
 class QTabWidget;
 class QDialog;
+class QStackedWidget;
 class Window : public QMainWindow {
     Q_OBJECT
 public:
     explicit Window(bool smokeTest = false);
+signals:
+    void PairingStopRequested();
 public slots:
     void ShowWindow();
     void RunInBackground();
@@ -26,6 +29,7 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 private slots:
     void ApplyStatus(const barista::api::SessionStatus& status);
+    void CancelPairing();
 private:
     bool ConfirmWifi(bool pairing, const QString& interface);
     barista::api::SessionMode Mode() const;
@@ -39,7 +43,9 @@ private:
     QTabWidget *m_tabs, *m_settingsTabs;
     QComboBox *m_interface, *m_mode, *m_logFiles;
     QLineEdit *m_code, *m_country, *m_endpoint;
-    QLabel *m_status, *m_message, *m_description, *m_hint, *m_details, *m_pairStatus, *m_supportId;
+    QLabel *m_status, *m_message, *m_description, *m_hint, *m_details, *m_supportId;
+    QLabel *m_pairTitle, *m_pairInstructions, *m_pairStage;
+    QStackedWidget* m_pairContent;
     QLabel *m_gamepadState, *m_gamepadPhase, *m_gamepadMode, *m_gamepadIface, *m_gamepadBattery;
     QLabel *m_appName, *m_appLock, *m_appLastSeen, *m_appSocket, *m_appIdleLogo, *m_appLogo;
     QLabel* m_appSummary;

@@ -35,6 +35,12 @@ int main()
     check(barista::api::SessionModeName(barista::api::SessionMode::Controller) == "controller");
     check(barista::api::ParseSessionPhase("runtime") == barista::api::SessionPhase::Runtime);
     check(!barista::api::ParseSessionPhase("unknown"));
+    check(status.pairingStep == barista::api::PairingStep::None);
+    for (auto step : {barista::api::PairingStep::None, barista::api::PairingStep::CheckingAdapter,
+                     barista::api::PairingStep::SettingUpAdapter, barista::api::PairingStep::CreatingNetwork})
+        check(barista::api::ParsePairingStep(barista::api::PairingStepName(step)) == step);
+    for (auto value : {"", "unknown", "creating-network|secret", "ssid=WiiU-secret"})
+        check(!barista::api::ParsePairingStep(value));
     check(barista::api::SessionPhaseName(barista::api::SessionPhase::Stopping) == "stopping");
     check(barista::api::ClassifyDiagnosticMessage("adapter wlan0 lacks required 5 GHz AP capability") == "ADAPTER_UNSUPPORTED");
     check(barista::api::ClassifyDiagnosticMessage("adapter wlan0 has no usable 5 GHz AP channel because the wireless regulatory domain marks pairing channels no-IR") == "AP_REGULATORY_BLOCKED");

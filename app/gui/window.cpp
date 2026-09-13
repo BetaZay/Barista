@@ -18,6 +18,10 @@
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QShowEvent>
+#include <QHideEvent>
 #include <QDateTime>
 #include <QLabel>
 #include <QLineEdit>
@@ -40,6 +44,7 @@
 #include <QStatusBar>
 #include <QSystemTrayIcon>
 #include <QTabWidget>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QDir>
@@ -49,6 +54,63 @@
 #include <QUrl>
 
 namespace {
+class PairingProgressLabel final : public QLabel
+{
+public:
+    explicit PairingProgressLabel(QWidget* parent) : QLabel(parent)
+    {
+        m_opacity = new QGraphicsOpacityEffect(this);
+        m_opacity->setOpacity(1.0);
+        setGraphicsEffect(m_opacity);
+        m_breathing = new QPropertyAnimation(m_opacity,"opacity",this);
+        m_breathing->setObjectName("pairingBreathing");
+        m_breathing->setDuration(4000);
+        m_breathing->setStartValue(1.0);
+        m_breathing->setEndValue(0.55);
+        // A full, smoothly eased fade out and back in, without disappearing.
+        m_breathing->setEasingCurve(QEasingCurve::SineCurve);
+        m_breathing->setLoopCount(-1);
+    }
+
+    void SetBreathing(bool enabled)
+    {
+        m_enabled = enabled;
+        UpdateAnimation();
+    }
+
+protected:
+    void showEvent(QShowEvent* event) override
+    {
+        QLabel::showEvent(event);
+        UpdateAnimation();
+    }
+
+    void hideEvent(QHideEvent* event) override
+    {
+        QLabel::hideEvent(event);
+        m_breathing->stop();
+        m_opacity->setOpacity(1.0);
+    }
+
+private:
+    void UpdateAnimation()
+    {
+        if (m_enabled && isVisible())
+        {
+            if (m_breathing->state() != QAbstractAnimation::Running) m_breathing->start();
+        }
+        else
+        {
+            m_breathing->stop();
+            m_opacity->setOpacity(1.0);
+        }
+    }
+
+    QGraphicsOpacityEffect* m_opacity;
+    QPropertyAnimation* m_breathing;
+    bool m_enabled = false;
+};
+
 class PairingDialog final : public QDialog
 {
 public:
@@ -511,18 +573,24 @@ Window::Window(bool smokeTest)
     auto* pairingLayout = new QVBoxLayout(m_pairDialog);
     pairingLayout->setContentsMargins(24,24,24,24);
     pairingLayout->setSpacing(16);
-    auto* pairingTitle = new QLabel("Pair a GamePad",m_pairDialog);
-    pairingTitle->setProperty("heading",true);
-    pairingLayout->addWidget(pairingTitle);
-    m_pairStatus = new QLabel(m_pairDialog);
-    m_pairStatus->setObjectName("pairingStatus");
-    m_pairStatus->setProperty("lightSurface",true);
-    m_pairStatus->setWordWrap(true);
-    pairingLayout->addWidget(m_pairStatus);
-    auto* instructions = new QLabel("When Barista says “Pair now”, press SYNC on your GamePad and enter these symbols from left to right. The fourth symbol submits automatically.",m_pairDialog);
-    instructions->setWordWrap(true);
-    pairingLayout->addWidget(instructions);
+    m_pairTitle = new QLabel("Pair a GamePad",m_pairDialog);
+    m_pairTitle->setObjectName("pairingTitle");
+    m_pairTitle->setProperty("heading",true);
+    pairingLayout->addWidget(m_pairTitle);
+    m_pairInstructions = new QLabel(m_pairDialog);
+    m_pairInstructions->setObjectName("pairingInstructions");
+    m_pairInstructions->setWordWrap(true);
+    pairingLayout->addWidget(m_pairInstructions);
+    m_pairContent = new QStackedWidget(m_pairDialog);
+    m_pairContent->setObjectName("pairingContent");
+    m_pairContent->setMinimumHeight(110);
+    m_pairStage = new PairingProgressLabel(m_pairContent);
+    m_pairStage->setObjectName("pairingStage");
+    m_pairStage->setAlignment(Qt::AlignCenter);
+    m_pairStage->setWordWrap(true);
+    m_pairContent->addWidget(m_pairStage);
     m_pairSymbols = new QWidget(m_pairDialog);
+    m_pairSymbols->setObjectName("pairingSymbols");
     auto* symbols = new QHBoxLayout(m_pairSymbols);
     symbols->setContentsMargins(0,0,0,0);
     m_code = new QLineEdit(m_pairDialog);
@@ -539,18 +607,22 @@ Window::Window(bool smokeTest)
         symbols->addWidget(symbol,1);
     }
     InitializePairingPattern();
-    pairingLayout->addWidget(m_pairSymbols);
-    auto* pairingHint = new QLabel("Saved GamePads reconnect automatically using their existing credentials. Your Wi-Fi adapter and country are configured in Settings.",m_pairDialog);
+    m_pairContent->addWidget(m_pairSymbols);
+    pairingLayout->addWidget(m_pairContent);
+    auto* pairingHint = new QLabel("Already paired? Use Connect GamePad on Home instead.",m_pairDialog);
     pairingHint->setObjectName("pairingHint");
     pairingHint->setWordWrap(true);
     pairingLayout->addWidget(pairingHint);
     pairingLayout->addStretch();
     auto* pairButtons = new QHBoxLayout;
-    auto* closePair = new QPushButton("Close",m_pairDialog);
-    connect(closePair,&QPushButton::clicked,m_pairDialog,&QDialog::hide);
+    auto* closePair = new QPushButton("Cancel",m_pairDialog);
+    closePair->setObjectName("cancelPairButton");
+    connect(closePair,&QPushButton::clicked,m_pairDialog,&QDialog::reject);
+    connect(m_pairDialog,&QDialog::rejected,this,&Window::CancelPairing);
+    connect(this,&Window::PairingStopRequested,&m_client,&ControlClient::Stop);
     pairButtons->addStretch();
     pairButtons->addWidget(closePair);
-    m_pair = new QPushButton(CafeIcon(CafeSymbol::Plus),"Start pairing",m_pairDialog);
+    m_pair = new QPushButton(CafeIcon(CafeSymbol::Plus),"Pair",m_pairDialog);
     m_pair->setObjectName("pairButton");
     m_pair->setProperty("primary",true);
     pairButtons->addWidget(m_pair);
@@ -952,6 +1024,23 @@ void Window::OpenPairing()
     m_pair->setFocus();
 }
 
+void Window::CancelPairing()
+{
+    const auto phase = m_lastStatus.phase;
+    const bool ownedPairing = m_lastStatus.ownedByCaller &&
+        (phase == barista::api::SessionPhase::Pairing ||
+         ((phase == barista::api::SessionPhase::Starting || phase == barista::api::SessionPhase::Preparing) &&
+          m_lastStatus.pairingStep != barista::api::PairingStep::None));
+    const bool shouldStop = m_pairingRequested || ownedPairing;
+    m_pairingRequested = false;
+    if (shouldStop && phase != barista::api::SessionPhase::Stopping)
+    {
+        // Stop queues behind an outstanding Pair/authorization request, so
+        // cancelling early cannot leave a session starting in the background.
+        emit PairingStopRequested();
+    }
+}
+
 void Window::InitializePairingPattern()
 {
     const auto pattern = NewPairingPattern(*QRandomGenerator::global());
@@ -1102,6 +1191,10 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     const bool owned = status.ownedByCaller;
     const bool connected = status.gamePadConnected;
     const auto phase = status.phase;
+    if (!busy && (!available || status.error || phase == barista::api::SessionPhase::Failed ||
+        phase == barista::api::SessionPhase::Stopping ||
+        (phase == barista::api::SessionPhase::Idle && previousPhase != barista::api::SessionPhase::Idle)))
+        m_pairingRequested = false;
     UpdateHomeDevice();
     const QString phaseText = QString::fromLatin1(barista::api::SessionPhaseName(phase));
     if (previousRunning && !running) RefreshDiagnostics();
@@ -1330,37 +1423,56 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     m_screenMode->setEnabled(!running && !busy);
     m_controllerMode->setEnabled(!running && !busy);
     m_country->setEnabled(!running && !busy);
-    const QString pairInterface = InterfaceName(m_interface);
-    QString pairStatus;
-    Tone pairStatusTone = Tone::Neutral;
+    const bool pairingError = status.error.has_value() || !m_operationError.isEmpty() ||
+        phase == barista::api::SessionPhase::Failed;
+    const bool preparing = available && (busy || (!pairingError &&
+        (phase == barista::api::SessionPhase::Starting || phase == barista::api::SessionPhase::Preparing ||
+        (m_pairingRequested && phase == barista::api::SessionPhase::Idle))));
+    const bool pairNow = available && running && owned && !preparing && !pairingError &&
+        phase == barista::api::SessionPhase::Pairing;
+    m_pairTitle->setText(pairNow ? "Pair now" : "Pair a GamePad");
+    m_pairInstructions->setText(pairNow
+        ? "Press the SYNC button on your GamePad.\nEnter these symbols from left to right."
+        : preparing ? "Keep your GamePad nearby.\nWait for the symbols to appear."
+        : "1. Turn on your GamePad and keep it nearby.\n2. Select Pair below to get started.");
+    QString stage;
+    Tone stageTone = Tone::Neutral;
     if (!available) {
-        pairStatus = "Pairing unavailable — check Settings → Support.";
-        pairStatusTone = Tone::Bad;
-    } else if (busy || phase == barista::api::SessionPhase::Starting) {
-        pairStatus = QString("Starting pairing on %1… Preparing the Wi-Fi adapter. Wait for “Pair now” before using SYNC.")
-            .arg(pairInterface);
-        pairStatusTone = Tone::Warning;
-    } else if (phase == barista::api::SessionPhase::Pairing) {
-        pairStatus = QString("Pair now — the pairing network is ready on %1. Press SYNC on the GamePad and enter the four symbols below. The GamePad submits automatically after the fourth symbol.")
-            .arg(pairInterface);
-        pairStatusTone = Tone::Good;
-    } else if (status.error && status.error->diagnosticCode == "AP_REGULATORY_BLOCKED") {
-        pairStatus = "Pairing cannot start because the system blocks 5 GHz access-point channels. Configure the Wi-Fi regulatory domain for your actual country, then reconnect the adapter and try again.";
-        pairStatusTone = Tone::Bad;
-    } else if (running) {
-        pairStatus = "Pairing is unavailable while another GamePad session is running.";
-        pairStatusTone = Tone::Warning;
+        stage = "Barista isn't ready.\nCheck Settings → Support, then try again.";
+        stageTone = Tone::Bad;
+    } else if (preparing) {
+        switch (status.pairingStep)
+        {
+        case barista::api::PairingStep::CheckingAdapter: stage = "Checking adapter…"; break;
+        case barista::api::PairingStep::SettingUpAdapter: stage = "Setting up adapter…"; break;
+        case barista::api::PairingStep::CreatingNetwork: stage = "Creating network…"; break;
+        case barista::api::PairingStep::None:
+            stage = phase == barista::api::SessionPhase::Idle
+                ? "Waiting for permission…" : "Starting pairing…";
+            break;
+        }
+    } else if (pairingError) {
+        stage = status.error && status.error->diagnosticCode == "AP_REGULATORY_BLOCKED"
+            ? "Check your Wi-Fi country in Settings → General.\nSee Settings → Support if pairing still won't start."
+            : "Pairing couldn't start. Try again.\nSee Settings → Support for help.";
+        stageTone = Tone::Bad;
+    } else if (running && !pairNow) {
+        stage = "End the current session on Home before pairing.";
+        stageTone = Tone::Warning;
     } else if (!supported) {
-        pairStatus = "Pairing cannot start in the selected mode. Check Settings → Support, or select Screen + controller in Settings → General.";
-        pairStatusTone = Tone::Bad;
-    } else {
-        pairStatus = QString("Ready to start pairing on %1. Select Start pairing to begin.")
-            .arg(pairInterface);
+        stage = "Select Screen + controller in Settings → General.";
+        stageTone = Tone::Warning;
+    } else if (!validCountry) {
+        stage = "Check your country code in Settings → General.";
+        stageTone = Tone::Warning;
     }
-    m_pairStatus->setText(pairStatus);
-    SetTone(m_pairStatus,pairStatusTone,true);
-    m_pair->setText(busy || phase == barista::api::SessionPhase::Starting ? "Starting pairing…" :
-        phase == barista::api::SessionPhase::Pairing ? "Pairing active" : "Start pairing");
+    m_pairStage->setText(stage);
+    SetTone(m_pairStage,stageTone,true);
+    m_pairContent->setCurrentWidget(pairNow ? m_pairSymbols : m_pairStage);
+    m_pairContent->setVisible(pairNow || !stage.isEmpty());
+    static_cast<PairingProgressLabel*>(m_pairStage)->SetBreathing(preparing);
+    m_pair->setEnabled(m_pair->isEnabled() && !preparing);
+    m_pair->setText(preparing ? "Starting…" : pairNow ? "Pairing…" : "Pair");
     m_endpoint->setText(mediaEndpoint);
     m_copy->setEnabled(!m_endpoint->text().isEmpty());
     const auto error = m_operationError.isEmpty()

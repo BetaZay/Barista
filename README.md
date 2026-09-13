@@ -92,9 +92,14 @@ Wi-Fi adapter. Closing the window keeps it in the tray by default.
 Use **Quit Barista** at the bottom of the sidebar or in the tray menu to stop the session and exit.
 
 Each launch generates a new random four-symbol pattern for new pairings. The
-pairing dialog displays the symbols to enter on the GamePad; configure the Wi-Fi
+pairing dialog starts with basic instructions, shows live adapter and network setup progress after you
+select **Pair**, and reveals the symbols only when **Pair now** is ready. Then press
+SYNC on the GamePad and enter the symbols from left to right. Configure the Wi-Fi
 adapter and country beforehand in Settings. Existing GamePads reconnect using
 their saved credentials; generating a pattern does not replace those credentials.
+Cancel, Escape, or closing the pairing popup stops an in-progress pairing session
+and releases the Wi-Fi adapter. Closing the instructions before starting does nothing
+to an existing connection.
 
 **Settings → Support** displays the automatically managed AppHook endpoint. Clients
 should use that default endpoint; the environment variable is only an optional

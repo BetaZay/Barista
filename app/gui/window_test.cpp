@@ -7,12 +7,15 @@
 #include <QTabWidget>
 #include <QTabBar>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QAbstractItemView>
 #include <QTimer>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QLabel>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
 #include <QListWidget>
 #include <QFileInfo>
 #include <QToolBar>
@@ -198,7 +201,14 @@ int main(int argc, char** argv)
                 "the entire pairing dialog background renders cream outside the symbol tiles");
         }
         Check(pairDialog->findChildren<QComboBox*>().isEmpty(),"pairing has no adapter or symbol selectors");
-        Check(window.findChild<QLabel*>("pairingStatus")->property("lightSurface").toBool(),"pairing status uses cream-surface contrast");
+        Check(!window.findChild<QLabel*>("pairingStatus"),"pairing no longer has a separate status paragraph");
+        auto* pairingInstructions = window.findChild<QLabel*>("pairingInstructions");
+        auto* pairingStage = window.findChild<QLabel*>("pairingStage");
+        auto* pairingContent = window.findChild<QWidget*>("pairingContent");
+        auto* pairingSymbols = window.findChild<QWidget*>("pairingSymbols");
+        Check(pairingInstructions && pairingStage && pairingContent && pairingSymbols,"pairing has instructions and a central stage");
+        Check(pairingInstructions->text().contains("Turn on") && pairingContent->isHidden() && !pairingSymbols->isVisible(),
+            "idle pairing shows only basic instructions, not symbols");
         pairDialog->hide();
         window.OpenPairing();
         Check(pattern->text() == originalPattern,"reopening pairing preserves the startup pattern");
@@ -218,17 +228,66 @@ int main(int argc, char** argv)
         Check(controllerMode->isChecked() && !screenMode->isChecked() &&
             window.findChild<QComboBox*>("modeCombo")->currentData() == "controller","segmented mode updates session mode");
         screenMode->click();
-        auto* pairingStatus = window.findChild<QLabel*>("pairingStatus");
-        Check(pairingStatus && pairingStatus->text().contains("Ready to start pairing"),"pairing is initially ready");
+        Check(pairingContent->isHidden() && pair->text() == "Pair","pairing is initially instruction-only");
+        status.busy = true; apply();
+        Check(pairingStage->text() == "Waiting for permission…" && pairingSymbols->isHidden(),
+            "pending authorization hides symbols even before the service phase changes");
+        status.busy = false; status.phase = barista::api::SessionPhase::Preparing; apply();
+        Check(pairingStage->text() == "Starting pairing…" && !pair->isEnabled() && pairingSymbols->isHidden(),
+            "the service Preparing phase shows progress and prevents a duplicate request");
         status.busy = true; status.phase = barista::api::SessionPhase::Starting; apply();
+        for (const auto& [step, message] : std::array{
+            std::pair{barista::api::PairingStep::CheckingAdapter, "Checking adapter…"},
+            std::pair{barista::api::PairingStep::SettingUpAdapter, "Setting up adapter…"},
+            std::pair{barista::api::PairingStep::CreatingNetwork, "Creating network…"}})
+        {
+            status.pairingStep = step; apply();
+            Check(pairingStage->text() == message && pairingSymbols->isHidden() && !pair->isEnabled(),
+                "live startup steps replace symbols until pairing is ready");
+        }
         const QString frozenPattern = pattern->text();
         Check(pattern->text() == originalPattern,"pairing pattern cannot change during startup");
-        Check(pairingStatus->text().contains("Starting pairing") && !pair->isEnabled(),"pairing startup is explained");
+        window.OpenPairing();
+        Check(pairingStage->isVisible() && pairingStage->text() == "Creating network…" &&
+            !pairingSymbols->isVisible() && !pair->isEnabled(),"startup shows current progress in place of the hidden symbols");
+        auto* breathing = pairingStage->findChild<QPropertyAnimation*>("pairingBreathing");
+        auto* opacity = qobject_cast<QGraphicsOpacityEffect*>(pairingStage->graphicsEffect());
+        Check(breathing && opacity && breathing->state() == QAbstractAnimation::Running,
+            "visible pairing progress breathes");
+        breathing->setCurrentTime(2000);
+        Check(qAbs(opacity->opacity() - 0.55) < 0.01,"progress fades gently without disappearing");
+        apply();
+        Check(breathing->currentTime() == 2000,"status refresh does not restart the breathing cycle");
+        breathing->setCurrentTime(4000);
+        Check(qAbs(opacity->opacity() - 1.0) < 0.01,"progress fades back to full opacity");
+        pairDialog->hide();
+        Check(breathing->state() == QAbstractAnimation::Stopped && opacity->opacity() == 1.0,
+            "hidden dialog stops its animation");
+        window.OpenPairing();
+        Check(breathing->state() == QAbstractAnimation::Running,"reopened progress resumes breathing");
+        Check(pairingStage->isVisible() && !pairingSymbols->isVisible(),"reopening during startup does not reveal symbols");
+        status.ownedByCaller = true;
+        status.pairingStep = barista::api::PairingStep::None;
         status.busy = false; status.running = true; status.phase = barista::api::SessionPhase::Pairing; apply();
+        Check(breathing->state() == QAbstractAnimation::Stopped && opacity->opacity() == 1.0,
+            "ready symbols do not breathe");
         Check(pattern->text() == frozenPattern && window.findChild<QLabel*>("pairingSymbol1")->isEnabled(),"active pairing keeps symbols unchanged and readable");
-        Check(pairingStatus->text().contains("Pair now") && pairingStatus->text().contains("automatically") &&
-            pair->text() == "Pairing active","pairing readiness is explicit");
+        Check(window.findChild<QLabel*>("pairingTitle")->text() == "Pair now" &&
+            pairingInstructions->text().contains("SYNC") && pairingSymbols->isVisible() &&
+            !pairingStage->isVisible() && pair->text() == "Pairing…","symbols appear only when pairing is ready");
+        status.busy = true; apply();
+        Check(!pairingSymbols->isVisible() && pairingStage->text() == "Starting pairing…","a busy Pairing phase does not reveal symbols early");
+        status.busy = false; status.ownedByCaller = false; apply();
+        Check(!pairingSymbols->isVisible(),"another user's pairing session does not reveal our startup pattern");
+        status.ownedByCaller = true;
+        status.phase = barista::api::SessionPhase::Failed; apply();
+        Check(breathing->state() == QAbstractAnimation::Stopped && opacity->opacity() == 1.0,
+            "error guidance remains fully readable");
+        Check(!pairingSymbols->isVisible() && pairingStage->text().contains("Try again"),
+            "failure replaces ready symbols with retry guidance even without error details");
         status.running = false; status.phase = barista::api::SessionPhase::Idle; apply();
+        Check(pairingContent->isHidden() && !pairingSymbols->isVisible(),"returning to idle hides symbols again");
+        pairDialog->hide();
         status.batteryPercent = 100; apply();
         Check(window.findChild<QLabel*>("gamepadBattery") && window.findChild<QLabel*>("gamepadBattery")->text() == "100%","GamePad battery is shown");
         status.error = barista::api::Error{.code=barista::api::ErrorCode::Failed,.message="Adapter failed",
@@ -241,8 +300,8 @@ int main(int argc, char** argv)
         status.error = barista::api::Error{.code=barista::api::ErrorCode::Failed,.message="Regulatory domain blocked",
             .diagnosticCode="AP_REGULATORY_BLOCKED",.action="Configure the country code."};
         apply();
-        Check(pairingStatus->text().contains("regulatory domain") &&
-            !pairingStatus->text().contains("another GamePad session"),"regulatory failure replaces misleading running-session text");
+        Check(pairingStage->text().contains("country") && pairingStage->text().contains("Settings") &&
+            pairingSymbols->isHidden(),"regulatory failure gives a simple next step without exposing symbols");
         status.running = false;
         status.error.reset(); apply();
         country->setText("U"); apply();
@@ -260,9 +319,9 @@ int main(int argc, char** argv)
         for (const QString name : {"wlan0","wlan1"})
             if (interfaceCombo->findData(name) < 0) interfaceCombo->addItem(name,name);
         interfaceCombo->setCurrentIndex(interfaceCombo->findData("wlan0"));
-        Check(pairingStatus->text().contains("wlan0"),"pairing uses the Settings adapter");
+        Check(selectedName(interfaceCombo) == "wlan0","Settings selects the pairing adapter");
         interfaceCombo->setCurrentIndex(interfaceCombo->findData("wlan1"));
-        Check(pairingStatus->text().contains("wlan1") && pattern->text() == originalPattern,"Settings updates pairing adapter without changing symbols");
+        Check(selectedName(interfaceCombo) == "wlan1" && pattern->text() == originalPattern,"Settings updates pairing adapter without changing symbols");
         preferences->click();
         settingsTabs->setCurrentIndex(0);
         QApplication::processEvents();
@@ -320,7 +379,12 @@ int main(int argc, char** argv)
             settingsTabs->setCurrentIndex(3); capture(&window,screenshot + ".about.png");
             const auto connectedStatus = status;
             status.running = false; status.gamePadConnected = false; status.phase = barista::api::SessionPhase::Idle; apply();
-            window.OpenPairing(); capture(pairDialog,screenshot + ".pairing.png"); pairDialog->hide();
+            window.OpenPairing(); capture(pairDialog,screenshot + ".pairing.png");
+            status.busy = true; status.phase = barista::api::SessionPhase::Starting; apply();
+            capture(pairDialog,screenshot + ".pairing-preparing.png");
+            status.busy = false; status.running = true; status.ownedByCaller = true;
+            status.phase = barista::api::SessionPhase::Pairing; apply();
+            capture(pairDialog,screenshot + ".pairing-ready.png"); pairDialog->hide();
             status.running = true; status.phase = barista::api::SessionPhase::Runtime; apply();
             auto* waiting = window.findChild<QDialog*>("waitingDialog");
             waiting->show(); capture(waiting,screenshot + ".waiting.png");
@@ -366,6 +430,36 @@ int main(int argc, char** argv)
             }
         });
         prepare->click(); Check(setupPrompt && operations == 0,"cancel preparation makes no privileged call");
+        // Observe the stop intent without contacting the installed radio service.
+        QObject::disconnect(&window,&Window::PairingStopRequested,client,&ControlClient::Stop);
+        int pairingStops = 0;
+        QObject::connect(&window,&Window::PairingStopRequested,[&] { ++pairingStops; });
+        auto* cancelPair = window.findChild<QPushButton*>("cancelPairButton");
+        Check(cancelPair,"pairing has a cancel action");
+        status.phase = barista::api::SessionPhase::Idle; status.running = false; apply();
+        window.OpenPairing(); cancelPair->click();
+        Check(!pairDialog->isVisible() && pairingStops == 0,"closing instructions does not stop a session");
+        status.running = true; status.phase = barista::api::SessionPhase::Starting;
+        status.pairingStep = barista::api::PairingStep::CreatingNetwork; apply();
+        window.OpenPairing(); cancelPair->click();
+        Check(!pairDialog->isVisible() && pairingStops == 1,"Cancel stops owned pairing startup");
+        status.phase = barista::api::SessionPhase::Pairing;
+        status.pairingStep = barista::api::PairingStep::None; apply();
+        window.OpenPairing(); pairDialog->close();
+        Check(pairingStops == 2,"window close stops active pairing");
+        window.OpenPairing();
+        QKeyEvent escape(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+        QApplication::sendEvent(pairDialog,&escape);
+        Check(!pairDialog->isVisible() && pairingStops == 3,"Escape stops active pairing");
+        status.ownedByCaller = false; apply();
+        window.OpenPairing(); cancelPair->click();
+        Check(pairingStops == 3,"cancel cannot stop another client's pairing");
+        status.ownedByCaller = true; status.phase = barista::api::SessionPhase::Runtime; apply();
+        window.OpenPairing(); cancelPair->click();
+        Check(pairingStops == 3,"closing pairing does not stop an established session");
+        status.phase = barista::api::SessionPhase::Starting; apply();
+        window.OpenPairing(); cancelPair->click();
+        Check(pairingStops == 3,"closing pairing does not stop a saved GamePad connection startup");
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

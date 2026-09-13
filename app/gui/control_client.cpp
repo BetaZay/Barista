@@ -55,6 +55,8 @@ barista::api::SessionStatus DecodeStatus(const QVariantMap& value)
     status.phase = barista::api::ParseSessionPhase(value.value("phase").toString().toStdString())
         .value_or(barista::api::SessionPhase::Failed);
     status.mode = barista::api::ParseSessionMode(value.value("mode").toString().toStdString());
+    status.pairingStep = barista::api::ParsePairingStep(value.value("pairingStep").toString().toStdString())
+        .value_or(barista::api::PairingStep::None);
     status.running = value.value("running").toBool();
     status.gamePadConnected = value.value("connected").toBool();
     if (value.value("batteryAvailable").toBool())

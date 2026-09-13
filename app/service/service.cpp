@@ -245,6 +245,9 @@ barista::api::SessionStatus Service::Status(bool ownedByCaller) const
     status.phase = barista::api::ParseSessionPhase(m_phase.toStdString())
         .value_or(barista::api::SessionPhase::Failed);
     status.mode = m_mode;
+    if (status.phase == barista::api::SessionPhase::Starting ||
+        status.phase == barista::api::SessionPhase::Preparing)
+        status.pairingStep = m_pairingStep;
     status.running = m_worker.state() != QProcess::NotRunning;
     status.gamePadConnected = m_connected;
     if (m_batteryAvailable)
@@ -310,6 +313,7 @@ QVariantMap Service::GetStatus()
     const QString diagnosticAction = status.error ? QString::fromStdString(status.error->action) : QString();
     return {{"apiVersion",status.apiVersion}, {"platform",QString::fromStdString(status.platform)},
         {"running",status.running}, {"phase",QString::fromLatin1(barista::api::SessionPhaseName(status.phase))},
+        {"pairingStep",QString::fromLatin1(barista::api::PairingStepName(status.pairingStep))},
         {"connected",status.gamePadConnected}, {"mode",status.mode ? ModeName(*status.mode) : QString()},
         {"interface",QString::fromStdString(status.interfaceName)},
         {"batteryAvailable",status.batteryPercent.has_value()}, {"battery",status.batteryPercent.value_or(0)},
@@ -442,6 +446,18 @@ void Service::ProcessWorkerOutput()
         const QByteArray raw = m_workerOutput.left(newline).trimmed();
         m_workerOutput.remove(0, newline + 1);
         if (raw.isEmpty()) continue;
+        if (raw.startsWith("BARISTA_PAIRING_STEP|"))
+        {
+            const auto step = barista::api::ParsePairingStep(raw.mid(21).toStdString());
+            if (step && !m_stopping)
+            {
+                m_pairingStep = *step;
+                // Automatic retries also rebuild the network. Hide the symbols
+                // until a subsequent engine status confirms pairing is ready.
+                if (*step != barista::api::PairingStep::None) m_phase = "starting";
+            }
+            continue;
+        }
         if (!raw.startsWith("BARISTA_EVENT|")) {
             qInfo().noquote() << QString("barista-engine[%1]:").arg(m_sessionId.left(8)) << QString::fromUtf8(raw);
             continue;
@@ -721,6 +737,7 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
         RecordDiagnostic("SESSION_BUSY"); CloseSupportRun(); return "Stop the legacy drcd/capture session first (existing /tmp/drcd.sock)";
     }
     m_error.clear(); m_errorCode.clear(); m_phase = "idle"; m_connected = false; m_batteryAvailable = false; m_battery = 0;
+    m_pairingStep = barista::api::PairingStep::None;
     m_mode = mode; m_interface = interface; m_uid = uid;
     m_endpoint = QString("/run/barista/media-%1.sock").arg(uid);
     // Runtime directory is root-owned; only remove our exact previous socket,
