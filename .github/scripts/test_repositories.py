@@ -2,6 +2,7 @@ import datetime as dt
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,26 @@ from version import assign
 
 
 class RepositoryTests(unittest.TestCase):
+    @patch("repositories.time.sleep")
+    @patch("repositories.subprocess.run")
+    def test_transient_github_errors_are_retried(self, process, sleep):
+        process.side_effect = [
+            subprocess.CompletedProcess(("gh", "api"), 1, "", "HTTP 500 (example)\n"),
+            subprocess.CompletedProcess(("gh", "api"), 0, "result\n", ""),
+        ]
+        self.assertEqual(repositories.run("gh", "api"), "result")
+        self.assertEqual(process.call_count, 2)
+        sleep.assert_called_once_with(2)
+
+    @patch("repositories.time.sleep")
+    @patch("repositories.subprocess.run")
+    def test_non_transient_github_errors_are_not_retried(self, process, sleep):
+        process.return_value = subprocess.CompletedProcess(("gh", "api"), 1, "", "HTTP 422 (example)\n")
+        with self.assertRaises(subprocess.CalledProcessError):
+            repositories.run("gh", "api")
+        self.assertEqual(process.call_count, 1)
+        sleep.assert_not_called()
+
     def test_assignment(self):
         self.assertEqual(assign("0.1", "147"), "0.1.147")
         self.assertEqual(assign("0.2", "148"), "0.2.148")

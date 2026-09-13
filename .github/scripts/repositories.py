@@ -13,10 +13,12 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 TARGETS = ("ubuntu-24.04-x86_64", "fedora-44-x86_64", "arch-x86_64")
 PATTERN = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+GITHUB_RETRY_DELAYS = (2, 4, 8)
 
 
 def version(value):
@@ -29,6 +31,22 @@ def version(value):
 
 
 def run(*args, cwd=None):
+    if args[0] == "gh":
+        for attempt in range(len(GITHUB_RETRY_DELAYS) + 1):
+            result = subprocess.run(args, cwd=cwd, text=True, capture_output=True)
+            if result.returncode == 0:
+                return result.stdout.strip()
+            output = result.stdout + result.stderr
+            transient = re.search(r"\bHTTP (?:429|500|502|503|504)\b", output)
+            if transient and attempt < len(GITHUB_RETRY_DELAYS):
+                delay = GITHUB_RETRY_DELAYS[attempt]
+                print(f"Transient GitHub API error; retrying in {delay} seconds", file=sys.stderr)
+                time.sleep(delay)
+                continue
+            if result.stderr:
+                print(result.stderr, end="", file=sys.stderr)
+            raise subprocess.CalledProcessError(result.returncode, args,
+                                                output=result.stdout, stderr=result.stderr)
     return subprocess.check_output(args, cwd=cwd, text=True).strip()
 
 
