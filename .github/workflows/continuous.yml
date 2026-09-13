@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build git python3 ffmpeg nasm pkg-config \
-            qt6-base-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+            qt6-base-dev qt6-svg-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build
@@ -40,7 +40,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build git python3 nasm pkg-config \
-            qt6-base-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
+            qt6-base-dev qt6-svg-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
       - name: Build package
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
@@ -69,7 +69,7 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf -y install cmake ninja-build git python3 nasm gcc gcc-c++ make \
-            qt6-qtbase-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd
+            qt6-qtbase-devel qt6-qtsvg-devel openssl-devel libnl3-devel rpm-build polkit kmod systemd
       - name: Build package
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -99,7 +99,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel cmake ninja git python ffmpeg \
-            nasm qt6-base openssl libnl polkit systemd
+            nasm qt6-base qt6-svg openssl libnl polkit systemd
           command -v pkcheck
       - name: Build package
         run: |

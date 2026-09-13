@@ -12,6 +12,7 @@ class QCheckBox;
 class QAction;
 class QCloseEvent;
 class QTabWidget;
+class QDialog;
 class Window : public QMainWindow {
     Q_OBJECT
 public:
@@ -20,6 +21,7 @@ public slots:
     void ShowWindow();
     void RunInBackground();
     void Quit();
+    void OpenPairing();
 protected:
     void closeEvent(QCloseEvent* event) override;
 private slots:
@@ -31,15 +33,25 @@ private:
     void RefreshSavedGamePads();
     void RefreshDiagnostics();
     void ViewSelectedLog();
+    void InitializePairingPattern();
+    void UpdateHomeDevice();
     ControlClient m_client;
-    QTabWidget* m_tabs;
-    QComboBox *m_interface, *m_pairInterface, *m_mode, *m_logFiles;
+    QTabWidget *m_tabs, *m_settingsTabs;
+    QComboBox *m_interface, *m_mode, *m_logFiles;
     QLineEdit *m_code, *m_country, *m_endpoint;
     QLabel *m_status, *m_message, *m_description, *m_hint, *m_details, *m_pairStatus, *m_supportId;
     QLabel *m_gamepadState, *m_gamepadPhase, *m_gamepadMode, *m_gamepadIface, *m_gamepadBattery;
     QLabel *m_appName, *m_appLock, *m_appLastSeen, *m_appSocket, *m_appIdleLogo, *m_appLogo;
+    QLabel* m_appSummary;
+    QLabel *m_homeStatus, *m_deviceTitle, *m_homeDeviceDetail, *m_waitingStatus, *m_waitingAdapter;
+    QLabel* m_noGamePads;
+    QDialog *m_pairDialog, *m_waitingDialog;
+    std::array<QLabel*,4> m_pairSymbolLabels{};
     QWidget* m_pairSymbols;
     QPushButton *m_start, *m_stop, *m_pair, *m_copy, *m_prepare;
+    QPushButton *m_screenMode, *m_controllerMode;
+    QPushButton* m_waitingStop;
+    QPushButton *m_renamePair, *m_removePair;
     QPushButton *m_viewLog, *m_openLogs, *m_copyDiagnostics, *m_saveDiagnostics;
     QCheckBox* m_background;
     QSystemTrayIcon* m_tray;

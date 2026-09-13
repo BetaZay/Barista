@@ -16,3 +16,4 @@ credentials.conf
 *wpa*.conf
 *.key
 .vscode
+mockups/

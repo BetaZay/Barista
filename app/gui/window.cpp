@@ -1,6 +1,12 @@
 #include "window.h"
+#include "cafe_icons.h"
+#include "cafe_theme.h"
+#include "pairing_pattern.h"
 #include "api/diagnostics.h"
 #include <QApplication>
+#include <QButtonGroup>
+#include <QTabBar>
+#include <QScrollArea>
 #include <QClipboard>
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -19,11 +25,12 @@
 #include <QListWidget>
 #include <QInputDialog>
 #include <QMenu>
-#include <QMenuBar>
+#include <QAction>
 #include <QMessageBox>
 #include <QNetworkInterface>
 #include <QPlainTextEdit>
 #include <QPixmap>
+#include <QPainter>
 #include <QImage>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -42,6 +49,23 @@
 #include <QUrl>
 
 namespace {
+class PairingDialog final : public QDialog
+{
+public:
+    explicit PairingDialog(QWidget* parent) : QDialog(parent) {}
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        // Paint the complete client surface, independently of native dialog themes.
+        QPainter painter(this);
+        QLinearGradient cream(0,0,width(),height());
+        cream.setColorAt(0,QColor("#faf3e8"));
+        cream.setColorAt(1,QColor("#ecdfcf"));
+        painter.fillRect(rect(),cream);
+    }
+};
+
 enum class Tone { Neutral, Good, Warning, Bad };
 
 QString InterfaceName(const QComboBox* combo)
@@ -59,7 +83,10 @@ void SelectInterface(QComboBox* combo, const QString& interface)
 {
     const int index = combo->findData(interface);
     if (index >= 0) combo->setCurrentIndex(index);
-    else combo->setCurrentText(interface);
+    else if (barista::api::ValidInterfaceName(interface.toStdString())) {
+        combo->addItem(interface + " (saved adapter)",interface);
+        combo->setCurrentIndex(combo->count() - 1);
+    }
 }
 
 QString AdapterLabel(const QString& interface)
@@ -75,10 +102,13 @@ QString AdapterLabel(const QString& interface)
 
 void SetTone(QLabel* label, Tone tone, bool bold = false)
 {
-    QString color = "palette(windowText)";
-    if (tone == Tone::Good) color = "#207a3b";
-    if (tone == Tone::Warning) color = "#946200";
-    if (tone == Tone::Bad) color = "#b3261e";
+    bool light = true;
+    for (auto* parent = label->parentWidget(); parent; parent = parent->parentWidget())
+        if (parent->objectName() == "sidebar") light = false;
+    QString color = light ? "#5c4432" : "#eddfcd";
+    if (tone == Tone::Good) color = light ? "#17613e" : "#a4c49a";
+    if (tone == Tone::Warning) color = light ? "#865411" : "#e4bc7b";
+    if (tone == Tone::Bad) color = light ? "#9b382a" : "#efaaa0";
     label->setStyleSheet(QString("color: %1;%2").arg(color, bold ? " font-weight: 600;" : ""));
 }
 
@@ -130,7 +160,7 @@ QLabel* FormHint(const QString& text, QWidget* parent)
 {
     auto* label = new QLabel(text,parent);
     label->setWordWrap(true);
-    label->setStyleSheet("color: palette(mid);");
+    label->setStyleSheet("color: #78604b; font-size: 11px;");
     return label;
 }
 
@@ -172,230 +202,414 @@ Window::Window(bool smokeTest)
     m_smokeTest = smokeTest;
     m_client.setParent(this);
     setWindowTitle("Barista");
-    resize(760,620);
-    setMinimumSize(620,500);
+    setWindowIcon(QIcon(":/barista/barista-logo.png"));
+    resize(920,680);
+    setMinimumSize(780,620);
+    ApplyCafeTheme(this);
 
-    m_status = new QLabel("Starting Barista…",this);
-    m_status->setObjectName("sessionStatus");
-    m_status->setContentsMargins(10,3,10,3);
-    m_status->setMinimumHeight(m_status->fontMetrics().height() + 8);
-    SetTone(m_status,Tone::Warning,true);
-    statusBar()->addWidget(m_status,1);
-    statusBar()->hide();
-
-    auto* sessionMenu = menuBar()->addMenu("&Session");
-    auto* startAction = sessionMenu->addAction("&Start");
-    auto* stopAction = sessionMenu->addAction("S&top");
-    sessionMenu->addSeparator();
-    auto* pairAction = sessionMenu->addAction("&Pair GamePad…");
-    sessionMenu->addSeparator();
-    auto* quitAction = sessionMenu->addAction("&Quit Barista",this,&Window::Quit);
+    auto* quitAction = new QAction("Quit Barista",this);
+    quitAction->setObjectName("quitAction");
     quitAction->setShortcut(QKeySequence::Quit);
-    auto* helpMenu = menuBar()->addMenu("&Help");
-    helpMenu->addAction("&About Barista",this,[this] {
-        QMessageBox::about(this,"About Barista",QString("Barista %1\n\nBarista connects a Wii U GamePad to your computer.").arg(qApp->applicationVersion()));
-    });
+    addAction(quitAction);
+    connect(quitAction,&QAction::triggered,this,&Window::Quit);
 
     auto* root = new QWidget(this);
-    auto* layout = new QVBoxLayout(root);
-    layout->setContentsMargins(10,10,10,10);
-    layout->setSpacing(8);
-    m_message = new QLabel(root);
-    m_message->setWordWrap(true);
-    m_message->setStyleSheet("color: palette(highlight);");
-    m_message->hide();
-    layout->addWidget(m_message);
-
+    auto* rootLayout = new QHBoxLayout(root);
+    rootLayout->setContentsMargins(0,0,0,0);
+    rootLayout->setSpacing(0);
+    auto* sidebar = new QWidget(root);
+    sidebar->setObjectName("sidebar");
+    sidebar->setFixedWidth(184);
+    auto* navigation = new QVBoxLayout(sidebar);
+    navigation->setContentsMargins(10,18,10,16);
+    navigation->setSpacing(6);
     m_tabs = new QTabWidget(root);
+    m_tabs->setObjectName("mainPages");
     m_tabs->setDocumentMode(true);
-    layout->addWidget(m_tabs,1);
+    m_tabs->tabBar()->hide();
+    auto* navGroup = new QButtonGroup(this);
+    const QStringList pages{"Home","GamePads","Settings"};
+    const std::array icons{CafeSymbol::Home,CafeSymbol::GamePad,CafeSymbol::Settings};
+    for (int i = 0; i < pages.size(); ++i) {
+        auto* button = new QPushButton(CafeIcon(icons[i],QColor("#d8c0a9")),pages[i],sidebar);
+        button->setObjectName("nav" + pages[i]);
+        button->setProperty("nav",true);
+        button->setCheckable(true);
+        button->setIconSize(QSize(24,24));
+        navGroup->addButton(button,i);
+        navigation->addWidget(button);
+    }
+    navGroup->button(0)->setChecked(true);
+    connect(navGroup,&QButtonGroup::idClicked,m_tabs,&QTabWidget::setCurrentIndex);
+    connect(m_tabs,&QTabWidget::currentChanged,this,[navGroup](int index) {
+        if (auto* button = navGroup->button(index)) button->setChecked(true);
+    });
+    navigation->addStretch();
+    m_status = new QLabel(sidebar);
+    m_status->setObjectName("sessionStatus");
+    m_status->setWordWrap(true);
+    navigation->addWidget(m_status);
+    auto* quitButton = new QPushButton(CafeIcon(CafeSymbol::Quit,QColor("#d8c0a9")),"Quit Barista",sidebar);
+    quitButton->setObjectName("quitButton");
+    quitButton->setProperty("nav",true);
+    connect(quitButton,&QPushButton::clicked,this,&Window::Quit);
+    navigation->addWidget(quitButton);
+    rootLayout->addWidget(sidebar);
+    auto* content = new QWidget(root);
+    auto* contentLayout = new QVBoxLayout(content);
+    contentLayout->setContentsMargins(0,0,0,0);
+    contentLayout->setSpacing(0);
+    m_message = new QLabel(content);
+    m_message->setWordWrap(true);
+    m_message->setContentsMargins(20,10,20,10);
+    m_message->setStyleSheet("background: #ead5bd; color: #583b24;");
+    m_message->hide();
+    contentLayout->addWidget(m_message);
+    contentLayout->addWidget(m_tabs,1);
+    rootLayout->addWidget(content,1);
 
-    auto* connection = new QWidget(m_tabs);
-    auto* connectionLayout = new QVBoxLayout(connection);
-    connectionLayout->setContentsMargins(12,12,12,12);
-    connectionLayout->setSpacing(10);
-    m_hint = new QLabel(connection);
-    m_hint->setObjectName("connectionHint");
+    auto* home = new QWidget(m_tabs);
+    home->setObjectName("homePage");
+    auto* homeLayout = new QVBoxLayout(home);
+    homeLayout->setContentsMargins(30,24,30,22);
+    homeLayout->setSpacing(20);
+    auto* welcome = new QHBoxLayout;
+    auto* greeting = new QVBoxLayout;
+    auto* headline = new QLabel("Good to see you!",home);
+    headline->setObjectName("homeHeading");
+    greeting->addStretch();
+    greeting->addWidget(headline);
+    auto* introduction = new QLabel("Your GamePad, right at home on your PC.",home);
+    introduction->setWordWrap(true);
+    greeting->addWidget(introduction);
+    greeting->addStretch();
+    welcome->addLayout(greeting,1);
+    auto* logo = new QLabel(home);
+    logo->setObjectName("homeLogo");
+    logo->setPixmap(QPixmap(":/barista/barista-logo.png").scaled(155,170,Qt::KeepAspectRatio,Qt::SmoothTransformation));
+    logo->setFixedSize(160,175);
+    logo->setAlignment(Qt::AlignCenter);
+    welcome->addWidget(logo);
+    homeLayout->addLayout(welcome);
+
+    auto* ready = new QFrame(home);
+    ready->setObjectName("readyCard");
+    auto* readyLayout = new QVBoxLayout(ready);
+    readyLayout->setContentsMargins(20,18,20,18);
+    readyLayout->setSpacing(12);
+    m_homeStatus = new QLabel("Starting…",ready);
+    m_homeStatus->setObjectName("homeStatus");
+    readyLayout->addWidget(m_homeStatus);
+    m_hint = new QLabel(ready);
+    m_hint->setObjectName("homeHint");
     m_hint->setWordWrap(true);
-    connectionLayout->addWidget(m_hint);
-
-    auto* gamepadHeader = new QLabel("<b>GamePad Status</b>", connection);
-    connectionLayout->addWidget(gamepadHeader);
-    auto* gamepadForm = new QFormLayout;
-    ConfigureForm(gamepadForm);
-    m_gamepadState = new QLabel("Session not started", connection);
-    m_gamepadPhase = new QLabel("Idle", connection);
-    m_gamepadMode = new QLabel("Screen + controller", connection);
-    m_gamepadIface = new QLabel("—", connection);
-    m_gamepadBattery = new QLabel("—", connection);
+    readyLayout->addWidget(m_hint);
+    auto* deviceRow = new QHBoxLayout;
+    auto* deviceIcon = new QLabel(ready);
+    deviceIcon->setPixmap(CafeIcon(CafeSymbol::GamePad,QColor("#8b705a")).pixmap(32,32));
+    deviceRow->addWidget(deviceIcon);
+    auto* deviceText = new QVBoxLayout;
+    m_deviceTitle = new QLabel("Wii U GamePad",ready);
+    m_deviceTitle->setObjectName("deviceTitle");
+    m_deviceTitle->setTextFormat(Qt::PlainText);
+    m_deviceTitle->setWordWrap(true);
+    m_homeDeviceDetail = new QLabel("Pair a GamePad to get started.",ready);
+    m_homeDeviceDetail->setObjectName("homeDeviceDetail");
+    m_homeDeviceDetail->setWordWrap(true);
+    deviceText->addWidget(m_deviceTitle);
+    deviceText->addWidget(m_homeDeviceDetail);
+    deviceRow->addLayout(deviceText,1);
+    m_gamepadBattery = new QLabel(ready);
     m_gamepadBattery->setObjectName("gamepadBattery");
-    gamepadForm->addRow("GamePad:", m_gamepadState);
-    gamepadForm->addRow("Phase:", m_gamepadPhase);
-    gamepadForm->addRow("Mode:", m_gamepadMode);
-    gamepadForm->addRow("Interface:", m_gamepadIface);
-    gamepadForm->addRow("Battery:", m_gamepadBattery);
-    connectionLayout->addLayout(gamepadForm);
+    m_gamepadBattery->setAccessibleName("GamePad battery");
+    deviceRow->addWidget(m_gamepadBattery);
+    readyLayout->addLayout(deviceRow);
+    m_start = new QPushButton(CafeIcon(CafeSymbol::Play),"Connect GamePad",ready);
+    m_start->setObjectName("startButton");
+    m_start->setProperty("primary",true);
+    m_stop = new QPushButton(CafeIcon(CafeSymbol::Stop),"Disconnect GamePad",ready);
+    m_stop->setObjectName("stopButton");
+    m_stop->setProperty("primary",true);
+    readyLayout->addWidget(m_start);
+    readyLayout->addWidget(m_stop);
+    homeLayout->addWidget(ready);
 
-    auto* div1 = new QFrame(connection);
-    div1->setFrameShape(QFrame::HLine);
-    div1->setFrameShadow(QFrame::Sunken);
-    connectionLayout->addWidget(div1);
-
-    auto* appHeader = new QLabel("<b>Connected Application</b>", connection);
-    connectionLayout->addWidget(appHeader);
-    auto* appForm = new QFormLayout;
-    ConfigureForm(appForm);
-    m_appName = new QLabel("No application connected", connection);
-    m_appLock = new QLabel("—", connection);
-    m_appIdleLogo = new QLabel("—", connection);
-    m_appLastSeen = new QLabel("—", connection);
-    m_appSocket = new QLabel("—", connection);
-    m_appSocket->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    appForm->addRow("Application:", m_appName);
-    appForm->addRow("Access lock:", m_appLock);
-    appForm->addRow("Idle logo:", m_appIdleLogo);
-    appForm->addRow("Last activity:", m_appLastSeen);
-    appForm->addRow("Media socket:", m_appSocket);
-    auto* appDetails = new QWidget(connection);
-    auto* appDetailsLayout = new QHBoxLayout(appDetails);
-    appDetailsLayout->setContentsMargins(0,0,0,0);
-    appDetailsLayout->setSpacing(16);
-    appDetailsLayout->addLayout(appForm,1);
-    m_appLogo = new QLabel(appDetails);
+    auto* appCard = new QFrame(home);
+    appCard->setObjectName("applicationCard");
+    auto* appLayout = new QHBoxLayout(appCard);
+    appLayout->setContentsMargins(0,0,0,0);
+    m_appLogo = new QLabel(appCard);
     m_appLogo->setObjectName("connectedAppLogo");
-    m_appLogo->setFixedSize(76,76);
+    m_appLogo->setFixedSize(40,40);
     m_appLogo->setAlignment(Qt::AlignCenter);
-    m_appLogo->setStyleSheet("color: palette(mid); border: 1px solid palette(midlight); border-radius: 6px;");
-    m_appLogo->setText("No app\nicon");
-    appDetailsLayout->addWidget(m_appLogo,0,Qt::AlignTop);
-    connectionLayout->addWidget(appDetails);
+    m_appLogo->setPixmap(CafeIcon(CafeSymbol::GamePad,QColor("#8b705a")).pixmap(30,30));
+    appLayout->addWidget(m_appLogo);
+    auto* appText = new QVBoxLayout;
+    m_appName = new QLabel(appCard);
+    m_appName->setObjectName("applicationName");
+    m_appName->setTextFormat(Qt::PlainText);
+    m_appName->setWordWrap(true);
+    m_appSummary = new QLabel(appCard);
+    m_appSummary->setObjectName("applicationSummary");
+    m_appSummary->setWordWrap(true);
+    appText->addWidget(m_appName);
+    appText->addWidget(m_appSummary);
+    appLayout->addLayout(appText,1);
+    homeLayout->addWidget(appCard);
+    homeLayout->addStretch();
+    auto* homeFooter = new QHBoxLayout;
+    auto* footerHint = new QLabel("Screen, sound, and controls. Together.",home);
+    footerHint->setStyleSheet("color: #94775d; font-size: 11px;");
+    homeFooter->addWidget(footerHint,1);
+    auto* connectionLink = new QPushButton("Session info →",home);
+    connectionLink->setObjectName("connectionDetailsButton");
+    connectionLink->setProperty("link",true);
+    connect(connectionLink,&QPushButton::clicked,this,[this] {
+        m_settingsTabs->setCurrentIndex(1);
+        m_tabs->setCurrentIndex(2);
+    });
+    homeFooter->addWidget(connectionLink);
+    homeLayout->addLayout(homeFooter);
+    for (auto* label : home->findChildren<QLabel*>()) label->setProperty("lightSurface",true);
+    m_tabs->addTab(home,"Home");
 
-    auto* div2 = new QFrame(connection);
-    div2->setFrameShape(QFrame::HLine);
-    div2->setFrameShadow(QFrame::Sunken);
-    connectionLayout->addWidget(div2);
+    auto* gamepads = new QWidget(m_tabs);
+    gamepads->setObjectName("gamepadsPage");
+    gamepads->setProperty("cafePage",true);
+    auto* gamepadsLayout = new QVBoxLayout(gamepads);
+    gamepadsLayout->setContentsMargins(26,26,26,24);
+    gamepadsLayout->setSpacing(16);
+    auto* gamepadsHeader = new QHBoxLayout;
+    auto* gamepadsTitle = new QLabel("GamePads",gamepads);
+    gamepadsTitle->setProperty("heading",true);
+    gamepadsHeader->addWidget(gamepadsTitle,1);
+    auto* refreshPads = new QPushButton(CafeIcon(CafeSymbol::Refresh),"Refresh",gamepads);
+    refreshPads->setObjectName("refreshGamePadsButton");
+    connect(refreshPads,&QPushButton::clicked,this,&Window::RefreshSavedGamePads);
+    gamepadsHeader->addWidget(refreshPads);
+    gamepadsLayout->addLayout(gamepadsHeader);
+    gamepadsLayout->addWidget(FormHint("Saved Wii U GamePads. Reconnect using their existing pairing.",gamepads));
+    m_savedGamePads = new QListWidget(gamepads);
+    m_savedGamePads->setObjectName("savedGamePads");
+    m_savedGamePads->setIconSize(QSize(36,36));
+    m_savedGamePads->setSpacing(6);
+    gamepadsLayout->addWidget(m_savedGamePads);
+    m_noGamePads = FormHint("No saved GamePads yet. Pair your GamePad to get started.",gamepads);
+    m_noGamePads->setObjectName("emptyGamePadsHint");
+    gamepadsLayout->addWidget(m_noGamePads);
+    auto* savedButtons = new QHBoxLayout;
+    savedButtons->addStretch();
+    m_renamePair = new QPushButton(CafeIcon(CafeSymbol::Edit),"Rename",gamepads);
+    m_removePair = new QPushButton(CafeIcon(CafeSymbol::Remove),"Remove pairing…",gamepads);
+    m_renamePair->setObjectName("renameGamePadButton");
+    m_removePair->setObjectName("removeGamePadButton");
+    savedButtons->addWidget(m_renamePair);
+    savedButtons->addWidget(m_removePair);
+    gamepadsLayout->addLayout(savedButtons);
+    auto* pairShortcut = new QPushButton(CafeIcon(CafeSymbol::Plus),"Pair a GamePad",gamepads);
+    pairShortcut->setObjectName("addGamePadButton");
+    pairShortcut->setIconSize(QSize(25,25));
+    connect(pairShortcut,&QPushButton::clicked,this,&Window::OpenPairing);
+    gamepadsLayout->addWidget(pairShortcut);
+    gamepadsLayout->addWidget(FormHint("One GamePad session at a time. Pairing uses your dedicated Wi-Fi adapter.",gamepads));
+    gamepadsLayout->addStretch();
+    m_tabs->addTab(gamepads,"GamePads");
 
-    auto* sessionHeader = new QLabel("<b>Session Controls</b>", connection);
-    connectionLayout->addWidget(sessionHeader);
-    auto* choices = new QFormLayout;
-    ConfigureForm(choices);
-    m_interface = new QComboBox(connection);
+    // Settings own the session configuration; the pairing dialog shares the adapter selection.
+    auto* settingsPage = new QWidget(m_tabs);
+    settingsPage->setObjectName("settingsPage");
+    settingsPage->setProperty("cafePage",true);
+    auto* settingsLayout = new QVBoxLayout(settingsPage);
+    settingsLayout->setContentsMargins(26,26,26,24);
+    settingsLayout->setSpacing(16);
+    auto* settingsTitle = new QLabel("Settings",settingsPage);
+    settingsTitle->setProperty("heading",true);
+    settingsLayout->addWidget(settingsTitle);
+    auto* settingsForm = new QFormLayout;
+    ConfigureForm(settingsForm);
+    m_interface = new QComboBox(settingsPage);
     m_interface->setObjectName("interfaceCombo");
-    m_interface->setEditable(true);
+    m_interface->setEditable(false);
+    m_interface->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_interface->setMinimumContentsLength(12);
+    m_interface->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);
     for (const auto& interface : QNetworkInterface::allInterfaces())
         if (interface.type() == QNetworkInterface::Wifi)
             m_interface->addItem(AdapterLabel(interface.name()),interface.name());
-    if (!m_interface->count()) m_interface->addItem("wlan0");
-    m_mode = new QComboBox(connection);
-    m_mode->addItem("Screen + controller","real");
-    m_mode->addItem("Controller only","controller");
-    if (!smokeTest) {
-        QSettings settings;
-        SelectInterface(m_interface,settings.value("interface",InterfaceName(m_interface)).toString());
-        m_mode->setCurrentIndex(std::max(0,m_mode->findData(settings.value("mode","real"))));
-    }
-    choices->addRow("&Wi-Fi adapter:",m_interface);
-    choices->addRow("&Use GamePad as:",m_mode);
-    auto* sessionControls = new QWidget(connection);
-    auto* sessionLayout = new QHBoxLayout(sessionControls);
-    sessionLayout->setContentsMargins(0,0,0,0);
-    sessionLayout->setSpacing(8);
-    m_start = new QPushButton("Start",sessionControls);
-    m_start->setObjectName("startButton");
-    m_stop = new QPushButton("Stop",sessionControls);
-    m_stop->setObjectName("stopButton");
-    sessionLayout->addWidget(m_start);
-    sessionLayout->addWidget(m_stop);
-    sessionLayout->addStretch();
-    choices->addRow("Session:",sessionControls);
-    m_description = new QLabel(connection);
-    m_description->setWordWrap(true);
-    choices->addRow(QString(), m_description);
-    connectionLayout->addLayout(choices);
-    connectionLayout->addStretch();
-    m_tabs->addTab(connection,"General");
-
-    auto* pairing = new QWidget(m_tabs);
-    auto* pairingLayout = new QVBoxLayout(pairing);
-    pairingLayout->setContentsMargins(12,12,12,12);
-    pairingLayout->setSpacing(12);
-    pairingLayout->addWidget(new QLabel("Pair a GamePad to a dedicated Wi-Fi adapter. This can be different from the adapter used by General.",pairing));
-    m_pairStatus = new QLabel(pairing);
-    m_pairStatus->setObjectName("pairingStatus");
-    m_pairStatus->setWordWrap(true);
-    pairingLayout->addWidget(m_pairStatus);
-    auto* pairingForm = new QFormLayout;
-    ConfigureForm(pairingForm);
-    m_pairInterface = new QComboBox(pairing);
-    m_pairInterface->setObjectName("pairInterfaceCombo");
-    m_pairInterface->setEditable(true);
-    for (int i = 0; i < m_interface->count(); ++i)
-        m_pairInterface->addItem(m_interface->itemText(i),m_interface->itemData(i));
-    SelectInterface(m_pairInterface,InterfaceName(m_interface));
-    pairingForm->addRow("&Wi-Fi adapter:",m_pairInterface);
-    m_country = new QLineEdit(pairing);
+    if (!m_interface->count()) m_interface->addItem("wlan0","wlan0");
+    settingsForm->addRow("GamePad &adapter:",m_interface);
+    m_country = new QLineEdit(settingsPage);
     m_country->setObjectName("regulatoryCountry");
     m_country->setMaxLength(2);
     m_country->setValidator(new QRegularExpressionValidator(QRegularExpression("[A-Za-z]{0,2}"),m_country));
     m_country->setPlaceholderText("System setting");
-    if (!smokeTest)
-        m_country->setText(QSettings().value("regulatoryCountry",SuggestedRegulatoryCountry()).toString().toUpper());
+    settingsForm->addRow("&Country:",m_country);
+    settingsLayout->addLayout(settingsForm);
+    settingsLayout->addWidget(FormHint("Use your physical country's two-letter code. Temporary radio settings are restored when the session ends.",settingsPage));
     connect(m_country,&QLineEdit::textEdited,this,[this](const QString& value) {
-        const QString upper = value.toUpper();
-        if (upper != value) m_country->setText(upper);
+        m_country->setText(value.toUpper());
         ApplyStatus(m_lastStatus);
     });
-    pairingForm->addRow("Regulatory &country:",m_country);
-    auto* countryHelp = new QLabel("Barista suggests the two-letter country from your desktop locale. Confirm it matches your physical location; a temporary radio setting is restored when the session stops.",pairing);
-    countryHelp->setWordWrap(true);
-    pairingLayout->addWidget(countryHelp);
-    pairingLayout->addWidget(new QLabel("Choose four symbols below. Once Barista says “Pair now,” press SYNC on the GamePad and enter the same symbols there. The GamePad submits automatically after the fourth symbol.",pairing));
-    m_pairSymbols = new QWidget(pairing);
+    auto* modeTitle = new QLabel("GamePad mode",settingsPage);
+    modeTitle->setProperty("subheading",true);
+    settingsLayout->addWidget(modeTitle);
+    m_mode = new QComboBox(settingsPage);
+    m_mode->setObjectName("modeCombo");
+    m_mode->addItem("Screen + controller","real");
+    m_mode->addItem("Controller only","controller");
+    m_mode->hide();
+    auto* modeButtons = new QButtonGroup(this);
+    auto* modes = new QHBoxLayout;
+    m_screenMode = new QPushButton(CafeIcon(CafeSymbol::GamePad),"Screen + controller",settingsPage);
+    m_controllerMode = new QPushButton(CafeIcon(CafeSymbol::GamePad),"Controller only",settingsPage);
+    m_screenMode->setObjectName("screenModeButton");
+    m_controllerMode->setObjectName("controllerModeButton");
+    for (auto* button : {m_screenMode,m_controllerMode}) {
+        button->setCheckable(true);
+        modes->addWidget(button);
+    }
+    modeButtons->addButton(m_screenMode,0);
+    modeButtons->addButton(m_controllerMode,1);
+    connect(modeButtons,&QButtonGroup::idClicked,m_mode,&QComboBox::setCurrentIndex);
+    connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[modeButtons](int index) {
+        if (auto* button = modeButtons->button(index)) button->setChecked(true);
+    });
+    if (!smokeTest) {
+        QSettings settings;
+        SelectInterface(m_interface,settings.value("interface",InterfaceName(m_interface)).toString());
+        m_mode->setCurrentIndex(std::max(0,m_mode->findData(settings.value("mode","real"))));
+        m_country->setText(settings.value("regulatoryCountry",SuggestedRegulatoryCountry()).toString().toUpper());
+    }
+    modeButtons->button(m_mode->currentIndex())->setChecked(true);
+    settingsLayout->addLayout(modes);
+    m_description = FormHint({},settingsPage);
+    m_description->setObjectName("modeDescription");
+    settingsLayout->addWidget(m_description);
+    auto* desktopTitle = new QLabel("Desktop",settingsPage);
+    desktopTitle->setProperty("subheading",true);
+    settingsLayout->addWidget(desktopTitle);
+    m_background = new QCheckBox("Keep running when the window closes",settingsPage);
+    m_background->setObjectName("backgroundCheck");
+    m_background->setChecked(smokeTest || QSettings().value("background",true).toBool());
+    settingsLayout->addWidget(m_background);
+    settingsLayout->addWidget(FormHint("Your session continues in the system tray.",settingsPage));
+    connect(m_background,&QCheckBox::toggled,this,[smokeTest](bool enabled) {
+        if (!smokeTest) QSettings().setValue("background",enabled);
+    });
+    settingsLayout->addStretch();
+
+    m_pairDialog = new PairingDialog(this);
+    m_pairDialog->setObjectName("pairingDialog");
+    m_pairDialog->setAttribute(Qt::WA_StyledBackground,true);
+    auto pairingPalette = m_pairDialog->palette();
+    pairingPalette.setColor(QPalette::Window,QColor("#f5ecdf"));
+    pairingPalette.setColor(QPalette::WindowText,QColor("#38261a"));
+    m_pairDialog->setPalette(pairingPalette);
+    m_pairDialog->setAutoFillBackground(true);
+    m_pairDialog->setWindowTitle("Barista — Pair a GamePad");
+    m_pairDialog->resize(590,450);
+    auto* pairingLayout = new QVBoxLayout(m_pairDialog);
+    pairingLayout->setContentsMargins(24,24,24,24);
+    pairingLayout->setSpacing(16);
+    auto* pairingTitle = new QLabel("Pair a GamePad",m_pairDialog);
+    pairingTitle->setProperty("heading",true);
+    pairingLayout->addWidget(pairingTitle);
+    m_pairStatus = new QLabel(m_pairDialog);
+    m_pairStatus->setObjectName("pairingStatus");
+    m_pairStatus->setProperty("lightSurface",true);
+    m_pairStatus->setWordWrap(true);
+    pairingLayout->addWidget(m_pairStatus);
+    auto* instructions = new QLabel("When Barista says “Pair now”, press SYNC on your GamePad and enter these symbols from left to right. The fourth symbol submits automatically.",m_pairDialog);
+    instructions->setWordWrap(true);
+    pairingLayout->addWidget(instructions);
+    m_pairSymbols = new QWidget(m_pairDialog);
     auto* symbols = new QHBoxLayout(m_pairSymbols);
     symbols->setContentsMargins(0,0,0,0);
-    m_code = new QLineEdit("2220",pairing); m_code->hide();
-    const QStringList shapes{"♠  Spade","♥  Heart","♦  Diamond","♣  Club"};
-    std::array<QComboBox*,4> symbolChoices{};
-    for (size_t i=0; i<symbolChoices.size(); ++i) {
-        auto* choice = new QComboBox(m_pairSymbols);
-        choice->addItems(shapes);
-        choice->setCurrentIndex(i == 3 ? 0 : 2);
-        choice->setAccessibleName(QString("Pairing symbol %1").arg(i+1));
-        symbolChoices[i] = choice;
-        symbols->addWidget(choice);
+    m_code = new QLineEdit(m_pairDialog);
+    m_code->setObjectName("pairingCode");
+    m_code->setReadOnly(true);
+    m_code->hide();
+    for (size_t i = 0; i < m_pairSymbolLabels.size(); ++i) {
+        auto* symbol = new QLabel(m_pairSymbols);
+        symbol->setObjectName(QString("pairingSymbol%1").arg(i + 1));
+        symbol->setProperty("pairSymbol",true);
+        symbol->setAlignment(Qt::AlignCenter);
+        symbol->setMinimumHeight(110);
+        m_pairSymbolLabels[i] = symbol;
+        symbols->addWidget(symbol,1);
     }
-    for (auto* choice : symbolChoices)
-        connect(choice,qOverload<int>(&QComboBox::currentIndexChanged),this,[this,symbolChoices] {
-            QString code;
-            for (auto* symbol : symbolChoices) code += QString::number(symbol->currentIndex());
-            m_code->setText(code);
-            ApplyStatus(m_lastStatus);
-        });
-    pairingForm->addRow("Pairing symbols:",m_pairSymbols);
-    pairingLayout->addLayout(pairingForm);
-    m_pair = new QPushButton("Start pairing",pairing);
+    InitializePairingPattern();
+    pairingLayout->addWidget(m_pairSymbols);
+    auto* pairingHint = new QLabel("Saved GamePads reconnect automatically using their existing credentials. Your Wi-Fi adapter and country are configured in Settings.",m_pairDialog);
+    pairingHint->setObjectName("pairingHint");
+    pairingHint->setWordWrap(true);
+    pairingLayout->addWidget(pairingHint);
+    pairingLayout->addStretch();
+    auto* pairButtons = new QHBoxLayout;
+    auto* closePair = new QPushButton("Close",m_pairDialog);
+    connect(closePair,&QPushButton::clicked,m_pairDialog,&QDialog::hide);
+    pairButtons->addStretch();
+    pairButtons->addWidget(closePair);
+    m_pair = new QPushButton(CafeIcon(CafeSymbol::Plus),"Start pairing",m_pairDialog);
     m_pair->setObjectName("pairButton");
-    pairingLayout->addWidget(m_pair,0,Qt::AlignLeft);
-    auto* savedPairs = new QGroupBox("Saved GamePads",pairing);
-    auto* savedLayout = new QVBoxLayout(savedPairs);
-    m_savedGamePads = new QListWidget(savedPairs);
-    m_savedGamePads->setObjectName("savedGamePads");
-    savedLayout->addWidget(m_savedGamePads);
-    auto* savedButtons = new QHBoxLayout;
-    auto* renamePair = new QPushButton("Rename",savedPairs);
-    auto* removePair = new QPushButton("Remove",savedPairs);
-    savedButtons->addWidget(renamePair); savedButtons->addWidget(removePair); savedButtons->addStretch();
-    savedLayout->addLayout(savedButtons);
-    connect(renamePair,&QPushButton::clicked,this,[this] {
+    m_pair->setProperty("primary",true);
+    pairButtons->addWidget(m_pair);
+    pairingLayout->addLayout(pairButtons);
+
+    m_waitingDialog = new PairingDialog(this);
+    m_waitingDialog->setObjectName("waitingDialog");
+    m_waitingDialog->setWindowTitle("Barista — Connecting");
+    m_waitingDialog->resize(440,430);
+    auto* waitingLayout = new QVBoxLayout(m_waitingDialog);
+    waitingLayout->setContentsMargins(28,24,28,24);
+    waitingLayout->setSpacing(16);
+    m_waitingStatus = new QLabel("Waiting for your GamePad",m_waitingDialog);
+    m_waitingStatus->setProperty("heading",true);
+    m_waitingStatus->setAlignment(Qt::AlignCenter);
+    m_waitingStatus->setWordWrap(true);
+    waitingLayout->addWidget(m_waitingStatus);
+    auto* waitingHint = FormHint("Turn on your paired GamePad and keep it nearby.",m_waitingDialog);
+    waitingHint->setAlignment(Qt::AlignCenter);
+    waitingLayout->addWidget(waitingHint);
+    auto* waitingLogo = new QLabel(m_waitingDialog);
+    waitingLogo->setPixmap(QPixmap(":/barista/barista-logo.png").scaled(145,158,Qt::KeepAspectRatio,Qt::SmoothTransformation));
+    waitingLogo->setAlignment(Qt::AlignCenter);
+    waitingLayout->addWidget(waitingLogo);
+    auto* waitingAdapterCard = new QFrame(m_waitingDialog);
+    waitingAdapterCard->setObjectName("waitingAdapterCard");
+    auto* waitingAdapterLayout = new QHBoxLayout(waitingAdapterCard);
+    waitingAdapterLayout->setContentsMargins(16,12,16,12);
+    auto* waitingWifi = new QLabel(waitingAdapterCard);
+    waitingWifi->setPixmap(CafeIcon(CafeSymbol::Wifi).pixmap(26,26));
+    waitingAdapterLayout->addWidget(waitingWifi);
+    m_waitingAdapter = new QLabel(waitingAdapterCard);
+    m_waitingAdapter->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_waitingAdapter->setWordWrap(true);
+    waitingAdapterLayout->addWidget(m_waitingAdapter,1);
+    waitingLayout->addWidget(waitingAdapterCard);
+    auto* waitButtons = new QHBoxLayout;
+    auto* hideWaiting = new QPushButton("Hide",m_waitingDialog);
+    hideWaiting->setToolTip("Keep the session running in the background");
+    connect(hideWaiting,&QPushButton::clicked,m_waitingDialog,&QDialog::hide);
+    m_waitingStop = new QPushButton(CafeIcon(CafeSymbol::Stop),"End session",m_waitingDialog);
+    m_waitingStop->setObjectName("waitingStopButton");
+    connect(m_waitingStop,&QPushButton::clicked,m_stop,&QPushButton::click);
+    waitButtons->addWidget(hideWaiting);
+    waitButtons->addWidget(m_waitingStop);
+    waitingLayout->addLayout(waitButtons);
+
+
+    connect(m_savedGamePads,&QListWidget::currentRowChanged,this,[this] { ApplyStatus(m_lastStatus); });
+    connect(m_renamePair,&QPushButton::clicked,this,[this] {
         auto* item = m_savedGamePads->currentItem(); if (!item) return;
         const QString mac = item->data(Qt::UserRole).toString();
-        bool ok = false; const QString name = QInputDialog::getText(this,"Rename GamePad","Name:",QLineEdit::Normal,item->text().section(" — ",0,0),&ok);
+        bool ok = false; const QString name = QInputDialog::getText(this,"Rename GamePad","Name:",QLineEdit::Normal,item->data(Qt::UserRole + 1).toString(),&ok);
         if (!ok) return;
         m_client.RenameGamePad({mac.toStdString(), name.toStdString()});
         auto records = LoadSavedGamePadsCache(); records.insert(mac,name); SaveSavedGamePadsCache(records);
         ApplyGamePads({});
     });
-    connect(removePair,&QPushButton::clicked,this,[this] {
+    connect(m_removePair,&QPushButton::clicked,this,[this] {
         auto* item = m_savedGamePads->currentItem(); if (!item) return;
         const QString mac = item->data(Qt::UserRole).toString();
         if (QMessageBox::question(this,"Remove saved GamePad?",QString("Remove %1? It will need to be paired again.").arg(item->text())) != QMessageBox::Yes) return;
@@ -403,17 +617,59 @@ Window::Window(bool smokeTest)
         auto records = LoadSavedGamePadsCache(); records.remove(mac); SaveSavedGamePadsCache(records);
         ApplyGamePads({});
     });
-    QTimer::singleShot(0,this,&Window::RefreshSavedGamePads);
-    pairingLayout->addWidget(savedPairs);
-    pairingLayout->addStretch();
-    m_tabs->addTab(pairing,"Pair GamePad");
 
-    auto* advanced = new QWidget(m_tabs);
-    advanced->setObjectName("advancedPanel");
+    QTimer::singleShot(0,this,&Window::RefreshSavedGamePads);
+    auto* connectionPage = new QWidget(m_tabs);
+    connectionPage->setObjectName("advancedPanel");
+    connectionPage->setProperty("cafePage",true);
+    auto* connectionLayout = new QVBoxLayout(connectionPage);
+    connectionLayout->setContentsMargins(26,26,26,24);
+    connectionLayout->setSpacing(18);
+    auto* connectionTitle = new QLabel("Session info",connectionPage);
+    connectionTitle->setProperty("heading",true);
+    connectionLayout->addWidget(connectionTitle);
+    connectionLayout->addWidget(FormHint("Current GamePad session details. Connect or disconnect from Home.",connectionPage));
+    auto* sessionDetails = new QGroupBox("Session",connectionPage);
+    auto* detailsForm = new QFormLayout(sessionDetails);
+    ConfigureForm(detailsForm);
+    m_gamepadState = new QLabel(sessionDetails);
+    m_gamepadPhase = new QLabel(sessionDetails);
+    m_gamepadMode = new QLabel(sessionDetails);
+    m_gamepadIface = new QLabel(sessionDetails);
+    for (auto* label : {m_gamepadState,m_gamepadPhase,m_gamepadMode,m_gamepadIface}) {
+        label->setWordWrap(true);
+        label->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    }
+    detailsForm->addRow("GamePad:",m_gamepadState);
+    detailsForm->addRow("Session:",m_gamepadPhase);
+    detailsForm->addRow("Mode:",m_gamepadMode);
+    detailsForm->addRow("Wi-Fi adapter:",m_gamepadIface);
+    connectionLayout->addWidget(sessionDetails);
+    auto* advanced = new QWidget;
+    advanced->setObjectName("supportPanel");
+    advanced->setProperty("cafePage",true);
     auto* advancedLayout = new QVBoxLayout(advanced);
-    advancedLayout->setContentsMargins(12,12,12,12);
+    advancedLayout->setContentsMargins(26,26,26,24);
     advancedLayout->setSpacing(12);
-    advancedLayout->addWidget(FormHint("Normal use is automatic. Use these checks only when troubleshooting.",advanced));
+    auto* supportTitle = new QLabel("Support & diagnostics",advanced);
+    supportTitle->setProperty("heading",true);
+    advancedLayout->addWidget(supportTitle);
+    m_appLock = new QLabel(advanced);
+    m_appIdleLogo = new QLabel(advanced);
+    m_appLastSeen = new QLabel(advanced);
+    m_appSocket = new QLabel(advanced);
+    for (auto* label : {m_appLock,m_appIdleLogo,m_appLastSeen,m_appSocket}) {
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        label->setWordWrap(true);
+    }
+    auto* appForm = new QFormLayout;
+    ConfigureForm(appForm);
+    appForm->addRow("Application access:",m_appLock);
+    appForm->addRow("Idle logo:",m_appIdleLogo);
+    appForm->addRow("Last activity:",m_appLastSeen);
+    appForm->addRow("Media socket:",m_appSocket);
+    advancedLayout->addLayout(appForm);
     auto* healthForm = new QFormLayout;
     ConfigureForm(healthForm);
     healthForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -426,7 +682,7 @@ Window::Window(bool smokeTest)
     for (const auto& [key,label] : checks) {
         auto* value = new QLabel("Checking…",advanced);
         value->setWordWrap(true);
-        value->setMinimumWidth(300);
+        value->setMinimumWidth(120);
         value->setTextInteractionFlags(Qt::TextSelectableByMouse);
         m_health.insert(key,value);
         healthForm->addRow(label,value);
@@ -447,13 +703,6 @@ Window::Window(bool smokeTest)
             QMessageBox::Ok | QMessageBox::Cancel,QMessageBox::Cancel) != QMessageBox::Ok) return;
         m_message->hide();
         m_client.Prepare();
-    });
-    m_background = new QCheckBox("Keep running when the window is closed",advanced);
-    m_background->setObjectName("backgroundCheck");
-    m_background->setChecked(smokeTest || QSettings().value("background",true).toBool());
-    advancedLayout->addWidget(m_background);
-    connect(m_background,&QCheckBox::toggled,this,[smokeTest](bool enabled) {
-        if (!smokeTest) QSettings().setValue("background",enabled);
     });
     auto* connectorForm = new QFormLayout;
     ConfigureForm(connectorForm);
@@ -476,9 +725,10 @@ Window::Window(bool smokeTest)
     supportLayout->addWidget(m_supportId);
     m_logFiles = new QComboBox(support);
     m_logFiles->setObjectName("supportLogFiles");
-    m_logFiles->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_logFiles->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_logFiles->setMinimumContentsLength(20);
     supportLayout->addWidget(m_logFiles);
-    auto* supportButtons = new QDialogButtonBox(Qt::Horizontal,support);
+    auto* supportButtons = new QDialogButtonBox(Qt::Vertical,support);
     m_viewLog = supportButtons->addButton("View log",QDialogButtonBox::ActionRole);
     m_viewLog->setObjectName("viewLogButton");
     m_openLogs = supportButtons->addButton("Open log folder",QDialogButtonBox::ActionRole);
@@ -523,38 +773,69 @@ Window::Window(bool smokeTest)
     m_details->setTextFormat(Qt::PlainText);
     m_details->setTextInteractionFlags(Qt::TextSelectableByMouse);
     advancedLayout->addWidget(m_details);
-    advancedLayout->addStretch();
-    m_tabs->addTab(advanced,"Advanced");
 
+    m_copy->setIcon(CafeIcon(CafeSymbol::Copy));
+    m_viewLog->setIcon(CafeIcon(CafeSymbol::Info));
+    m_openLogs->setIcon(CafeIcon(CafeSymbol::Folder));
+    m_copyDiagnostics->setIcon(CafeIcon(CafeSymbol::Copy));
+    m_saveDiagnostics->setIcon(CafeIcon(CafeSymbol::Save));
+    refresh->setIcon(CafeIcon(CafeSymbol::Refresh));
+    refreshLogs->setIcon(CafeIcon(CafeSymbol::Refresh));
+    advancedLayout->addStretch();
+    connectionLayout->addStretch();
+    m_settingsTabs = new QTabWidget(m_tabs);
+    m_settingsTabs->setObjectName("settingsTabs");
+    m_settingsTabs->setDocumentMode(true);
+    m_settingsTabs->tabBar()->setExpanding(true);
+    auto* connectionScroll = new QScrollArea(m_settingsTabs);
+    connectionScroll->setWidgetResizable(true);
+    connectionScroll->setWidget(connectionPage);
+    auto* settingsScroll = new QScrollArea(m_settingsTabs);
+    settingsScroll->setWidgetResizable(true);
+    settingsScroll->setWidget(settingsPage);
+    m_settingsTabs->addTab(settingsScroll,"General");
+    m_settingsTabs->addTab(connectionScroll,"Session info");
+    auto* supportScroll = new QScrollArea(m_settingsTabs);
+    supportScroll->setWidgetResizable(true);
+    supportScroll->setWidget(advanced);
+    m_settingsTabs->addTab(supportScroll,"Support");
+    m_tabs->addTab(m_settingsTabs,"Settings");
+
+    auto* about = new QWidget(m_tabs);
+    about->setObjectName("aboutPage");
+    about->setProperty("cafePage",true);
+    auto* aboutLayout = new QVBoxLayout(about);
+    aboutLayout->setContentsMargins(45,35,45,35);
+    aboutLayout->addStretch();
+    auto* aboutLogo = new QLabel(about);
+    aboutLogo->setPixmap(QPixmap(":/barista/barista-logo.png").scaled(140,155,Qt::KeepAspectRatio,Qt::SmoothTransformation));
+    aboutLogo->setAlignment(Qt::AlignCenter);
+    aboutLayout->addWidget(aboutLogo);
+    auto* aboutTitle = new QLabel("Barista",about);
+    aboutTitle->setProperty("heading",true);
+    aboutTitle->setAlignment(Qt::AlignCenter);
+    aboutLayout->addWidget(aboutTitle);
+    auto* aboutVersion = FormHint("Version " + qApp->applicationVersion(),about);
+    aboutVersion->setAlignment(Qt::AlignCenter);
+    aboutLayout->addWidget(aboutVersion);
+    auto* aboutCopy = FormHint("A new home for your Wii U GamePad.\n\nConnect a real GamePad to your Linux desktop for screen, audio, and controller input. Barista handles pairing and the dedicated Wi-Fi connection.\n\nNot affiliated with Nintendo.",about);
+    aboutCopy->setAlignment(Qt::AlignCenter);
+    aboutLayout->addWidget(aboutCopy);
+    aboutLayout->addStretch();
+    m_settingsTabs->addTab(about,"About");
     setCentralWidget(root);
 
     auto describe = [this] {
         m_description->setText(Mode() == barista::api::SessionMode::Real
-            ? "A compatible AppHook client can use the GamePad screen, audio and input. The Barista logo is shown until an app supplies video."
-            : "Buttons and sticks appear as a virtual controller for PC games. The GamePad shows the Barista logo. Touch, motion and rumble are not supported yet.");
+            ? "Video, audio, and controls for supported apps."
+            : "PC controller input. Touch, motion, and rumble are unavailable.");
     };
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[describe](int) { describe(); });
-    const auto synchronizeInterface = [this](QComboBox* source, QComboBox* destination) {
-        const QString interface = InterfaceName(source);
-        if (interface.isEmpty() || InterfaceName(destination) == interface)
-        {
-            ApplyStatus(m_lastStatus);
-            return;
-        }
-        SelectInterface(destination,interface);
+    connect(m_interface,&QComboBox::currentTextChanged,this,[this] {
         ApplyStatus(m_lastStatus);
-    };
-    connect(m_interface,&QComboBox::currentTextChanged,this,[this,synchronizeInterface] {
-        synchronizeInterface(m_interface,m_pairInterface);
-    });
-    connect(m_pairInterface,&QComboBox::currentTextChanged,this,[this,synchronizeInterface] {
-        synchronizeInterface(m_pairInterface,m_interface);
     });
     describe();
 
-    connect(startAction,&QAction::triggered,m_start,&QPushButton::click);
-    connect(stopAction,&QAction::triggered,m_stop,&QPushButton::click);
-    connect(pairAction,&QAction::triggered,this,[this] { m_tabs->setCurrentIndex(1); m_pair->setFocus(); });
     connect(m_start,&QPushButton::clicked,this,[this] {
         ShowWindow();
         const QString interface = InterfaceName(m_interface);
@@ -566,11 +847,12 @@ Window::Window(bool smokeTest)
         const QString country = m_country->text().trimmed().toUpper();
         settings.setValue("regulatoryCountry",country);
         m_message->hide();
+        m_waitingDialog->show();
         m_client.Start({interface.toStdString(), Mode(), country.toStdString()});
     });
     connect(m_stop,&QPushButton::clicked,&m_client,&ControlClient::Stop);
     connect(m_pair,&QPushButton::clicked,this,[this] {
-        const QString interface = InterfaceName(m_pairInterface);
+        const QString interface = InterfaceName(m_interface);
         if (!ConfirmWifi(true,interface)) return;
         QSettings settings;
         settings.setValue("interface",interface);
@@ -578,9 +860,9 @@ Window::Window(bool smokeTest)
         const QString country = m_country->text().trimmed().toUpper();
         settings.setValue("regulatoryCountry",country);
         m_message->hide();
-        m_pairingRequested = true;
         const auto code = barista::api::ParsePairCode(m_code->text().toStdString());
         if (!code) return;
+        m_pairingRequested = true;
         m_client.Pair({{interface.toStdString(), Mode(), country.toStdString()}, *code});
     });
     connect(m_copy,&QPushButton::clicked,this,[this] {
@@ -626,7 +908,7 @@ Window::Window(bool smokeTest)
         const auto advice = barista::api::AdviceForDiagnostic(code.toStdString());
         m_operationError = error + "\n\nCode: " + code + "\nTry this: " +
             QString::fromUtf8(advice.action.data(),static_cast<qsizetype>(advice.action.size()));
-        m_message->setText("That didn't complete. See Advanced for details.");
+        m_message->setText("That didn't complete. Open Settings → Support for details.");
         m_message->show();
         RefreshDiagnostics();
         ApplyStatus(m_lastStatus);
@@ -641,7 +923,10 @@ Window::Window(bool smokeTest)
     });
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int) { ApplyStatus(m_lastStatus); });
     connect(m_tabs,&QTabWidget::currentChanged,this,[this](int index) {
-        if (!m_smokeTest && m_tabs->widget(index)->objectName() == "advancedPanel") RefreshDiagnostics();
+        if (!m_smokeTest && index == 2 && m_settingsTabs->currentIndex() == 2) RefreshDiagnostics();
+    });
+    connect(m_settingsTabs,&QTabWidget::currentChanged,this,[this](int index) {
+        if (!m_smokeTest && index == 2) RefreshDiagnostics();
     });
     barista::api::SessionStatus initialStatus;
     initialStatus.activating = !smokeTest;
@@ -658,6 +943,28 @@ Window::Window(bool smokeTest)
 }
 
 void Window::ShowWindow() { showNormal(); raise(); activateWindow(); }
+void Window::OpenPairing()
+{
+    ShowWindow();
+    m_tabs->setCurrentIndex(1);
+    m_pairDialog->show();
+    m_pairDialog->raise();
+    m_pair->setFocus();
+}
+
+void Window::InitializePairingPattern()
+{
+    const auto pattern = NewPairingPattern(*QRandomGenerator::global());
+    const QStringList shapes{"♠","♥","♦","♣"};
+    const QStringList names{"Spade","Heart","Diamond","Club"};
+    QString code;
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        m_pairSymbolLabels[i]->setText(shapes[pattern[i]]);
+        m_pairSymbolLabels[i]->setAccessibleName(QString("Pairing symbol %1: %2").arg(i + 1).arg(names[pattern[i]]));
+        code += QString::number(pattern[i]);
+    }
+    m_code->setText(code);
+}
 void Window::closeEvent(QCloseEvent* event)
 {
     if (m_quitting) { event->accept(); return; }
@@ -675,7 +982,7 @@ void Window::RunInBackground()
         }
     } else {
         showMinimized();
-        m_message->setText("Barista is running in the background. Use Quit Barista from the menu to stop and exit."); m_message->show();
+        m_message->setText("Barista is running in the background. Use Quit Barista in the sidebar or tray to stop and exit."); m_message->show();
     }
 }
 void Window::Quit()
@@ -722,7 +1029,7 @@ barista::api::SessionMode Window::Mode() const
 void Window::RefreshSavedGamePads()
 {
     ApplyGamePads({});
-    m_client.RefreshGamePads();
+    if (!m_smokeTest) m_client.RefreshGamePads();
 }
 void Window::RefreshDiagnostics()
 {
@@ -753,16 +1060,36 @@ void Window::ViewSelectedLog()
 }
 void Window::ApplyGamePads(const std::vector<barista::api::GamePad>& gamePads)
 {
-    auto records = LoadSavedGamePadsCache();
+    const QString selected = m_savedGamePads->currentItem()
+        ? m_savedGamePads->currentItem()->data(Qt::UserRole).toString() : QString();
+    auto records = m_smokeTest ? QMap<QString,QString>{} : LoadSavedGamePadsCache();
     for (const auto& gamePad : gamePads)
         records.insert(QString::fromStdString(gamePad.mac), QString::fromStdString(gamePad.name));
-    SaveSavedGamePadsCache(records);
+    if (!m_smokeTest) SaveSavedGamePadsCache(records);
     m_savedGamePads->clear();
     for (auto it = records.cbegin(); it != records.cend(); ++it) {
-        const QString name = it.value();
-        auto* item = new QListWidgetItem(name.isEmpty() ? it.key() : name + " — " + it.key(),m_savedGamePads);
+        const QString name = it.value().isEmpty() ? "Wii U GamePad" : it.value();
+        auto* item = new QListWidgetItem(CafeIcon(CafeSymbol::GamePad),name + "\nWii U GamePad · Saved pairing",m_savedGamePads);
+        item->setSizeHint(QSize(0,78));
         item->setData(Qt::UserRole,it.key());
+        item->setData(Qt::UserRole + 1,name);
+        if (it.key() == selected) m_savedGamePads->setCurrentItem(item);
     }
+    if (!m_savedGamePads->currentItem() && m_savedGamePads->count()) m_savedGamePads->setCurrentRow(0);
+    m_savedGamePads->setFixedHeight(std::clamp(m_savedGamePads->count() * 90 + 12,100,290));
+    m_savedGamePads->setVisible(m_savedGamePads->count() > 0);
+    m_noGamePads->setVisible(m_savedGamePads->count() == 0);
+    UpdateHomeDevice();
+}
+
+void Window::UpdateHomeDevice()
+{
+    const int count = m_savedGamePads->count();
+    m_deviceTitle->setText(count == 1 ? m_savedGamePads->item(0)->data(Qt::UserRole + 1).toString() : "Wii U GamePad");
+    m_homeDeviceDetail->setText(m_lastStatus.gamePadConnected ? "Wii U GamePad · Connected" :
+        m_lastStatus.running ? "Turn on your paired GamePad and keep it nearby." :
+        count == 0 ? "No saved GamePads listed. Add one from the GamePads page." :
+        QString("%1 saved pairing%2 · Ready to reconnect").arg(count).arg(count == 1 ? "" : "s"));
 }
 void Window::ApplyStatus(const barista::api::SessionStatus& status)
 {
@@ -775,12 +1102,14 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     const bool owned = status.ownedByCaller;
     const bool connected = status.gamePadConnected;
     const auto phase = status.phase;
+    UpdateHomeDevice();
     const QString phaseText = QString::fromLatin1(barista::api::SessionPhaseName(phase));
     if (previousRunning && !running) RefreshDiagnostics();
     if (m_pairingRequested && phase == barista::api::SessionPhase::Runtime &&
         previousPhase != barista::api::SessionPhase::Runtime) {
         RefreshSavedGamePads();
         m_pairingRequested = false;
+        m_pairDialog->hide();
         m_tabs->setCurrentIndex(0);
         m_message->setText("GamePad paired successfully. A session is now running.");
         m_message->show();
@@ -798,7 +1127,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         hint = "Starting Barista in the background…";
     } else if (!available) {
         sessionText = "● Service unavailable"; sessionTone = Tone::Bad;
-        hint = "Automatic startup did not complete. Open Advanced to check setup or retry.";
+        hint = "Automatic startup did not complete. Open Settings → Support to retry.";
     } else if (phase == barista::api::SessionPhase::Stopping) {
         sessionText = "● Stopping"; sessionTone = Tone::Warning;
         hint = "Releasing the Wi-Fi adapter…";
@@ -816,12 +1145,19 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         hint = "Turn on your paired GamePad and keep it nearby.";
     } else {
         sessionText = "● Ready";
-        hint = "Select Start for a paired GamePad, or open Pair GamePad for a new one.";
+        hint = "Start a session to connect your paired GamePad. For a new device, open GamePads.";
     }
     m_status->setText(sessionText);
     SetTone(m_status,sessionTone,true);
+    m_homeStatus->setText(sessionText);
+    SetTone(m_homeStatus,sessionTone,true);
     m_hint->setText(hint);
     SetTone(m_hint,sessionTone);
+    m_hint->show();
+    m_waitingStatus->setText(busy ? "Preparing your connection…" : "Waiting for your GamePad");
+    m_waitingAdapter->setText("GamePad Wi-Fi adapter\n" + InterfaceName(m_interface));
+    if (connected || (!running && !busy) || phase == barista::api::SessionPhase::Failed)
+        m_waitingDialog->hide();
 
     const auto sessionMode = status.mode.value_or(barista::api::SessionMode::Real);
     const auto ifaceName = QString::fromStdString(status.interfaceName);
@@ -832,6 +1168,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         m_gamepadBattery->setText(QString("%1%").arg(*status.batteryPercent));
     else
         m_gamepadBattery->setText("—");
+    m_gamepadBattery->setVisible(status.batteryPercent.has_value());
+    m_gamepadBattery->setAccessibleName("GamePad battery");
     if (connected) {
         m_gamepadState->setText("● Connected (5 GHz GamePad Wi-Fi)");
         SetTone(m_gamepadState, Tone::Good, true);
@@ -887,8 +1225,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         m_appLogoSource = source;
         const QPixmap logo = source.isEmpty() ? QPixmap{} : AppLogoPreview(source);
         if (logo.isNull()) {
-            m_appLogo->setPixmap({});
-            m_appLogo->setText(appConnected ? "No app\nicon" : "No app\nconnected");
+            m_appLogo->setText({});
+            m_appLogo->setPixmap(CafeIcon(CafeSymbol::GamePad,QColor("#8b705a")).pixmap(30,30));
             return;
         }
         m_appLogo->setText({});
@@ -905,7 +1243,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         m_appLastSeen->setText("—");
         m_appSocket->setText("—");
     } else if (sessionMode == barista::api::SessionMode::Controller) {
-        m_appName->setText("Virtual PC Controller (uinput)");
+        m_appName->setText("PC controller ready");
         SetTone(m_appName, Tone::Good, false);
         m_appLock->setText("Not applicable in controller mode");
         SetTone(m_appLock, Tone::Neutral, false);
@@ -913,7 +1251,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         m_appLastSeen->setText("Active");
         m_appSocket->setText("Internal controller bridge");
     } else if (appConnected) {
-        m_appName->setText(QString("%1 (PID %2)").arg(appName.isEmpty() ? "Connected App" : appName).arg(appPid));
+        m_appName->setText(appName.isEmpty() ? "Connected application" : appName);
+        m_appName->setToolTip(QString("Process ID: %1").arg(appPid));
         SetTone(m_appName, Tone::Good, true);
         m_appLock->setText(QString("Locked by %1").arg(appName.isEmpty() ? "active app" : appName));
         SetTone(m_appLock, Tone::Good, false);
@@ -925,7 +1264,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         m_appLastSeen->setText(diff == 0 ? "Active just now" : QString("%1s ago").arg(diff));
         m_appSocket->setText(mediaEndpoint.isEmpty() ? "Active" : mediaEndpoint);
     } else {
-        m_appName->setText("Waiting for application (e.g. Cemu)");
+        m_appName->setText("No application connected");
         SetTone(m_appName, Tone::Warning, false);
         m_appLock->setText("Unlocked");
         SetTone(m_appLock, Tone::Neutral, false);
@@ -935,6 +1274,12 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         m_appLastSeen->setText("—");
         m_appSocket->setText(mediaEndpoint.isEmpty() ? "Listening" : mediaEndpoint);
     }
+    m_appSummary->setText(!running ? "Connect your GamePad to get started." :
+        sessionMode == barista::api::SessionMode::Controller ? "Ready for PC games. Barista stays on the screen." :
+        appConnected ? "Screen, audio, and controls connected." : "Open a supported app on your computer.");
+    if (!appConnected) m_appName->setToolTip({});
+    m_start->setVisible(!running);
+    m_stop->setVisible(running);
     const bool supported = Mode() != barista::api::SessionMode::Controller || status.capabilities.controller ||
         status.capabilities.controllerSetup;
     const std::string country = m_country->text().trimmed().toUpper().toStdString();
@@ -944,6 +1289,10 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         barista::api::ParsePairCode(m_code->text().toStdString()).has_value() &&
         validCountry);
     m_stop->setEnabled(available && running && !busy && owned && phase != barista::api::SessionPhase::Stopping);
+    m_waitingStop->setEnabled(m_stop->isEnabled());
+    const bool canEditPair = available && !running && !busy && m_savedGamePads->currentItem();
+    m_renamePair->setEnabled(canEditPair);
+    m_removePair->setEnabled(canEditPair);
     m_trayStart->setEnabled(m_start->isEnabled());
     m_trayStop->setEnabled(m_stop->isEnabled());
     m_tray->setToolTip("Barista — " + m_status->text());
@@ -978,19 +1327,21 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     SetTone(m_health["tools"],!available ? Tone::Neutral : missing.isEmpty() ? Tone::Good : Tone::Bad);
     m_interface->setEnabled(!running && !busy);
     m_mode->setEnabled(!running && !busy);
-    m_pairSymbols->setEnabled(!running && !busy);
-    const QString pairInterface = InterfaceName(m_pairInterface);
+    m_screenMode->setEnabled(!running && !busy);
+    m_controllerMode->setEnabled(!running && !busy);
+    m_country->setEnabled(!running && !busy);
+    const QString pairInterface = InterfaceName(m_interface);
     QString pairStatus;
     Tone pairStatusTone = Tone::Neutral;
     if (!available) {
-        pairStatus = "Pairing unavailable — check the service status in Advanced.";
+        pairStatus = "Pairing unavailable — check Settings → Support.";
         pairStatusTone = Tone::Bad;
     } else if (busy || phase == barista::api::SessionPhase::Starting) {
         pairStatus = QString("Starting pairing on %1… Preparing the Wi-Fi adapter. Wait for “Pair now” before using SYNC.")
             .arg(pairInterface);
         pairStatusTone = Tone::Warning;
     } else if (phase == barista::api::SessionPhase::Pairing) {
-        pairStatus = QString("Pair now — the pairing network is ready on %1. Press SYNC on the GamePad and enter the four symbols selected above. The GamePad submits automatically after the fourth symbol.")
+        pairStatus = QString("Pair now — the pairing network is ready on %1. Press SYNC on the GamePad and enter the four symbols below. The GamePad submits automatically after the fourth symbol.")
             .arg(pairInterface);
         pairStatusTone = Tone::Good;
     } else if (status.error && status.error->diagnosticCode == "AP_REGULATORY_BLOCKED") {
@@ -1000,17 +1351,16 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         pairStatus = "Pairing is unavailable while another GamePad session is running.";
         pairStatusTone = Tone::Warning;
     } else if (!supported) {
-        pairStatus = "Pairing cannot start in the selected mode. Check Advanced or select Screen + controller.";
+        pairStatus = "Pairing cannot start in the selected mode. Check Settings → Support, or select Screen + controller in Settings → General.";
         pairStatusTone = Tone::Bad;
     } else {
-        pairStatus = QString("Ready to start pairing on %1. Choose four symbols, then select Start pairing.")
+        pairStatus = QString("Ready to start pairing on %1. Select Start pairing to begin.")
             .arg(pairInterface);
     }
     m_pairStatus->setText(pairStatus);
     SetTone(m_pairStatus,pairStatusTone,true);
     m_pair->setText(busy || phase == barista::api::SessionPhase::Starting ? "Starting pairing…" :
         phase == barista::api::SessionPhase::Pairing ? "Pairing active" : "Start pairing");
-    m_pairInterface->setEnabled(!running && !busy);
     m_endpoint->setText(mediaEndpoint);
     m_copy->setEnabled(!m_endpoint->text().isEmpty());
     const auto error = m_operationError.isEmpty()
@@ -1029,7 +1379,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         .arg(QString::fromStdString(status.platform),phaseText,
             QString::fromLatin1(barista::api::SessionModeName(sessionMode))));
     if (available && !error.isEmpty()) {
-        m_hint->setText("The last operation reported a problem. See Advanced for details before trying again.");
+        m_hint->setText("The last operation reported a problem. Open Settings → Support before trying again.");
+        m_hint->show();
         SetTone(m_hint,Tone::Bad);
     }
 }

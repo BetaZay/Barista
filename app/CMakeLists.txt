@@ -15,13 +15,35 @@ if(NOT BARISTA_BUILD_DESKTOP)
     return()
 endif()
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network Svg)
 set(CMAKE_AUTOMOC ON)
-add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/control_client.cpp gui/control_client.h
+set(BARISTA_INTERFACE_ICONS
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/dropdown.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/home.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/gamepad-alt.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/computer.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/signal-high.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/cog.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/info-circle.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/plus.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/caret-right.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/stop.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/reload.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/external.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/save.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/pencil.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/trash.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/exit.svg"
+    "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/copy.svg"
+)
+add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/cafe_icons.cpp gui/cafe_icons.h
+    gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h gui/control_client.cpp gui/control_client.h
     gui/single_instance.cpp gui/single_instance.h)
-target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network barista_core)
+target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
 qt_add_resources(barista branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
     FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
+qt_add_resources(barista interface_icons PREFIX "/barista/icons" BASE "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons"
+    FILES ${BARISTA_INTERFACE_ICONS})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 REQUIRED COMPONENTS DBus)
     target_link_libraries(barista PRIVATE Qt6::DBus)
@@ -72,10 +94,14 @@ if(BUILD_TESTING)
     target_link_libraries(barista_instance_test PRIVATE Qt6::Network)
     add_test(NAME barista_single_instance COMMAND barista_instance_test)
     set_tests_properties(barista_single_instance PROPERTIES TIMEOUT 10)
-    add_executable(barista_window_test gui/window_test.cpp gui/window.cpp gui/window.h gui/control_client.cpp gui/control_client.h)
-    target_link_libraries(barista_window_test PRIVATE Qt6::Widgets Qt6::Network barista_core)
+    add_executable(barista_window_test gui/window_test.cpp gui/window.cpp gui/window.h
+        gui/cafe_icons.cpp gui/cafe_icons.h gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h
+        gui/control_client.cpp gui/control_client.h)
+    target_link_libraries(barista_window_test PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
     qt_add_resources(barista_window_test test_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
         FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
+    qt_add_resources(barista_window_test test_interface_icons PREFIX "/barista/icons" BASE "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons"
+        FILES ${BARISTA_INTERFACE_ICONS})
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(barista_window_test PRIVATE Qt6::DBus)
         target_compile_definitions(barista_window_test PRIVATE BARISTA_LINUX_CONTROL=1)
@@ -85,5 +111,9 @@ if(BUILD_TESTING)
     add_test(NAME barista_gui_smoke COMMAND barista --smoke-test)
     add_test(NAME barista_pairing_smoke COMMAND barista --smoke-test --smoke-pairing)
     add_test(NAME barista_advanced_smoke COMMAND barista --smoke-test --smoke-advanced)
-    set_tests_properties(barista_gui_smoke barista_pairing_smoke barista_advanced_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+    add_test(NAME barista_settings_smoke COMMAND barista --smoke-test --smoke-settings)
+    add_test(NAME barista_connection_smoke COMMAND barista --smoke-test --smoke-connection)
+    add_test(NAME barista_about_smoke COMMAND barista --smoke-test --smoke-about)
+    set_tests_properties(barista_gui_smoke barista_pairing_smoke barista_advanced_smoke
+        barista_settings_smoke barista_connection_smoke barista_about_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
 endif()

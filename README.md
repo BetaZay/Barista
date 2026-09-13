@@ -81,11 +81,22 @@ For additional confirmed and incompatible hardware reports, see
 ## Use
 
 Install Barista, then open it normally from the desktop launcher. The system
-service is activated on demand; use **Start** to authorize the Wi-Fi takeover.
-Use **Pair GamePad** only when pairing is needed. Closing the window keeps it in
-the tray by default.
+service is activated on demand; use **Connect GamePad** to authorize the Wi-Fi
+takeover. The café interface has cream content pages and a brown sidebar for
+**Home**, **GamePads**, and **Settings**. Home shows the session,
+battery when available, and connected application. **GamePads → Pair a GamePad**
+opens the pairing dialog; **Settings** contains the adapter, country, play mode,
+and tray preference in its **General** tab. **Session info** (read-only), **Support** (diagnostics),
+and **About** are separate Settings tabs. **Disconnect GamePad** ends the session and releases the
+Wi-Fi adapter. Closing the window keeps it in the tray by default.
+Use **Quit Barista** at the bottom of the sidebar or in the tray menu to stop the session and exit.
 
-The Advanced page displays the automatically managed AppHook endpoint. Clients
+Each launch generates a new random four-symbol pattern for new pairings. The
+pairing dialog displays the symbols to enter on the GamePad; configure the Wi-Fi
+adapter and country beforehand in Settings. Existing GamePads reconnect using
+their saved credentials; generating a pattern does not replace those credentials.
+
+**Settings → Support** displays the automatically managed AppHook endpoint. Clients
 should use that default endpoint; the environment variable is only an optional
 development override:
 
@@ -98,7 +109,7 @@ owned and permissioned for the desktop user; applications must not run as root.
 
 ## Troubleshooting and support logs
 
-Open **Advanced** when a session does not start, pair, connect, or stream
+Open **Settings → Support** when a session does not start, pair, connect, or stream
 correctly. Barista shows a diagnostic code with a suggested next step. Use
 **View log** to inspect an individual run, pairing-cycle, or maintenance log, **Open log
 folder** to browse retained logs, or **Copy support report** to collect the
@@ -110,7 +121,7 @@ addresses, SSIDs, pairing codes, credentials, usernames, and raw hostapd output.
 Detailed private engine logs remain available to administrators for local
 investigation and should be reviewed before being shared.
 
-If Advanced reports `AP_REGULATORY_BLOCKED`, check the active country with
+If Connection reports `AP_REGULATORY_BLOCKED`, check the active country with
 `iw reg get`. A `country 00` world domain commonly marks 5 GHz channels
 `no IR`, so the kernel prevents hostapd from transmitting AP beacons; firewall
 changes do not affect this failure. The GUI suggests a two-letter country from

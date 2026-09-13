@@ -15,7 +15,7 @@ the `libnl` development packages required by hostapd. On Linux, `pkcheck`,
 
 Package names vary. On Debian/Ubuntu-like distributions the relevant package
 families are commonly `build-essential`, `cmake`, `ninja-build`, `git`,
-`python3`, `qt6-base-dev`, `libssl-dev`, `libnl-3-dev`, and
+`python3`, `qt6-base-dev`, `qt6-svg-dev`, `libssl-dev`, `libnl-3-dev`, and
 `libnl-genl-3-dev`. Install the matching Qt 6 DBus development package if your
 distribution splits it out.
 
