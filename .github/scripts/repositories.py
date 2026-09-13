@@ -16,6 +16,7 @@ import sys
 
 TARGETS = ("ubuntu-24.04-x86_64", "fedora-44-x86_64", "arch-x86_64")
 PATTERN = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def version(value):
@@ -188,7 +189,7 @@ def prepare():
     site = Path("site")
     site.mkdir(exist_ok=False)
     (site / "barista.asc").write_text(run("gpg", "--armor", "--export", fingerprint) + "\n")
-    shutil.copy2("install.sh", site / "install.sh")
+    shutil.copy2(REPOSITORY_ROOT / "install.sh", site / "install.sh")
     (site / "install.sh").chmod(0o755)
     (site / "index.html").write_text('<!doctype html><title>Barista updates</title><h1>Barista package repositories</h1><p>See <a href="https://github.com/BetaZay/Barista/blob/main/docs/updates.md">setup instructions</a>.</p>')
     channels = {"preview": sorted(keep, key=version)}
