@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Kenney caret-right, rotated down and tinted for cream controls. CC0. -->
+  <g transform="translate(32 0) rotate(90)" fill="#70513a">
+    <path d="M6.668,0.792C7.063,0.397,7.54,0.2,8.1,0.2h1.975l15.8,15.8l-15.8,15.8 H8.1c-0.56,0-1.037-0.181-1.432-0.543c-0.362-0.396-0.543-0.872-0.543-1.432V2.224C6.125,1.665,6.306,1.188,6.668,0.792"/>
+  </g>
+</svg>

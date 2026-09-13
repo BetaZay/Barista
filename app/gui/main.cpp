@@ -8,6 +8,7 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QMessageBox>
+#include <QDialog>
 #include <memory>
 #ifdef BARISTA_LINUX_CONTROL
 #include <unistd.h>
@@ -50,14 +51,23 @@ int main(int argc,char** argv)
     if (instance) QObject::connect(instance.get(),&SingleInstance::ShowRequested,&window,&Window::ShowWindow);
     if (!smoke && app.arguments().contains("--background")) window.RunInBackground();
     if (smoke && app.arguments().contains("--smoke-pairing"))
-        window.findChild<QTabWidget*>()->setCurrentIndex(1);
-    if (smoke && app.arguments().contains("--smoke-advanced"))
-        window.findChild<QTabWidget*>()->setCurrentIndex(2);
+        window.OpenPairing();
+    if (smoke && (app.arguments().contains("--smoke-advanced") ||
+        app.arguments().contains("--smoke-settings") || app.arguments().contains("--smoke-about") ||
+        app.arguments().contains("--smoke-connection"))) {
+        window.findChild<QTabWidget*>("mainPages")->setCurrentIndex(2);
+        window.findChild<QTabWidget*>("settingsTabs")->setCurrentIndex(
+            app.arguments().contains("--smoke-about") ? 3 : app.arguments().contains("--smoke-advanced") ? 2 :
+            app.arguments().contains("--smoke-connection") ? 1 : 0);
+    }
     if (smoke) QTimer::singleShot(200,&app,[&] {
         const auto index = app.arguments().indexOf("--smoke-screenshot");
         if (index >= 0) {
             const auto path = app.arguments().value(index+1);
-            if (path.isEmpty() || QFileInfo::exists(path) || !window.grab().save(path)) { app.exit(1); return; }
+            QWidget* target = &window;
+            if (app.arguments().contains("--smoke-pairing"))
+                target = window.findChild<QDialog*>("pairingDialog");
+            if (!target || path.isEmpty() || QFileInfo::exists(path) || !target->grab().save(path)) { app.exit(1); return; }
         }
         window.Quit();
     });
