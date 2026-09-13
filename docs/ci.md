@@ -50,7 +50,9 @@ file does not itself configure GitHub branch protection.
 Continuous assigns one `major.minor.build` version to all three packages. Only
 a successful full pipeline on a code-changing push to `main` can supply new
 packages to the protected repository publisher, and only after the maintainer
-enables it. PRs, docs-only pushes, and manual validation runs do not publish.
+enables it. PRs and docs-only pushes do not publish. A manual Continuous run on
+`main` performs the full pipeline and publishes only when repositories are
+enabled; this provides an explicit bootstrap and recovery path.
 
 The publisher signs and archives Preview packages, assembles signed APT/RPM/
 pacman repositories, and deploys GitHub Pages. A separate manual operation

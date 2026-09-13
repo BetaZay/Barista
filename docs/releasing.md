@@ -18,7 +18,8 @@
    credentials and Pages are ready. Until then, CI builds/tests packages but
    intentionally skips publishing. The old `continuous` release remains a
    historical download, not an update feed.
-5. Push a code change through normal review and CI. Validate the Preview
+5. Push a code change through normal review and CI, or manually dispatch the
+   full Continuous workflow on `main`. Validate the Preview
    repositories on all three target systems, then manually run **Package
    repositories** on `main` with its version in `promote`. A blank value only
    refreshes metadata; the scheduled weekly run does the same.

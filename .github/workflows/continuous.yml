@@ -323,7 +323,7 @@ jobs:
 
   release:
     name: Publish Preview repositories
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true' && vars.BARISTA_REPOSITORIES_ENABLED == 'true'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true' && vars.BARISTA_REPOSITORIES_ENABLED == 'true'
     needs: [changes, required]
     uses: ./.github/workflows/repositories.yml
     permissions:
