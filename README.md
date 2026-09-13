@@ -26,8 +26,8 @@ limitations. Windows and macOS currently support the portable UI/core only.
 
 ## Getting started
 
-Signed repositories support Ubuntu 24.04, Fedora 44, and Arch Linux on x86_64.
-Choose one update channel:
+Signed repositories support Ubuntu 24.04, Fedora 44, Arch Linux, and compatible
+derivatives such as CachyOS on x86_64. Choose one update channel:
 
 Stable (recommended after the first Preview build is promoted):
 

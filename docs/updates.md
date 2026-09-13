@@ -13,8 +13,10 @@ The signed Preview repositories are live. Stable becomes available when a
 tested Preview build is promoted. Do not import an unverified key or disable
 signature checks to work around an unavailable repository.
 
-Initial package repositories support **Ubuntu 24.04, Fedora 44, and Arch Linux,
-x86_64 only**. Ubuntu packages are not a promise of Debian compatibility.
+Initial package repositories support **Ubuntu 24.04, Fedora 44, Arch Linux, and
+compatible derivatives, x86_64 only**. The installer recognizes derivatives
+through `/etc/os-release`; for example, CachyOS uses the Arch package. Ubuntu
+packages are not a promise of Debian compatibility.
 
 ## Subscribe once
 

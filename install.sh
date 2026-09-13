@@ -32,22 +32,31 @@ fi
 # shellcheck disable=SC1091
 . /etc/os-release
 
-case "${ID:-}" in
-    ubuntu)
-        [ "${VERSION_ID:-}" = "24.04" ] || fail "only Ubuntu 24.04 is currently supported"
-        package_manager="apt"
-        ;;
-    fedora)
-        [ "${VERSION_ID:-}" = "44" ] || fail "only Fedora 44 is currently supported"
-        package_manager="dnf"
-        ;;
-    arch)
-        package_manager="pacman"
-        ;;
-    *)
-        fail "supported distributions are Ubuntu 24.04, Fedora 44, and Arch Linux"
-        ;;
-esac
+id_like_contains()
+{
+    case " ${ID_LIKE:-} " in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if [ "${ID:-}" = "arch" ] || id_like_contains arch; then
+    command -v pacman >/dev/null 2>&1 || fail "this Arch-based system does not provide pacman"
+    package_manager="pacman"
+elif [ "${ID:-}" = "ubuntu" ] || id_like_contains ubuntu; then
+    ubuntu_codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+    if [ "${VERSION_ID:-}" != "24.04" ] && [ "$ubuntu_codename" != "noble" ]; then
+        fail "only Ubuntu 24.04 (Noble) and derivatives based on it are currently supported"
+    fi
+    command -v apt-get >/dev/null 2>&1 || fail "this Ubuntu-based system does not provide apt-get"
+    package_manager="apt"
+elif [ "${ID:-}" = "fedora" ] || id_like_contains fedora; then
+    [ "${VERSION_ID:-}" = "44" ] || fail "only Fedora 44 and derivatives based on it are currently supported"
+    command -v dnf >/dev/null 2>&1 || fail "this Fedora-based system does not provide dnf"
+    package_manager="dnf"
+else
+    fail "supported systems are Ubuntu 24.04, Fedora 44, Arch Linux, and compatible derivatives"
+fi
 
 printf 'Installing Barista from the %s channel on %s...\n' "$channel" "${PRETTY_NAME:-${ID}}"
 
