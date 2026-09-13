@@ -59,6 +59,11 @@ See the [user guide](docs/user-guide.md) for pairing, play modes, and running
 compatible applications. If something fails, open **Settings → Support** and
 check the [troubleshooting guide](docs/troubleshooting.md).
 
+## Community
+
+Join the [Barista Discord server](https://discord.gg/HNhEUW2tWj) for help,
+development discussion, and project updates.
+
 ## Compatible projects
 
 Experimental integrations are available in these forks; they are not features
