@@ -28,6 +28,11 @@ A newer commit cancels the previous run for the same PR.
   or test actual Wi-Fi pairing or adapter cleanup.
 - Failed builds retain CTest/configuration logs for 14 days. Installation
   failures retain the container output. Jobs and tests have explicit timeouts.
+- Signed repository integration uses disposable keys and fake GitHub storage
+  with real APT/RPM/pacman repository tools. It checks signatures, archive
+  immutability, byte-identical promotion, interrupted-promotion recovery, and
+  signed APT installation/upgrades into an isolated package root. No production
+  credentials or publication permissions are needed for this check.
 
 ## Required check on main
 
@@ -40,21 +45,21 @@ After the workflow has run once, select **CI required** in GitHub's required
 status checks. Keep any existing review/security protections. This repository
 file does not itself configure GitHub branch protection.
 
-## Continuous release
+## Releases and update repositories
 
-Only a successful full pipeline on a push to `main` can publish. Publishing is
-serialized and checks that its commit still matches `main`, both before and
-after uploading. Docs-only pushes do not publish; manual runs validate but do
-not publish either.
+Continuous assigns one `major.minor.build` version to all three packages. Only
+a successful full pipeline on a code-changing push to `main` can supply new
+packages to the protected repository publisher, and only after the maintainer
+enables it. PRs, docs-only pushes, and manual validation runs do not publish.
 
-The `continuous` release remains in place. New package assets have names that
-include the source SHA and run identifiers; they are uploaded before moving the
-tag, updating the release metadata, and pruning previous package assets.
-An upload failure leaves previous packages available. An interrupted/stale upload
-may leave additional versioned assets, which a subsequent successful publish
-prunes. Consumers should discover asset names rather than assume fixed filenames.
+The publisher signs and archives Preview packages, assembles signed APT/RPM/
+pacman repositories, and deploys GitHub Pages. A separate manual operation
+promotes an existing Preview to Stable without rebuilding. Weekly runs refresh
+metadata. Publication and promotion share one concurrency lock.
 
-GitHub must permit mutable releases for this rolling prerelease strategy.
+The old `continuous` release remains untouched as a historical download. It is
+no longer updated or used as an update feed. See [release administration](releasing.md)
+for signing secrets, Pages setup, immutable archives, retention, and recovery.
 
 ## Local checks
 

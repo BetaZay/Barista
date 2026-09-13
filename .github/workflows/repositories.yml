@@ -1,0 +1,84 @@
+name: Package repositories
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      source:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      promote:
+        description: 'Preview version to promote to Stable; blank refreshes metadata'
+        type: string
+        default: ''
+  schedule:
+    - cron: '17 5 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: barista-repositories
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && vars.BARISTA_REPOSITORIES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ inputs.version || '' }}
+      RELEASE_SOURCE: ${{ inputs.source || '' }}
+      PROMOTE_VERSION: ${{ inputs.promote || '' }}
+      SIGNING_FINGERPRINT: ${{ vars.BARISTA_SIGNING_FINGERPRINT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: inputs.version != '' && inputs.version != null
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apt-utils rpm createrepo-c gnupg zstd
+      - name: Import dedicated signing subkey
+        env:
+          SIGNING_KEY: ${{ secrets.BARISTA_SIGNING_KEY }}
+          GNUPGHOME: ${{ runner.temp }}/barista-signing
+        run: |
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          install -d -m 700 "$GNUPGHOME"
+          printf '%s' "$SIGNING_KEY" | gpg --batch --import
+          gpg --batch --list-secret-keys "$SIGNING_FINGERPRINT"
+      - name: Archive and assemble signed repositories
+        run: python3 .github/scripts/repositories.py prepare
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
+        id: deploy
+      - name: Record successful Stable promotion
+        run: python3 .github/scripts/repositories.py finalize
+      - name: Remove signing material
+        if: always()
+        run: |
+          gpgconf --kill gpg-agent || true
+          python3 -c 'import os, pathlib, shutil; p = pathlib.Path(os.environ["RUNNER_TEMP"]) / "barista-signing"; shutil.rmtree(p, ignore_errors=True)'

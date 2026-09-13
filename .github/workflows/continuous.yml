@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       build: ${{ steps.changes.outputs.build }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +34,8 @@ jobs:
           persist-credentials: false
       - id: changes
         run: python3 .github/scripts/changes.py
+      - id: version
+        run: python3 .github/scripts/version.py
 
   docs:
     name: Documentation and CI checks
@@ -45,13 +48,13 @@ jobs:
       - run: python3 .github/scripts/check_docs.py
       - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - run: |
-          for script in .github/scripts/*.sh; do bash -n "$script"; done
+          for script in .github/scripts/*.sh packaging/linux/package-hooks.sh; do bash -n "$script"; done
       - name: Lint GitHub Actions workflow
         run: |
           docker run --rm -v "$PWD:/repo:ro" -w /repo \
             rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
           docker run --rm -v "$PWD:/repo:ro" -w /repo --entrypoint shellcheck \
-            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 .github/scripts/*.sh
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 .github/scripts/*.sh packaging/linux/package-hooks.sh
 
   test:
     name: Linux build and tests
@@ -112,6 +115,8 @@ jobs:
   deb:
     name: Debian package and Release tests
     needs: changes
+    env:
+      BARISTA_VERSION: ${{ needs.changes.outputs.version }}
     if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -127,7 +132,7 @@ jobs:
             qt6-base-dev qt6-svg-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
       - name: Build and test package
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DBARISTA_VERSION="$BARISTA_VERSION"
           cmake --build build --parallel 4
           ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
           cpack --config build/CPackConfig.cmake -G DEB -B dist
@@ -149,10 +154,12 @@ jobs:
   rpm:
     name: Fedora package and Release tests
     needs: changes
+    env:
+      BARISTA_VERSION: ${{ needs.changes.outputs.version }}
     if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    container: fedora:latest
+    container: fedora:44
     steps:
       - uses: actions/checkout@v4
         with:
@@ -170,6 +177,7 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DBARISTA_VERSION="$BARISTA_VERSION" \
             -DDRCD_TEST_FFMPEG="$RUNNER_TEMP/barista-test-ffmpeg/bin/ffmpeg"
           cmake --build build --parallel 4
           useradd --create-home tester
@@ -195,6 +203,8 @@ jobs:
   arch:
     name: Arch package and Release tests
     needs: changes
+    env:
+      BARISTA_VERSION: ${{ needs.changes.outputs.version }}
     if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -245,7 +255,7 @@ jobs:
           - package: deb
             image: ubuntu:24.04
           - package: rpm
-            image: fedora:latest
+            image: fedora:44
           - package: arch
             image: archlinux:latest
     steps:
@@ -260,8 +270,9 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
           PACKAGE: ${{ matrix.package }}
+          EXPECTED_VERSION: ${{ needs.changes.outputs.version }}
         run: |
-          docker run --rm -v "$PWD/dist:/packages:ro" -v "$PWD/.github/scripts:/checks:ro" \
+          docker run --rm -e EXPECTED_VERSION -v "$PWD/dist:/packages:ro" -v "$PWD/.github/scripts:/checks:ro" \
             "$IMAGE" bash /checks/install-package.sh "$PACKAGE" 2>&1 | tee install.log
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -270,10 +281,26 @@ jobs:
           path: install.log
           retention-days: 14
 
+  repositories-test:
+    name: Signed repository integration
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test with disposable signing keys and fake GitHub storage
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            -e BARISTA_REPOSITORY_TOOLS_TEST=1 ubuntu:24.04 bash -c \
+            'apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 apt-utils rpm createrepo-c gnupg pacman-package-manager makepkg libarchive-tools zstd file binutils && python3 -m unittest discover -s .github/scripts -p test_repository_tools.py'
+
   required:
     name: CI required
     if: always()
-    needs: [changes, docs, test, desktop, deb, rpm, arch, install]
+    needs: [changes, docs, test, desktop, deb, rpm, arch, install, repositories-test]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -288,36 +315,22 @@ jobs:
           assert jobs["docs"]["result"] == "success", "Documentation/CI checks failed"
           full = jobs["changes"]["outputs"].get("build")
           assert full in ("true", "false"), "Missing build decision"
-          for job in ("test", "desktop", "deb", "rpm", "arch", "install"):
+          for job in ("test", "desktop", "deb", "rpm", "arch", "install", "repositories-test"):
               expected = "success" if full == "true" else "skipped"
               assert jobs[job]["result"] == expected, f"{job}: {jobs[job]['result']}"
           print("All applicable checks passed")
           PY
 
   release:
-    name: Update Continuous release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true'
+    name: Publish Preview repositories
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.build == 'true' && vars.BARISTA_REPOSITORIES_ENABLED == 'true'
     needs: [changes, required]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    concurrency:
-      group: continuous-release
-      cancel-in-progress: false
+    uses: ./.github/workflows/repositories.yml
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: package-*
-          path: dist
-          merge-multiple: true
-      - name: Publish tested packages
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
-          GH_REPO: ${{ github.repository }}
-        run: bash .github/scripts/publish-release.sh
+      pages: write
+      id-token: write
+    with:
+      version: ${{ needs.changes.outputs.version }}
+      source: ${{ github.sha }}
+    secrets: inherit

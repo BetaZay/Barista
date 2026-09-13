@@ -49,6 +49,7 @@ barista::api::SessionStatus DecodeStatus(const QVariantMap& value)
 {
     barista::api::SessionStatus status;
     status.apiVersion = value.value("apiVersion", barista::api::ApiVersion).toUInt();
+    status.serviceVersion = value.value("serviceVersion").toString().toStdString();
     status.available = value.value("available").toBool();
     status.activating = value.value("activating").toBool();
     status.platform = value.value("platform").toString().toStdString();

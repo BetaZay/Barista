@@ -38,7 +38,7 @@ set(BARISTA_INTERFACE_ICONS
 )
 add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/cafe_icons.cpp gui/cafe_icons.h
     gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h gui/control_client.cpp gui/control_client.h
-    gui/single_instance.cpp gui/single_instance.h)
+    gui/single_instance.cpp gui/single_instance.h gui/update_checker.cpp gui/update_checker.h)
 target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
 qt_add_resources(barista branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
     FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
@@ -92,13 +92,16 @@ install(TARGETS barista RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ../packaging/org.barista.Barista.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES ../barista-logo.png DESTINATION ${CMAKE_INSTALL_DATADIR}/pixmaps RENAME org.barista.Barista.png)
 if(BUILD_TESTING)
+    add_executable(barista_update_test gui/update_checker_test.cpp gui/update_checker.cpp gui/update_checker.h)
+    target_link_libraries(barista_update_test PRIVATE Qt6::Network)
+    add_test(NAME barista_updates COMMAND barista_update_test)
     add_executable(barista_instance_test gui/single_instance_test.cpp gui/single_instance.cpp gui/single_instance.h)
     target_link_libraries(barista_instance_test PRIVATE Qt6::Network)
     add_test(NAME barista_single_instance COMMAND barista_instance_test)
     set_tests_properties(barista_single_instance PROPERTIES TIMEOUT 10)
     add_executable(barista_window_test gui/window_test.cpp gui/window.cpp gui/window.h
         gui/cafe_icons.cpp gui/cafe_icons.h gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h
-        gui/control_client.cpp gui/control_client.h)
+        gui/control_client.cpp gui/control_client.h gui/update_checker.cpp gui/update_checker.h)
     target_link_libraries(barista_window_test PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
     qt_add_resources(barista_window_test test_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
         FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")

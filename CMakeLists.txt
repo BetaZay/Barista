@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
-project(Barista VERSION 0.1.0 LANGUAGES C CXX)
+include(cmake/Version.cmake)
+project(Barista VERSION ${BARISTA_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,49 +11,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$" AND CMAKE_CXX_COMPILER_ID M
     add_link_options(-mprefer-vector-width=128)
 endif()
 
-# Determine Barista version from git metadata when available
-if(NOT DEFINED BARISTA_VERSION OR BARISTA_VERSION STREQUAL "")
-    set(BARISTA_VERSION "0.1.0")
-    find_package(Git QUIET)
-    if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
-        execute_process(
-            COMMAND ${GIT_EXECUTABLE} describe --tags --match=[0-9]* --match=v[0-9]* --long
-            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            OUTPUT_VARIABLE BARISTA_GIT_DESCRIBE
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-        if(BARISTA_GIT_DESCRIBE)
-            string(REGEX REPLACE "^v" "" BARISTA_GIT_DESCRIBE "${BARISTA_GIT_DESCRIBE}")
-            string(REGEX REPLACE "-([0-9]+)-g([0-9a-f]+)$" ".r\\1.g\\2" BARISTA_GIT_DESCRIBE "${BARISTA_GIT_DESCRIBE}")
-            set(BARISTA_VERSION "${BARISTA_GIT_DESCRIBE}")
-        else()
-            execute_process(
-                COMMAND ${GIT_EXECUTABLE} rev-list --count HEAD
-                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                OUTPUT_VARIABLE BARISTA_GIT_COUNT
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET
-            )
-            execute_process(
-                COMMAND ${GIT_EXECUTABLE} rev-parse --short=7 HEAD
-                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                OUTPUT_VARIABLE BARISTA_GIT_HASH
-                OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET
-            )
-            if(BARISTA_GIT_COUNT AND BARISTA_GIT_HASH)
-                set(BARISTA_VERSION "0.1.0.r${BARISTA_GIT_COUNT}.g${BARISTA_GIT_HASH}")
-            endif()
-        endif()
-    endif()
-endif()
-
 message(STATUS "Barista version: ${BARISTA_VERSION}")
 add_compile_definitions(BARISTA_VERSION_STRING="${BARISTA_VERSION}")
+add_compile_definitions(BARISTA_SOURCE_REVISION="${BARISTA_SOURCE_REVISION}")
 
 include(CTest)
 include(GNUInstallDirs)
+configure_file(packaging/linux/build-info.in build-info @ONLY)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/build-info" DESTINATION ${CMAKE_INSTALL_DATADIR}/barista)
+add_compile_definitions(BARISTA_BUILD_INFO_PATH="${CMAKE_INSTALL_FULL_DATADIR}/barista/build-info")
 set(BARISTA_ENGINE_DEFAULT OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(BARISTA_ENGINE_DEFAULT ON)
@@ -85,6 +52,26 @@ set(CPACK_PACKAGE_FILE_NAME "barista-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_GENERATOR "DEB;RPM")
 set(CPACK_DEBIAN_FILE_NAME "barista-${CMAKE_SYSTEM_PROCESSOR}.deb")
 set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_PACKAGE_RELEASE "1")
+file(READ "${PROJECT_SOURCE_DIR}/packaging/linux/package-hooks.sh" BARISTA_PACKAGE_HOOKS)
+set(BARISTA_PACKAGE_ACTION "case \"\${1:-}\" in upgrade) barista_pre ;; esac")
+configure_file(packaging/linux/package-script.in packaging/preinst @ONLY)
+set(BARISTA_PACKAGE_ACTION "case \"\${1:-}\" in configure|abort-upgrade) barista_post ;; esac")
+configure_file(packaging/linux/package-script.in packaging/postinst @ONLY)
+set(BARISTA_PACKAGE_ACTION "case \"\${1:-}\" in abort-upgrade|abort-install) barista_post ;; esac")
+configure_file(packaging/linux/package-script.in packaging/postrm @ONLY)
+set(BARISTA_PACKAGE_ACTION "if [ \"\${1:-0}\" -gt 1 ]; then barista_pre; fi")
+configure_file(packaging/linux/package-script.in packaging/rpm-pre.sh @ONLY)
+set(BARISTA_PACKAGE_ACTION "barista_post")
+configure_file(packaging/linux/package-script.in packaging/rpm-post.sh @ONLY)
+set(BARISTA_PACKAGE_ACTION "barista_pre")
+configure_file(packaging/linux/package-script.in packaging/pre-upgrade @ONLY)
+foreach(script preinst postinst postrm rpm-pre.sh rpm-post.sh)
+    file(CHMOD "${PROJECT_BINARY_DIR}/packaging/${script}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+endforeach()
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${PROJECT_BINARY_DIR}/packaging/preinst;${PROJECT_BINARY_DIR}/packaging/postinst;${PROJECT_BINARY_DIR}/packaging/postrm")
+set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
@@ -99,5 +86,11 @@ if(BARISTA_DPKG_SHLIBDEPS)
 endif()
 set(CPACK_RPM_FILE_NAME "barista-${CMAKE_SYSTEM_PROCESSOR}.rpm")
 set(CPACK_RPM_PACKAGE_LICENSE "License not yet specified")
+set(CPACK_RPM_PACKAGE_RELEASE "1")
+# The publisher uses Ubuntu 24.04's RPM signing tools. RPM 6 builders default
+# to v6 packages; keep the fully supported v4 format across this tool boundary.
+set(CPACK_RPM_SPEC_MORE_DEFINE "%define _rpmformat 4")
+set(CPACK_RPM_PRE_INSTALL_SCRIPT_FILE "${PROJECT_BINARY_DIR}/packaging/rpm-pre.sh")
+set(CPACK_RPM_POST_TRANS_SCRIPT_FILE "${PROJECT_BINARY_DIR}/packaging/rpm-post.sh")
 set(CPACK_RPM_PACKAGE_REQUIRES "qt6-qtbase, qt6-qtsvg, NetworkManager, polkit, kmod, iw, iproute")
 include(CPack)

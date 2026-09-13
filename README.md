@@ -53,6 +53,7 @@ broader testing. Camera, microphone, and NFC support are not implemented.
 ## Documentation
 
 - [Build and installation](COMPILING.md)
+- [Package updates and release channels](docs/updates.md)
 - [User guide](docs/user-guide.md)
 - [Wi-Fi compatibility](docs/hardware.md)
 - [Troubleshooting and support logs](docs/troubleshooting.md)

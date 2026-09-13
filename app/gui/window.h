@@ -39,6 +39,9 @@ private:
     void ViewSelectedLog();
     void InitializePairingPattern();
     void UpdateHomeDevice();
+    void CheckInstalledVersion();
+    bool m_restartRequired = false;
+    QLabel* m_updateStatus = nullptr;
     ControlClient m_client;
     QTabWidget *m_tabs, *m_settingsTabs;
     QComboBox *m_interface, *m_mode, *m_logFiles;

@@ -172,6 +172,7 @@ struct GamePad
 struct SessionStatus
 {
     uint32_t apiVersion = ApiVersion;
+    std::string serviceVersion;
     bool available = false;
     bool activating = false;
     std::string platform;

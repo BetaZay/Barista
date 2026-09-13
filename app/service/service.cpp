@@ -311,7 +311,8 @@ QVariantMap Service::GetStatus()
     const QString error = status.error ? QString::fromStdString(status.error->message) : QString();
     const QString diagnosticCode = status.error ? QString::fromStdString(status.error->diagnosticCode) : QString();
     const QString diagnosticAction = status.error ? QString::fromStdString(status.error->action) : QString();
-    return {{"apiVersion",status.apiVersion}, {"platform",QString::fromStdString(status.platform)},
+    return {{"apiVersion",status.apiVersion}, {"serviceVersion",QStringLiteral(BARISTA_VERSION_STRING)},
+        {"platform",QString::fromStdString(status.platform)},
         {"running",status.running}, {"phase",QString::fromLatin1(barista::api::SessionPhaseName(status.phase))},
         {"pairingStep",QString::fromLatin1(barista::api::PairingStepName(status.pairingStep))},
         {"connected",status.gamePadConnected}, {"mode",status.mode ? ModeName(*status.mode) : QString()},
@@ -537,6 +538,7 @@ QString Service::BuildSupportReport() const
         << "schema_version=1\n"
         << "generated_utc=" << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) << '\n'
         << "barista_version=" << BARISTA_VERSION_STRING << '\n'
+        << "source_revision=" << BARISTA_SOURCE_REVISION << '\n'
         << "api_version=" << status.apiVersion << '\n'
         << "platform=" << QSysInfo::prettyProductName() << '\n'
         << "kernel=" << QSysInfo::kernelType() << ' ' << QSysInfo::kernelVersion() << '\n'

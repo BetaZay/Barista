@@ -16,6 +16,11 @@ for binary in /usr/bin/barista /usr/libexec/barista/barista-service \
 done
 
 test -f /usr/share/dbus-1/system.d/org.barista.Service1.conf
+test -r /usr/share/barista/build-info
+grep -Ex 'version=[0-9]+\.[0-9]+\.[0-9]+' /usr/share/barista/build-info
+if [[ -n "${EXPECTED_VERSION:-}" ]]; then
+    grep -Fx "version=$EXPECTED_VERSION" /usr/share/barista/build-info
+fi
 test -f /usr/share/polkit-1/actions/org.barista.manage-session.policy
 grep -Fx 'Exec=/usr/libexec/barista/barista-service' /usr/share/dbus-1/system-services/org.barista.Service1.service
 grep -Fx 'SystemdService=barista.service' /usr/share/dbus-1/system-services/org.barista.Service1.service

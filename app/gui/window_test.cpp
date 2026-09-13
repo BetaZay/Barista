@@ -460,6 +460,14 @@ int main(int argc, char** argv)
         status.phase = barista::api::SessionPhase::Starting; apply();
         window.OpenPairing(); cancelPair->click();
         Check(pairingStops == 3,"closing pairing does not stop a saved GamePad connection startup");
+        status.running = false; status.phase = barista::api::SessionPhase::Idle;
+        status.serviceVersion = "9.9.999"; apply();
+        Check(!start->isEnabled() && !pair->isEnabled(),"software mismatch blocks new sessions");
+        Check(window.findChild<QLabel*>("updateStatus")->text().contains("Restart Barista"),"software mismatch explains required restart");
+        window.OpenPairing();
+        Check(!pairDialog->isVisible(),"software mismatch blocks opening pairing");
+        status.running = true; status.phase = barista::api::SessionPhase::Runtime; apply();
+        Check(stop->isEnabled(),"software mismatch still allows owned session cleanup");
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

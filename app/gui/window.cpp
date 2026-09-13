@@ -2,6 +2,7 @@
 #include "cafe_icons.h"
 #include "cafe_theme.h"
 #include "pairing_pattern.h"
+#include "update_checker.h"
 #include "api/diagnostics.h"
 #include <QApplication>
 #include <QButtonGroup>
@@ -888,8 +889,71 @@ Window::Window(bool smokeTest)
     aboutTitle->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(aboutTitle);
     auto* aboutVersion = FormHint("Version " + qApp->applicationVersion(),about);
+    if (qApp->applicationVersion().endsWith(".0"))
+        aboutVersion->setText(aboutVersion->text() + " · Local development build");
     aboutVersion->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(aboutVersion);
+    auto* updates = new UpdateChecker(this);
+    const QString channel = UpdateChecker::Channel();
+    m_updateStatus = FormHint(channel.isEmpty() ? "Updates: repository setup required" : "Updates: " + channel,about);
+    m_updateStatus->setObjectName("updateStatus");
+    m_updateStatus->setAlignment(Qt::AlignCenter);
+    aboutLayout->addWidget(m_updateStatus);
+    auto* automaticUpdates = new QCheckBox("Check for updates daily",about);
+    automaticUpdates->setObjectName("automaticUpdates");
+    automaticUpdates->setChecked(smokeTest || QSettings().value("updates/enabled",true).toBool());
+    aboutLayout->addWidget(automaticUpdates);
+    auto* updateButtons = new QHBoxLayout;
+    auto* checkUpdates = new QPushButton("Check for updates",about);
+    checkUpdates->setObjectName("checkUpdates");
+    auto* updateHelp = new QPushButton("Update setup and instructions",about);
+    updateButtons->addWidget(checkUpdates);
+    updateButtons->addWidget(updateHelp);
+    aboutLayout->addLayout(updateButtons);
+    connect(automaticUpdates,&QCheckBox::toggled,this,[smokeTest](bool enabled) {
+        if (!smokeTest) QSettings().setValue("updates/enabled",enabled);
+    });
+    connect(checkUpdates,&QPushButton::clicked,this,[updates,smokeTest] { if (!smokeTest) updates->Check(true); });
+    connect(updateHelp,&QPushButton::clicked,this,[] {
+        QDesktopServices::openUrl(QUrl("https://github.com/BetaZay/Barista/blob/main/docs/updates.md"));
+    });
+    connect(updates,&UpdateChecker::Status,this,[this](const QString& text) {
+        if (!m_restartRequired) m_updateStatus->setText(text);
+    });
+    auto* updateNotice = new QWidget(root);
+    auto* noticeLayout = new QHBoxLayout(updateNotice);
+    auto* noticeText = new QLabel(updateNotice);
+    noticeText->setWordWrap(true);
+    auto* notesButton = new QPushButton("View changes",updateNotice);
+    auto* dismissButton = new QPushButton("Dismiss",updateNotice);
+    noticeLayout->addWidget(noticeText,1);
+    noticeLayout->addWidget(notesButton);
+    noticeLayout->addWidget(dismissButton);
+    homeLayout->insertWidget(1,updateNotice);
+    updateNotice->hide();
+    connect(updates,&UpdateChecker::UpdateAvailable,this,[noticeText,updateNotice,notesButton,dismissButton](const QString& version) {
+        if (QSettings().value("updates/dismissed").toString() == version) return;
+        noticeText->setText("Barista " + version + " is available. Use your system updater to install it.");
+        notesButton->setProperty("version",version);
+        dismissButton->setProperty("version",version);
+        updateNotice->show();
+    });
+    connect(notesButton,&QPushButton::clicked,this,[notesButton] {
+        QDesktopServices::openUrl(QUrl("https://github.com/BetaZay/Barista/releases/tag/build-" + notesButton->property("version").toString()));
+    });
+    connect(dismissButton,&QPushButton::clicked,this,[dismissButton,updateNotice] {
+        QSettings().setValue("updates/dismissed",dismissButton->property("version"));
+        updateNotice->hide();
+    });
+    if (!smokeTest) {
+        QTimer::singleShot(0,updates,[updates] { updates->Check(); });
+        auto* updateTimer = new QTimer(this);
+        connect(updateTimer,&QTimer::timeout,this,[this,updates] {
+            CheckInstalledVersion();
+            updates->Check();
+        });
+        updateTimer->start(60000);
+    }
     auto* aboutCopy = FormHint("A new home for your Wii U GamePad.\n\nConnect a real GamePad to your Linux desktop for screen, audio, and controller input. Barista handles pairing and the dedicated Wi-Fi connection.\n\nNot affiliated with Nintendo.",about);
     aboutCopy->setAlignment(Qt::AlignCenter);
     aboutLayout->addWidget(aboutCopy);
@@ -909,6 +973,8 @@ Window::Window(bool smokeTest)
     describe();
 
     connect(m_start,&QPushButton::clicked,this,[this] {
+        CheckInstalledVersion();
+        if (m_restartRequired) return;
         ShowWindow();
         const QString interface = InterfaceName(m_interface);
         if (!ConfirmWifi(false,interface)) return;
@@ -924,6 +990,8 @@ Window::Window(bool smokeTest)
     });
     connect(m_stop,&QPushButton::clicked,&m_client,&ControlClient::Stop);
     connect(m_pair,&QPushButton::clicked,this,[this] {
+        CheckInstalledVersion();
+        if (m_restartRequired) return;
         const QString interface = InterfaceName(m_interface);
         if (!ConfirmWifi(true,interface)) return;
         QSettings settings;
@@ -1015,8 +1083,33 @@ Window::Window(bool smokeTest)
 }
 
 void Window::ShowWindow() { showNormal(); raise(); activateWindow(); }
+void Window::CheckInstalledVersion()
+{
+    QFile info(QStringLiteral(BARISTA_BUILD_INFO_PATH));
+    if (!m_smokeTest && info.open(QIODevice::ReadOnly)) {
+        const auto lines = info.read(4096).split('\n');
+        for (const auto& line : lines) {
+            if (line.startsWith("version=") && QString::fromUtf8(line.mid(8)) != qApp->applicationVersion())
+                m_restartRequired = true;
+        }
+    }
+    if (!m_lastStatus.serviceVersion.empty() &&
+        QString::fromStdString(m_lastStatus.serviceVersion) != qApp->applicationVersion())
+        m_restartRequired = true;
+    if (m_restartRequired) {
+        const QString message = "Restart Barista to finish updating. New sessions are paused until you restart.";
+        m_updateStatus->setText(message);
+        m_message->setText(message);
+        m_message->show();
+        m_start->setEnabled(false);
+        m_pair->setEnabled(false);
+        m_trayStart->setEnabled(false);
+    }
+}
 void Window::OpenPairing()
 {
+    CheckInstalledVersion();
+    if (m_restartRequired) return;
     ShowWindow();
     m_tabs->setCurrentIndex(1);
     m_pairDialog->show();
@@ -1185,6 +1278,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     const auto previousPhase = m_lastStatus.phase;
     const bool previousRunning = m_lastStatus.running;
     m_lastStatus = status;
+    CheckInstalledVersion();
     const bool available = status.available;
     const bool running = status.running;
     const bool busy = m_pending || status.busy;
@@ -1377,8 +1471,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         status.capabilities.controllerSetup;
     const std::string country = m_country->text().trimmed().toUpper().toStdString();
     const bool validCountry = country.empty() || barista::api::ValidRegulatoryCountry(country);
-    m_start->setEnabled(available && !running && !busy && supported && validCountry);
-    m_pair->setEnabled(available && !running && !busy && supported &&
+    m_start->setEnabled(!m_restartRequired && available && !running && !busy && supported && validCountry);
+    m_pair->setEnabled(!m_restartRequired && available && !running && !busy && supported &&
         barista::api::ParsePairCode(m_code->text().toStdString()).has_value() &&
         validCountry);
     m_stop->setEnabled(available && running && !busy && owned && phase != barista::api::SessionPhase::Stopping);
