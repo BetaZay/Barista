@@ -8,6 +8,7 @@ target_link_libraries(barista_core INTERFACE barista_api)
 target_compile_features(barista_core INTERFACE cxx_std_20)
 
 if(BARISTA_BUILD_ENGINE)
+    find_package(Freetype REQUIRED)
     add_library(drc_host STATIC
         drh/mac_address.cpp
         drh/pairing.cpp
@@ -40,13 +41,23 @@ if(BARISTA_BUILD_ENGINE)
     target_include_directories(barista_drh_encoder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(barista_drh_encoder
         PUBLIC barista_api
-        PRIVATE drc_host drc_ipc m pthread dl
+        PRIVATE drc_host drc_ipc Freetype::Freetype m pthread dl
     )
     target_compile_features(barista_drh_encoder PUBLIC cxx_std_20)
     target_compile_definitions(barista_drh_encoder PRIVATE
-        BARISTA_HOME_MENU_SOUND="${CMAKE_INSTALL_FULL_DATADIR}/barista/sounds/ui.pcm")
+        BARISTA_HOME_MENU_SOUND="${CMAKE_INSTALL_FULL_DATADIR}/barista/sounds/ui.pcm"
+        BARISTA_HOME_MENU_FONT_REGULAR="${CMAKE_INSTALL_FULL_DATADIR}/barista/fonts/Jost-Regular.ttf"
+        BARISTA_HOME_MENU_FONT_SEMIBOLD="${CMAKE_INSTALL_FULL_DATADIR}/barista/fonts/Jost-SemiBold.ttf"
+        BARISTA_HOME_MENU_DEV_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts/jost/static")
     install(FILES "${PROJECT_SOURCE_DIR}/assets/sounds/ui.pcm"
         DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/sounds)
+    install(FILES
+        "${PROJECT_SOURCE_DIR}/assets/fonts/jost/static/Jost-Regular.ttf"
+        "${PROJECT_SOURCE_DIR}/assets/fonts/jost/static/Jost-SemiBold.ttf"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/barista/fonts)
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/fonts/jost/OFL.txt"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/barista
+        RENAME Jost-OFL.txt)
 
     add_library(barista_drh_server STATIC
         drh/server/interrupt.cpp

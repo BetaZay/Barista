@@ -2,12 +2,17 @@
 
 #include "drh/encoder/encoder.h"
 
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace barista::drh
 {
@@ -23,6 +28,23 @@ constexpr uint32_t kButtonHome = 0x0002;
 constexpr size_t kWidth = DrcVideoWidth;
 constexpr size_t kHeight = DrcVideoHeight;
 constexpr int64_t kTransitionDurationMs = 240;
+
+struct Color
+{
+	uint8_t red;
+	uint8_t green;
+	uint8_t blue;
+};
+
+constexpr Color kCream{250, 244, 235};
+constexpr Color kWarmWhite{255, 251, 246};
+constexpr Color kBrown{54, 36, 26};
+constexpr Color kMidBrown{105, 75, 59};
+constexpr Color kMuted{139, 116, 101};
+constexpr Color kBorder{226, 211, 197};
+constexpr Color kBlue{25, 166, 224};
+constexpr Color kGreen{31, 171, 108};
+constexpr Color kRed{205, 79, 68};
 
 int64_t SteadyMilliseconds()
 {
@@ -47,116 +69,297 @@ void ClearButtons(std::span<uint8_t> report)
 	report[80] = 0;
 }
 
-struct Color
+class Canvas
 {
-	uint8_t y;
-	uint8_t u;
-	uint8_t v;
+public:
+	Canvas() : m_pixels(kWidth * kHeight * 3) {}
+
+	void clear(Color color)
+	{
+		for (size_t offset = 0; offset < m_pixels.size(); offset += 3)
+		{
+			m_pixels[offset] = color.red;
+			m_pixels[offset + 1] = color.green;
+			m_pixels[offset + 2] = color.blue;
+		}
+	}
+
+	void pixel(int x, int y, Color color, uint8_t alpha = 255)
+	{
+		if (x < 0 || y < 0 || x >= static_cast<int>(kWidth) || y >= static_cast<int>(kHeight))
+			return;
+		const size_t offset = (static_cast<size_t>(y) * kWidth + x) * 3;
+		for (int channel = 0; channel < 3; ++channel)
+		{
+			const int source = channel == 0 ? color.red : channel == 1 ? color.green : color.blue;
+			m_pixels[offset + channel] = static_cast<uint8_t>((source * alpha +
+				m_pixels[offset + channel] * (255 - alpha) + 127) / 255);
+		}
+	}
+
+	void rounded_rect(int x, int y, int width, int height, int radius, Color color,
+		uint8_t alpha = 255)
+	{
+		if (radius <= 0)
+		{
+			for (int py = y; py < y + height; ++py)
+				for (int px = x; px < x + width; ++px)
+					pixel(px, py, color, alpha);
+			return;
+		}
+		for (int py = y; py < y + height; ++py)
+		{
+			for (int px = x; px < x + width; ++px)
+			{
+				const float center_x = std::clamp(px + 0.5f,
+					static_cast<float>(x + radius), static_cast<float>(x + width - radius));
+				const float center_y = std::clamp(py + 0.5f,
+					static_cast<float>(y + radius), static_cast<float>(y + height - radius));
+				const float dx = px + 0.5f - center_x;
+				const float dy = py + 0.5f - center_y;
+				const float coverage = std::clamp(radius + 0.5f - std::sqrt(dx * dx + dy * dy),
+					0.0f, 1.0f);
+				pixel(px, py, color, static_cast<uint8_t>(alpha * coverage));
+			}
+		}
+	}
+
+	void stroked_rounded_rect(int x, int y, int width, int height, int radius,
+		int thickness, Color stroke, Color fill)
+	{
+		rounded_rect(x, y, width, height, radius, stroke);
+		rounded_rect(x + thickness, y + thickness, width - thickness * 2,
+			height - thickness * 2, std::max(1, radius - thickness), fill);
+	}
+
+	void circle(int center_x, int center_y, int radius, Color color, uint8_t alpha = 255)
+	{
+		for (int y = center_y - radius - 1; y <= center_y + radius + 1; ++y)
+			for (int x = center_x - radius - 1; x <= center_x + radius + 1; ++x)
+			{
+				const float dx = x + 0.5f - center_x;
+				const float dy = y + 0.5f - center_y;
+				const float coverage = std::clamp(radius + 0.5f - std::sqrt(dx * dx + dy * dy),
+					0.0f, 1.0f);
+				pixel(x, y, color, static_cast<uint8_t>(alpha * coverage));
+			}
+	}
+
+	void line(float x1, float y1, float x2, float y2, float width, Color color,
+		uint8_t alpha = 255)
+	{
+		const float vx = x2 - x1;
+		const float vy = y2 - y1;
+		const float length_squared = vx * vx + vy * vy;
+		const int left = static_cast<int>(std::floor(std::min(x1, x2) - width));
+		const int right = static_cast<int>(std::ceil(std::max(x1, x2) + width));
+		const int top = static_cast<int>(std::floor(std::min(y1, y2) - width));
+		const int bottom = static_cast<int>(std::ceil(std::max(y1, y2) + width));
+		for (int y = top; y <= bottom; ++y)
+			for (int x = left; x <= right; ++x)
+			{
+				const float projection = length_squared == 0 ? 0 : std::clamp(
+					((x + 0.5f - x1) * vx + (y + 0.5f - y1) * vy) / length_squared,
+					0.0f, 1.0f);
+				const float dx = x + 0.5f - (x1 + projection * vx);
+				const float dy = y + 0.5f - (y1 + projection * vy);
+				const float coverage = std::clamp(width / 2 + 0.5f -
+					std::sqrt(dx * dx + dy * dy), 0.0f, 1.0f);
+				pixel(x, y, color, static_cast<uint8_t>(alpha * coverage));
+			}
+	}
+
+	int text_width(FT_Face face, std::string_view text, int size)
+	{
+		if (face == nullptr || FT_Set_Pixel_Sizes(face, 0, size) != 0)
+			return 0;
+		int width = 0;
+		FT_UInt previous = 0;
+		for (const unsigned char ch : text)
+		{
+			const FT_UInt index = FT_Get_Char_Index(face, ch);
+			if (previous != 0 && index != 0 && FT_HAS_KERNING(face))
+			{
+				FT_Vector kerning{};
+				FT_Get_Kerning(face, previous, index, FT_KERNING_DEFAULT, &kerning);
+				width += static_cast<int>(kerning.x >> 6);
+			}
+			if (FT_Load_Glyph(face, index, FT_LOAD_DEFAULT) == 0)
+				width += static_cast<int>(face->glyph->advance.x >> 6);
+			previous = index;
+		}
+		return width;
+	}
+
+	void text(FT_Face face, int x, int baseline, std::string_view value, int size,
+		Color color, uint8_t alpha = 255)
+	{
+		if (face == nullptr || FT_Set_Pixel_Sizes(face, 0, size) != 0)
+			return;
+		FT_UInt previous = 0;
+		for (const unsigned char ch : value)
+		{
+			const FT_UInt index = FT_Get_Char_Index(face, ch);
+			if (previous != 0 && index != 0 && FT_HAS_KERNING(face))
+			{
+				FT_Vector kerning{};
+				FT_Get_Kerning(face, previous, index, FT_KERNING_DEFAULT, &kerning);
+				x += static_cast<int>(kerning.x >> 6);
+			}
+			if (FT_Load_Glyph(face, index, FT_LOAD_DEFAULT) != 0 ||
+				FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL) != 0)
+				continue;
+			const FT_Bitmap& bitmap = face->glyph->bitmap;
+			for (unsigned row = 0; row < bitmap.rows; ++row)
+				for (unsigned column = 0; column < bitmap.width; ++column)
+				{
+					const uint8_t coverage = bitmap.buffer[row * bitmap.pitch + column];
+					pixel(x + face->glyph->bitmap_left + static_cast<int>(column),
+						baseline - face->glyph->bitmap_top + static_cast<int>(row), color,
+						static_cast<uint8_t>(coverage * alpha / 255));
+				}
+			x += static_cast<int>(face->glyph->advance.x >> 6);
+			previous = index;
+		}
+	}
+
+	void to_i420(std::span<uint8_t> output) const
+	{
+		if (output.size() < DrcVideoFrameBytes)
+			return;
+		const size_t u_offset = kWidth * kHeight;
+		const size_t v_offset = u_offset + kWidth * kHeight / 4;
+		for (size_t y = 0; y < kHeight; ++y)
+			for (size_t x = 0; x < kWidth; ++x)
+			{
+				const size_t rgb = (y * kWidth + x) * 3;
+				output[y * kWidth + x] = luma(m_pixels[rgb], m_pixels[rgb + 1],
+					m_pixels[rgb + 2]);
+			}
+		for (size_t y = 0; y < kHeight; y += 2)
+			for (size_t x = 0; x < kWidth; x += 2)
+			{
+				int red = 0;
+				int green = 0;
+				int blue = 0;
+				for (size_t row = 0; row < 2; ++row)
+					for (size_t column = 0; column < 2; ++column)
+					{
+						const size_t rgb = ((y + row) * kWidth + x + column) * 3;
+						red += m_pixels[rgb];
+						green += m_pixels[rgb + 1];
+						blue += m_pixels[rgb + 2];
+					}
+				const size_t chroma = (y / 2) * (kWidth / 2) + x / 2;
+				output[u_offset + chroma] = chroma_u(red / 4, green / 4, blue / 4);
+				output[v_offset + chroma] = chroma_v(red / 4, green / 4, blue / 4);
+			}
+	}
+
+private:
+	static uint8_t luma(int red, int green, int blue)
+	{
+		return static_cast<uint8_t>(std::clamp(((66 * red + 129 * green + 25 * blue +
+			128) >> 8) + 16, 16, 235));
+	}
+
+	static uint8_t chroma_u(int red, int green, int blue)
+	{
+		return static_cast<uint8_t>(std::clamp(((-38 * red - 74 * green + 112 * blue +
+			128) >> 8) + 128, 16, 240));
+	}
+
+	static uint8_t chroma_v(int red, int green, int blue)
+	{
+		return static_cast<uint8_t>(std::clamp(((112 * red - 94 * green - 18 * blue +
+			128) >> 8) + 128, 16, 240));
+	}
+
+	std::vector<uint8_t> m_pixels;
 };
 
-Color Yuv(uint8_t red, uint8_t green, uint8_t blue)
+void DrawCoffeeMark(Canvas& canvas)
 {
-	const int y = ((66 * red + 129 * green + 25 * blue + 128) >> 8) + 16;
-	const int u = ((-38 * red - 74 * green + 112 * blue + 128) >> 8) + 128;
-	const int v = ((112 * red - 94 * green - 18 * blue + 128) >> 8) + 128;
-	return {static_cast<uint8_t>(std::clamp(y, 16, 235)),
-		static_cast<uint8_t>(std::clamp(u, 16, 240)),
-		static_cast<uint8_t>(std::clamp(v, 16, 240))};
+	canvas.circle(40, 35, 21, kWarmWhite, 28);
+	canvas.rounded_rect(27, 31, 22, 13, 4, kCream);
+	canvas.rounded_rect(30, 28, 16, 4, 2, kCream);
+	canvas.circle(51, 36, 7, kCream);
+	canvas.circle(51, 36, 4, kBrown);
+	canvas.line(28, 47, 51, 47, 3, kCream);
+	canvas.line(34, 26, 32, 21, 2, kCream, 180);
+	canvas.line(41, 26, 43, 20, 2, kCream, 180);
 }
 
-void FillRect(std::span<uint8_t> frame, int x, int y, int width, int height, Color color)
+void DrawSun(Canvas& canvas, int x, int y, Color color)
 {
-	x = std::clamp(x, 0, static_cast<int>(kWidth));
-	y = std::clamp(y, 0, static_cast<int>(kHeight));
-	width = std::min(width, static_cast<int>(kWidth) - x);
-	height = std::min(height, static_cast<int>(kHeight) - y);
-	if (width <= 0 || height <= 0 || frame.size() < DrcVideoFrameBytes)
-		return;
-
-	for (int row = y; row < y + height; ++row)
-		std::fill_n(frame.begin() + row * kWidth + x, width, color.y);
-	const size_t u_offset = kWidth * kHeight;
-	const size_t v_offset = u_offset + kWidth * kHeight / 4;
-	for (int row = y / 2; row < (y + height + 1) / 2; ++row)
+	canvas.circle(x, y, 9, color);
+	for (int index = 0; index < 8; ++index)
 	{
-		const int first = x / 2;
-		const int count = (x + width + 1) / 2 - first;
-		std::fill_n(frame.begin() + u_offset + row * (kWidth / 2) + first, count, color.u);
-		std::fill_n(frame.begin() + v_offset + row * (kWidth / 2) + first, count, color.v);
+		const float angle = static_cast<float>(index) * 3.14159265f / 4;
+		canvas.line(x + std::cos(angle) * 15, y + std::sin(angle) * 15,
+			x + std::cos(angle) * 22, y + std::sin(angle) * 22, 3, color);
 	}
 }
 
-std::array<uint8_t, 5> Glyph(char ch)
+void DrawRumble(Canvas& canvas, int x, int y, Color color)
 {
-	switch (ch)
-	{
-	case 'A': return {0x7e, 0x11, 0x11, 0x11, 0x7e};
-	case 'B': return {0x7f, 0x49, 0x49, 0x49, 0x36};
-	case 'C': return {0x3e, 0x41, 0x41, 0x41, 0x22};
-	case 'D': return {0x7f, 0x41, 0x41, 0x22, 0x1c};
-	case 'E': return {0x7f, 0x49, 0x49, 0x49, 0x41};
-	case 'F': return {0x7f, 0x09, 0x09, 0x09, 0x01};
-	case 'G': return {0x3e, 0x41, 0x49, 0x49, 0x7a};
-	case 'H': return {0x7f, 0x08, 0x08, 0x08, 0x7f};
-	case 'I': return {0x41, 0x41, 0x7f, 0x41, 0x41};
-	case 'J': return {0x20, 0x40, 0x41, 0x3f, 0x01};
-	case 'K': return {0x7f, 0x08, 0x14, 0x22, 0x41};
-	case 'L': return {0x7f, 0x40, 0x40, 0x40, 0x40};
-	case 'M': return {0x7f, 0x02, 0x0c, 0x02, 0x7f};
-	case 'N': return {0x7f, 0x04, 0x08, 0x10, 0x7f};
-	case 'O': return {0x3e, 0x41, 0x41, 0x41, 0x3e};
-	case 'P': return {0x7f, 0x09, 0x09, 0x09, 0x06};
-	case 'Q': return {0x3e, 0x41, 0x51, 0x21, 0x5e};
-	case 'R': return {0x7f, 0x09, 0x19, 0x29, 0x46};
-	case 'S': return {0x46, 0x49, 0x49, 0x49, 0x31};
-	case 'T': return {0x01, 0x01, 0x7f, 0x01, 0x01};
-	case 'U': return {0x3f, 0x40, 0x40, 0x40, 0x3f};
-	case 'V': return {0x1f, 0x20, 0x40, 0x20, 0x1f};
-	case 'W': return {0x7f, 0x20, 0x18, 0x20, 0x7f};
-	case 'X': return {0x63, 0x14, 0x08, 0x14, 0x63};
-	case 'Y': return {0x03, 0x04, 0x78, 0x04, 0x03};
-	case 'Z': return {0x61, 0x51, 0x49, 0x45, 0x43};
-	case '0': return {0x3e, 0x51, 0x49, 0x45, 0x3e};
-	case '1': return {0x00, 0x42, 0x7f, 0x40, 0x00};
-	case '2': return {0x62, 0x51, 0x49, 0x49, 0x46};
-	case '3': return {0x22, 0x41, 0x49, 0x49, 0x36};
-	case '4': return {0x18, 0x14, 0x12, 0x7f, 0x10};
-	case '5': return {0x2f, 0x49, 0x49, 0x49, 0x31};
-	case '6': return {0x3e, 0x49, 0x49, 0x49, 0x30};
-	case '7': return {0x01, 0x71, 0x09, 0x05, 0x03};
-	case '8': return {0x36, 0x49, 0x49, 0x49, 0x36};
-	case '9': return {0x06, 0x49, 0x49, 0x49, 0x3e};
-	case '/': return {0x60, 0x18, 0x06, 0x01, 0x00};
-	case '-': return {0x08, 0x08, 0x08, 0x08, 0x08};
-	case ':': return {0x00, 0x36, 0x36, 0x00, 0x00};
-	case '%': return {0x63, 0x13, 0x08, 0x64, 0x63};
-	default: return {};
-	}
+	canvas.rounded_rect(x - 18, y - 11, 36, 23, 9, color);
+	canvas.circle(x - 9, y, 4, kWarmWhite);
+	canvas.line(x - 13, y, x - 5, y, 2, color);
+	canvas.line(x - 9, y - 4, x - 9, y + 4, 2, color);
+	canvas.circle(x + 7, y - 3, 2, kWarmWhite);
+	canvas.circle(x + 12, y + 3, 2, kWarmWhite);
+	canvas.line(x - 27, y - 14, x - 31, y - 19, 3, color, 140);
+	canvas.line(x + 27, y - 14, x + 31, y - 19, 3, color, 140);
 }
 
-void DrawText(std::span<uint8_t> frame, int x, int y, std::string_view text, int scale, Color color)
+void DrawBattery(Canvas& canvas, int x, int y, int percent)
 {
-	for (const char raw : text)
-	{
-		const char ch = raw >= 'a' && raw <= 'z' ? static_cast<char>(raw - 'a' + 'A') : raw;
-		const auto glyph = Glyph(ch);
-		for (int column = 0; column < 5; ++column)
-			for (int row = 0; row < 7; ++row)
-				if ((glyph[column] >> row) & 1)
-					FillRect(frame, x + column * scale, y + row * scale, scale, scale, color);
-		x += 6 * scale;
-	}
+	const Color level = percent <= 20 ? kRed : kGreen;
+	canvas.stroked_rounded_rect(x, y, 48, 22, 6, 2, kCream, kBrown);
+	canvas.rounded_rect(x + 48, y + 7, 4, 8, 2, kCream);
+	const int width = 38 * std::clamp(percent, 0, 100) / 100;
+	if (width > 0)
+		canvas.rounded_rect(x + 5, y + 5, width, 12, 3, level);
+}
 }
 
-void DrawBattery(std::span<uint8_t> frame, int x, int y, int percent, Color foreground,
-	Color fill)
+struct GamepadHomeMenu::FontData
 {
-	FillRect(frame, x, y, 82, 34, foreground);
-	FillRect(frame, x + 5, y + 5, 72, 24, Yuv(250, 243, 232));
-	FillRect(frame, x + 82, y + 9, 7, 16, foreground);
-	FillRect(frame, x + 8, y + 8, 66 * std::clamp(percent, 0, 100) / 100, 18, fill);
-}
-}
+	FT_Library library = nullptr;
+	FT_Face regular = nullptr;
+	FT_Face semibold = nullptr;
+
+	FontData()
+	{
+		if (FT_Init_FreeType(&library) != 0)
+			return;
+		const char* configured = std::getenv("BARISTA_HOME_MENU_FONT_DIR");
+		const std::filesystem::path directory = configured && *configured
+			? configured : BARISTA_HOME_MENU_DEV_FONT_DIR;
+		const std::array<std::pair<FT_Face*, std::array<std::filesystem::path, 2>>, 2> faces{{
+			{&regular, {BARISTA_HOME_MENU_FONT_REGULAR, directory / "Jost-Regular.ttf"}},
+			{&semibold, {BARISTA_HOME_MENU_FONT_SEMIBOLD, directory / "Jost-SemiBold.ttf"}},
+		}};
+		for (const auto& [face, paths] : faces)
+			for (const auto& path : paths)
+				if (FT_New_Face(library, path.c_str(), 0, face) == 0)
+					break;
+	}
+
+	~FontData()
+	{
+		if (regular != nullptr)
+			FT_Done_Face(regular);
+		if (semibold != nullptr)
+			FT_Done_Face(semibold);
+		if (library != nullptr)
+			FT_Done_FreeType(library);
+	}
+};
+
+GamepadHomeMenu::GamepadHomeMenu() : m_fonts(std::make_unique<FontData>()) {}
+GamepadHomeMenu::~GamepadHomeMenu() = default;
 
 HomeMenuUpdate GamepadHomeMenu::process_input(std::span<uint8_t> report)
 {
@@ -247,62 +450,88 @@ uint8_t GamepadHomeMenu::opacity() const
 void GamepadHomeMenu::render(std::span<uint8_t> frame, bool battery_valid,
 	uint8_t battery_charge, uint8_t opacity) const
 {
-	if (opacity == 0)
+	if (opacity == 0 || frame.size() < DrcVideoFrameBytes)
 		return;
-	std::vector<uint8_t> source;
-	if (opacity != 255)
-		source.assign(frame.begin(), frame.end());
-	uint8_t selected;
-	uint8_t brightness;
-	bool rumble;
+	std::lock_guard lock(m_mutex);
+	const uint64_t revision = m_revision.load();
+	if (m_cached_menu.size() != DrcVideoFrameBytes || m_cached_revision != revision ||
+		m_cached_battery_valid != battery_valid || m_cached_battery != battery_charge)
 	{
-		std::lock_guard lock(m_mutex);
-		selected = m_selected_row;
-		brightness = m_brightness;
-		rumble = m_rumble_enabled;
+		Canvas canvas;
+		canvas.clear(kCream);
+		canvas.rounded_rect(0, 0, kWidth, 72, 0, kBrown);
+		DrawCoffeeMark(canvas);
+		canvas.text(m_fonts->semibold, 72, 45, "Barista", 28, kWarmWhite);
+		canvas.text(m_fonts->regular, 342, 43, "GamePad quick settings", 19,
+			Color{226, 210, 198});
+
+		const int battery_percent = battery_valid
+			? std::clamp((static_cast<int>(battery_charge) * 100 + 88) / 176, 0, 100) : 0;
+		const std::string battery_text = battery_valid
+			? std::to_string(battery_percent) + "%" : "--";
+		const int battery_text_width = canvas.text_width(m_fonts->semibold, battery_text, 18);
+		canvas.text(m_fonts->semibold, 744 - battery_text_width, 43, battery_text, 18,
+			kWarmWhite);
+		DrawBattery(canvas, 758, 24, battery_percent);
+
+		canvas.text(m_fonts->semibold, 42, 112, "GamePad", 28, kBrown);
+		canvas.text(m_fonts->regular, 178, 110, "Adjust settings without leaving your game",
+			16, kMuted);
+
+		auto card = [&](int y, bool selected) {
+			canvas.rounded_rect(46, y + 6, 772, 106, 18, kBrown, 18);
+			if (selected)
+				canvas.stroked_rounded_rect(42, y, 780, 106, 18, 3, kBlue, kWarmWhite);
+			else
+				canvas.stroked_rounded_rect(42, y, 780, 106, 18, 1, kBorder, kWarmWhite);
+		};
+
+		card(139, m_selected_row == 0);
+		canvas.circle(91, 192, 29, m_selected_row == 0 ? Color{226, 246, 253} : kCream);
+		DrawSun(canvas, 91, 192, m_selected_row == 0 ? kBlue : kMidBrown);
+		canvas.text(m_fonts->semibold, 138, 184, "Screen brightness", 22, kBrown);
+		canvas.text(m_fonts->regular, 138, 211, "Use LEFT and RIGHT to adjust", 15, kMuted);
+		for (int level = 1; level <= 5; ++level)
+		{
+			const int height = 20 + level * 7;
+			canvas.rounded_rect(609 + (level - 1) * 37, 214 - height, 24, height, 7,
+				level <= m_brightness ? kBlue : Color{222, 211, 201});
+		}
+
+		card(259, m_selected_row == 1);
+		canvas.circle(91, 312, 29, m_selected_row == 1 ? Color{226, 246, 253} : kCream);
+		DrawRumble(canvas, 91, 312, m_selected_row == 1 ? kBlue : kMidBrown);
+		canvas.text(m_fonts->semibold, 138, 304, "Menu rumble", 22, kBrown);
+		canvas.text(m_fonts->regular, 138, 331, "Tactile feedback while navigating", 15,
+			kMuted);
+		const Color toggle_color = m_rumble_enabled ? kGreen : Color{188, 174, 163};
+		canvas.rounded_rect(700, 288, 84, 46, 23, toggle_color);
+		canvas.circle(m_rumble_enabled ? 761 : 723, 311, 17, kWarmWhite);
+
+		canvas.rounded_rect(42, 403, 780, 52, 16, Color{239, 227, 216});
+		auto hint = [&](int x, int button_size, std::string_view button,
+			std::string_view label) {
+			canvas.rounded_rect(x, 416, button_size, 28, 14, kBrown);
+			const int button_width = canvas.text_width(m_fonts->semibold, button, 14);
+			canvas.text(m_fonts->semibold, x + (button_size - button_width) / 2, 436,
+				button, 14,
+				kWarmWhite);
+			canvas.text(m_fonts->regular, x + button_size + 10, 436, label, 15, kMidBrown);
+		};
+		hint(64, 58, "D-PAD", "Navigate / change");
+		hint(390, 28, "A", "Change");
+		hint(560, 28, "B", "Close");
+		hint(682, 64, "HOME", "Close");
+
+		m_cached_menu.resize(DrcVideoFrameBytes);
+		canvas.to_i420(m_cached_menu);
+		m_cached_revision = revision;
+		m_cached_battery_valid = battery_valid;
+		m_cached_battery = battery_charge;
 	}
 
-	const Color cream = Yuv(250, 243, 232);
-	const Color brown = Yuv(56, 38, 26);
-	const Color muted = Yuv(139, 113, 94);
-	const Color card = Yuv(239, 224, 208);
-	const Color selected_color = Yuv(220, 195, 173);
-	const Color blue = Yuv(31, 169, 224);
-	const Color green = Yuv(28, 170, 104);
-	FillRect(frame, 0, 0, kWidth, kHeight, cream);
-	FillRect(frame, 0, 0, kWidth, 72, brown);
-	DrawText(frame, 42, 24, "BARISTA", 4, cream);
-	DrawText(frame, 344, 27, "GAMEPAD MENU", 3, card);
-
-	const int battery_percent = battery_valid
-		? std::clamp((static_cast<int>(battery_charge) * 100 + 88) / 176, 0, 100) : 0;
-	DrawBattery(frame, 724, 20, battery_percent, cream,
-		battery_percent <= 20 ? Yuv(204, 69, 61) : green);
-	if (battery_valid)
-		DrawText(frame, 650, 30, std::to_string(battery_percent) + "%", 2, cream);
-
-	DrawText(frame, 60, 104, "GAMEPAD SETTINGS", 3, brown);
-	FillRect(frame, 50, 145, 764, 96, selected == 0 ? selected_color : card);
-	DrawText(frame, 82, 174, "BRIGHTNESS", 3, brown);
-	for (int level = 1; level <= 5; ++level)
-		FillRect(frame, 574 + level * 35, 174 + (5 - level) * 4, 23, 32 + level * 4,
-			level <= brightness ? blue : muted);
-	DrawText(frame, 752, 187, std::to_string(brightness), 3, brown);
-
-	FillRect(frame, 50, 255, 764, 96, selected == 1 ? selected_color : card);
-	DrawText(frame, 82, 284, "RUMBLE", 3, brown);
-	FillRect(frame, 650, 277, 126, 50, rumble ? green : muted);
-	DrawText(frame, rumble ? 686 : 675, 292, rumble ? "ON" : "OFF", 3, cream);
-
-	DrawText(frame, 68, 403, "UP/DOWN SELECT", 2, muted);
-	DrawText(frame, 315, 403, "LEFT/RIGHT CHANGE", 2, muted);
-	DrawText(frame, 630, 403, "B CLOSE", 2, muted);
-	DrawText(frame, 305, 447, "HOME ALSO CLOSES THIS MENU", 2, brown);
-	if (!source.empty())
-	{
-		for (size_t index = 0; index < frame.size(); ++index)
-			frame[index] = static_cast<uint8_t>((static_cast<unsigned>(frame[index]) * opacity +
-				static_cast<unsigned>(source[index]) * (255 - opacity) + 127) / 255);
-	}
+	for (size_t index = 0; index < DrcVideoFrameBytes; ++index)
+		frame[index] = static_cast<uint8_t>((static_cast<unsigned>(m_cached_menu[index]) *
+			opacity + static_cast<unsigned>(frame[index]) * (255 - opacity) + 127) / 255);
 }
 }

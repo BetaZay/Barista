@@ -14,12 +14,14 @@ Barista has two build layers:
 
 Install a C++20 compiler, CMake 3.20 or newer, Ninja, Git, Python 3, Qt 6 Core/
 Widgets/Network/DBus development packages, OpenSSL development headers, and
-the `libnl` development packages required by hostapd. On Linux, `pkcheck`,
+FreeType development headers for the GamePad UI, plus the `libnl` development
+packages required by hostapd. On Linux, `pkcheck`,
 `modprobe`, and `systemctl` must be available for the full service build.
 
 Package names vary. On Debian/Ubuntu-like distributions the relevant package
 families are commonly `build-essential`, `cmake`, `ninja-build`, `git`,
-`python3`, `qt6-base-dev`, `qt6-svg-dev`, `libssl-dev`, `libnl-3-dev`, and
+`python3`, `qt6-base-dev`, `qt6-svg-dev`, `libfreetype-dev`, `libssl-dev`,
+`libnl-3-dev`, and
 `libnl-genl-3-dev`. Install the matching Qt 6 DBus development package if your
 distribution splits it out.
 
