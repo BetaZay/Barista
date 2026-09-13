@@ -1,4 +1,5 @@
 #include "service.h"
+#include "log_sanitizer.h"
 #include "../branding/idle_screen.h"
 #include "api/diagnostics.h"
 #include "api/controller.h"
@@ -343,7 +344,7 @@ QVariantMap Service::GetDiagnostics()
         {"latestLog",files.isEmpty() ? QString() : files.front()}, {"sessionId",m_sessionId}};
 }
 
-void Service::StartSupportRun(const QString& mode)
+void Service::StartSupportRun(const QString& operation, const QString& mode)
 {
     CloseSupportRun();
     PruneSupportLogs();
@@ -353,12 +354,12 @@ void Service::StartSupportRun(const QString& mode)
     m_pairingCycle = 0;
     m_sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     const QString stamp = QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss");
-    m_runLogName = QString("%1-%2-%3.log").arg(mode == "maintenance" ? "maintenance" : "run",
-        stamp, m_sessionId.left(8));
+    m_runLogName = QString("%1-%2-%3.log").arg(operation, stamp, m_sessionId.left(8));
     if (!OpenLogFile(m_runLog, QString::fromLatin1(SupportLogDirectory) + '/' + m_runLogName)) return;
-    const QString header = QString("Barista support log\nversion=%1\nsession_id=%2\nstarted_utc=%3\nmode=%4\ninterface=%5\n\n")
+    const QString header = QString("Barista support log\nversion=%1\nsession_id=%2\nstarted_utc=%3\noperation=%4\nmode=%5\ninterface=%6\ndetail=sanitized-engine-and-hostapd\n\n")
         .arg(QString::fromLatin1(BARISTA_VERSION_STRING), m_sessionId,
-            QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), mode,
+            QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), operation,
+            mode.isEmpty() ? QString("none") : mode,
             m_interface.isEmpty() ? QString("none") : m_interface);
     AppendPublicLog(m_runLog, header.toUtf8());
 }
@@ -368,6 +369,8 @@ void Service::RecordDiagnostic(const QString& code, const QString& component, co
     if (!barista::api::IsKnownDiagnosticCode(code.toStdString())) return;
     static const QStringList components{"service","engine","wifi","pairing","gamepad","media","controller"};
     const QString safeComponent = components.contains(component) ? component : QString("engine");
+    // Structured event details retain the stricter allowlist. The separate
+    // detailed stream below is sanitized field-by-field before publication.
     const QString safeDetail = barista::api::IsSafeDiagnosticDetail(detail.toStdString()) ? detail : QString();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (code == "MEDIA_TIMING")
@@ -437,6 +440,17 @@ void Service::CloseSupportRun()
     if (m_runLog.isOpen()) m_runLog.close();
 }
 
+void Service::RecordEngineDetail(const QByteArray& raw)
+{
+    const QString safe = barista::SanitizeSupportLogLine(QString::fromUtf8(raw)).trimmed();
+    if (safe.isEmpty()) return;
+    const QString line = QString("%1 [debug] engine DETAIL: %2\n")
+        .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), safe);
+    qInfo().noquote() << QString("barista-engine[%1]:").arg(m_sessionId.left(8)) << safe;
+    AppendPublicLog(m_runLog, line.toUtf8());
+    AppendPublicLog(m_pairingLog, line.toUtf8());
+}
+
 void Service::ProcessWorkerOutput()
 {
     m_workerOutput += m_worker.readAllStandardOutput();
@@ -460,7 +474,7 @@ void Service::ProcessWorkerOutput()
             continue;
         }
         if (!raw.startsWith("BARISTA_EVENT|")) {
-            qInfo().noquote() << QString("barista-engine[%1]:").arg(m_sessionId.left(8)) << QString::fromUtf8(raw);
+            RecordEngineDetail(raw);
             continue;
         }
         const auto fields = raw.split('|');
@@ -480,7 +494,7 @@ void Service::ProcessWorkerOutput()
                     fields.size() == 5 ? QString::fromLatin1(fields[4]) : QString());
         }
         else
-            qInfo().noquote() << QString("barista-engine[%1]:").arg(m_sessionId.left(8)) << QString::fromUtf8(raw);
+            RecordEngineDetail(raw);
     }
     if (m_workerOutput.size() > 64 * 1024)
     {
@@ -628,7 +642,7 @@ void Service::StartSessionWithCountry(const QString& interface, const QString& m
         { done("Choose a valid two-letter regulatory country code"); return; }
         if (m_worker.state() != QProcess::NotRunning) { done("Stop the current session before starting another one"); return; }
         m_error.clear(); m_errorCode.clear(); m_mode = *parsedMode; m_interface = interface;
-        StartSupportRun(ModeName(*parsedMode));
+        StartSupportRun("run", ModeName(*parsedMode));
         Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,mode=*parsedMode,country,uid,caller,done](QString error) {
             if (!error.isEmpty()) { done(error); CloseSupportRun(); return; }
             done(Start(interface,mode,{},country,uid,caller));
@@ -651,7 +665,7 @@ void Service::PairWithCountry(const QString& interface, const QString& code, con
         { done("Choose a valid two-letter regulatory country code"); return; }
         if (m_worker.state() != QProcess::NotRunning) { done("Stop the current session before starting another one"); return; }
         m_error.clear(); m_errorCode.clear(); m_mode = *parsedMode; m_interface = interface;
-        StartSupportRun(ModeName(*parsedMode));
+        StartSupportRun("pair", ModeName(*parsedMode));
         Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,code,mode=*parsedMode,country,uid,caller,done](QString error) {
             if (!error.isEmpty()) { done(error); CloseSupportRun(); return; }
             done(Start(interface,mode,code,country,uid,caller));
@@ -788,6 +802,7 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
     env.insert("BARISTA_CLIENT_UID",QString::number(mode == barista::api::SessionMode::Controller ? 0 : uid));
     env.insert("BARISTA_SESSION_ID",m_sessionId);
     env.insert("DRCD_LOG_STDERR","1");
+    env.insert("DRCD_LOG_HOSTAPD_RAW","1");
     QStringList args{"--socket",ControlSocket,"--interface",interface};
     if (code.isEmpty()) args << "--np";
     else args << "--pair-code" << code << "--pair";

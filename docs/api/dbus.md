@@ -99,9 +99,9 @@ returns these keys:
 | `latestLog` | Newest retained log name, or empty |
 | `sessionId` | Correlation ID for the current or most recent service session |
 
-The report and listed support logs are allowlisted outputs. They exclude MAC
-and IP addresses, SSIDs, pairing codes, credentials, usernames, and raw hostapd
-output. Private engine logs are not returned over D-Bus.
+The report and listed support logs include sanitized engine and hostapd details.
+They redact MAC and IP addresses, SSIDs, pairing codes, credentials, usernames,
+and raw packet/key output. Private engine logs are not returned over D-Bus.
 
 ## Errors and authorization
 

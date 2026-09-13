@@ -48,8 +48,9 @@ private:
     void Poll();
     void ParseStatus();
     void ProcessWorkerOutput();
-    void StartSupportRun(const QString& mode);
+    void StartSupportRun(const QString& operation, const QString& mode = {});
     void RecordDiagnostic(const QString& code, const QString& component = "service", const QString& detail = {});
+    void RecordEngineDetail(const QByteArray& raw);
     void CloseSupportRun();
     QString BuildSupportReport() const;
     QStringList SupportLogFiles() const;

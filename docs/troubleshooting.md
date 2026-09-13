@@ -10,11 +10,13 @@ correctly. Barista shows a diagnostic code with a suggested next step. Use
 folder** to browse retained logs, or **Copy support report** to collect the
 current system and session summary for a bug report.
 
-Support logs are designed to be safe to share. They contain coded state changes,
-versions, adapter driver information, and health checks. They exclude MAC and IP
-addresses, SSIDs, pairing codes, credentials, usernames, and raw hostapd output.
-Detailed private engine logs remain available to administrators for local
-investigation and should be reviewed before being shared.
+Support logs are designed to be safe to share. Each pairing or connection run
+contains coded state changes plus sanitized detailed engine and hostapd output,
+including adapter checks, channel selection, AP setup, association, and cleanup.
+MAC and IP addresses, SSIDs, pairing codes, credentials, usernames, key material,
+and packet dumps are replaced with redaction markers. Detailed unsanitized engine
+logs remain available to administrators for local investigation and should be
+reviewed before being shared.
 
 ## Regulatory restrictions
 

@@ -57,11 +57,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         file(REAL_PATH "${BARISTA_MODPROBE_DIR}" BARISTA_MODPROBE_DIR)
         get_filename_component(BARISTA_MODPROBE_NAME "${BARISTA_MODPROBE}" NAME)
         add_executable(barista-service service/main.cpp service/service.cpp service/service.h
+            service/log_sanitizer.cpp service/log_sanitizer.h
             branding/idle_screen.cpp
             service/uinput_output.cpp service/uinput_output.h)
         qt_add_resources(barista-service service_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
             FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
         if(BUILD_TESTING)
+            add_executable(barista_log_sanitizer_test service/log_sanitizer_test.cpp
+                service/log_sanitizer.cpp service/log_sanitizer.h)
+            target_link_libraries(barista_log_sanitizer_test PRIVATE Qt6::Core)
+            add_test(NAME barista_log_sanitizer COMMAND barista_log_sanitizer_test)
             add_executable(barista_idle_test branding/idle_screen_test.cpp branding/idle_screen.cpp)
             target_link_libraries(barista_idle_test PRIVATE Qt6::Gui drc_ipc)
             qt_add_resources(barista_idle_test idle_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
