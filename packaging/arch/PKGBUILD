@@ -7,6 +7,7 @@ arch=('x86_64')
 license=('custom')
 depends=('qt6-base' 'qt6-svg' 'networkmanager' 'polkit' 'kmod' 'iw' 'iproute2' 'openssl' 'libnl')
 makedepends=('cmake' 'ninja' 'git' 'python' 'nasm' 'make' 'gcc' 'polkit')
+checkdepends=('ffmpeg')
 source=()
 sha256sums=()
 
@@ -27,7 +28,7 @@ build() {
 }
 
 check() {
-    ctest --test-dir build --output-on-failure
+    ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
 }
 
 package() {

@@ -105,5 +105,6 @@ On Arch Linux, install the `makedepends` listed in
 BARISTA_SOURCE_DIR="$PWD" makepkg --force -p packaging/arch/PKGBUILD
 ```
 
-The GitHub **Continuous** workflow performs these three builds and replaces the
-single rolling prerelease after a successful push to `main`.
+The GitHub **Continuous** workflow tests these packages and updates the rolling
+prerelease after a successful code-changing push to `main`. See the
+[CI guide](docs/ci.md) for PR checks and release behavior.

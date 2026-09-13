@@ -80,7 +80,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         install(PROGRAMS "${DRC_HOSTAPD_BINARY}" DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-hostapd)
         configure_file(../packaging/linux/barista.service.in barista.service @ONLY)
         configure_file(../packaging/linux/org.barista.Service1.service.in org.barista.Service1.service @ONLY)
-        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/barista.service DESTINATION ${CMAKE_INSTALL_LIBDIR}/systemd/system)
+        # systemd units are not architecture-specific libraries (lib64 or a
+        # Debian multiarch lib directory are not vendor unit search paths).
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/barista.service DESTINATION lib/systemd/system)
         install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.barista.Service1.service DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system-services)
         install(FILES ../packaging/linux/org.barista.Service1.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/system.d)
         install(FILES ../packaging/linux/org.barista.manage-session.policy DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions)
