@@ -65,6 +65,9 @@ constexpr std::string_view kBroadcastIp = "192.168.1.255";
 constexpr uint16_t kSessionMtu = 1800;
 constexpr uint32_t kDhcpLeaseSeconds = 3600;
 constexpr std::string_view kTsfMonitorInterface = "drcdtsf";
+// A captured North American Wii U pairing AP selected channel 165. Cover every
+// non-DFS 5 GHz channel that hostapd can bring up immediately.
+constexpr std::array<int, 9> kPairingChannels{36, 40, 44, 48, 149, 153, 157, 161, 165};
 // Some USB adapters, notably rtw_8821au, report the PHY as busy briefly after
 // NetworkManager releases a managed connection.  Do not hand the interface to
 // hostapd until that transition has had time to complete.
@@ -246,9 +249,6 @@ std::vector<int> BuildPairingChannelPlan(int preferred_channel, bool sweep_enabl
 	if (!sweep_enabled)
 		return plan;
 
-	// A captured North American Wii U pairing AP selected channel 165. Cover
-	// every non-DFS 5 GHz channel that hostapd can bring up immediately.
-	constexpr std::array<int, 9> kPairingChannels{36, 40, 44, 48, 149, 153, 157, 161, 165};
 	for (const int channel : kPairingChannels)
 	{
 		if (std::find(plan.begin(), plan.end(), channel) == plan.end())
@@ -968,14 +968,73 @@ private:
 		return true;
 	}
 
+	// Self-managed-regulatory drivers (Intel iwlwifi/LAR hardware) ignore
+	// `iw reg set` entirely: they only adopt a real country after hearing a
+	// Country IE from a nearby AP, and they decay back to the restrictive "00"
+	// world-safe domain once nothing keeps feeding them one. NetworkManager's
+	// periodic scans normally do that, so releasing the interface for AP mode
+	// starts the decay. Drive our own scans and wait for a usable pairing
+	// channel to reappear.
+	bool RecoverRegulatoryByScan(const std::string& interface_name,
+		std::span<const int> pairing_channels, bool announce_ready, std::string& error)
+	{
+		constexpr auto kScanRecoveryTimeout = std::chrono::seconds(45);
+		constexpr auto kScanRecoveryPoll = std::chrono::milliseconds(1500);
+		constexpr auto kScanRecoveryRescan = std::chrono::seconds(6);
+
+		// Scanning requires the interface to be up; hostapd brings it down
+		// again itself when it needs to change mode.
+		const int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+		if (fd >= 0)
+		{
+			ifreq up_flags{};
+			std::snprintf(up_flags.ifr_name, sizeof(up_flags.ifr_name), "%s", interface_name.c_str());
+			if (ioctl(fd, SIOCGIFFLAGS, &up_flags) == 0)
+			{
+				up_flags.ifr_flags = static_cast<short>(up_flags.ifr_flags | IFF_UP);
+				ioctl(fd, SIOCSIFFLAGS, &up_flags);
+			}
+			close(fd);
+		}
+
+		Log("regulatory: scanning to recover a usable 5 GHz pairing channel");
+		std::string scan_output;
+		RunIw({"dev", interface_name, "scan"}, scan_output);
+
+		const auto deadline = std::chrono::steady_clock::now() + kScanRecoveryTimeout;
+		auto next_rescan = std::chrono::steady_clock::now() + kScanRecoveryRescan;
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			if (is_stop_requested())
+			{
+				error = "operation cancelled";
+				return false;
+			}
+			if (CheckAdapterCompatibility(interface_name, pairing_channels, announce_ready, error))
+			{
+				Log("regulatory: scan recovered a usable 5 GHz pairing channel");
+				return true;
+			}
+			if (std::chrono::steady_clock::now() >= next_rescan)
+			{
+				std::string rescan_output;
+				RunIw({"dev", interface_name, "scan"}, rescan_output);
+				next_rescan = std::chrono::steady_clock::now() + kScanRecoveryRescan;
+			}
+			std::this_thread::sleep_for(kScanRecoveryPoll);
+		}
+		return false;
+	}
+
 	bool CheckAdapterWithRegulatoryRecovery(const std::string& interface_name,
 		std::span<const int> pairing_channels, bool announce_ready, std::string& error)
 	{
 		if (CheckAdapterCompatibility(interface_name, pairing_channels, announce_ready, error))
 			return true;
-		if (!CanApplyRegulatoryCountry(error) || !ApplyRegulatoryCountry(error))
-			return false;
-		return CheckAdapterCompatibility(interface_name, pairing_channels, announce_ready, error);
+		if (CanApplyRegulatoryCountry(error) && ApplyRegulatoryCountry(error) &&
+			CheckAdapterCompatibility(interface_name, pairing_channels, announce_ready, error))
+			return true;
+		return RecoverRegulatoryByScan(interface_name, pairing_channels, announce_ready, error);
 	}
 
 	void RestoreRegulatoryCountry()
