@@ -36,6 +36,11 @@ set(BARISTA_RUNIT_SV "/usr/bin/sv" CACHE FILEPATH "Installed runit sv executable
 set(BARISTA_OPENRC_SERVICE_DIR "/etc/init.d" CACHE PATH "OpenRC service script directory")
 set(BARISTA_OPENRC_RUN "/sbin/openrc-run" CACHE FILEPATH "Installed OpenRC script interpreter")
 set(BARISTA_OPENRC_RC_SERVICE "/sbin/rc-service" CACHE FILEPATH "Installed OpenRC rc-service executable")
+add_compile_definitions(
+    BARISTA_INIT_SYSTEM_STRING="${BARISTA_INIT_SYSTEM}"
+    BARISTA_RUNIT_SV_PATH="${BARISTA_RUNIT_SV}"
+    BARISTA_RUNIT_SERVICE_PATH="${BARISTA_RUNIT_SERVICE_DIR}"
+    BARISTA_OPENRC_RC_SERVICE_PATH="${BARISTA_OPENRC_RC_SERVICE}")
 
 if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Python3 COMPONENTS Interpreter QUIET)

@@ -1,4 +1,5 @@
 #include "service.h"
+#include "../service_integration.h"
 #include "log_sanitizer.h"
 #include "../branding/idle_screen.h"
 #include "api/diagnostics.h"
@@ -554,6 +555,8 @@ QString Service::BuildSupportReport() const
         << "generated_utc=" << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) << '\n'
         << "barista_version=" << BARISTA_VERSION_STRING << '\n'
         << "source_revision=" << BARISTA_SOURCE_REVISION << '\n'
+        << "service_integration=" << barista::ServiceIntegrationName() << '\n'
+        << "service_recovery_command=" << barista::ServiceRecoveryCommand() << '\n'
         << "api_version=" << status.apiVersion << '\n'
         << "platform=" << QSysInfo::prettyProductName() << '\n'
         << "kernel=" << QSysInfo::kernelType() << ' ' << QSysInfo::kernelVersion() << '\n'

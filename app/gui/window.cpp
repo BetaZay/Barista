@@ -1,4 +1,5 @@
 #include "window.h"
+#include "../service_integration.h"
 #include "cafe_icons.h"
 #include "cafe_theme.h"
 #include "pairing_pattern.h"
@@ -776,6 +777,11 @@ Window::Window(bool smokeTest)
         healthForm->addRow(label,value);
     }
     advancedLayout->addLayout(healthForm);
+    auto* serviceIntegration = FormHint("Configured service integration: " + barista::ServiceIntegrationName() +
+        "\nService startup command: " + barista::ServiceRecoveryCommand(), advanced);
+    serviceIntegration->setObjectName("serviceIntegration");
+    serviceIntegration->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    advancedLayout->addWidget(serviceIntegration);
     auto* maintenance = new QDialogButtonBox(Qt::Horizontal,advanced);
     auto* refresh = maintenance->addButton("Check again",QDialogButtonBox::ActionRole);
     refresh->setObjectName("refreshButton");
@@ -787,7 +793,7 @@ Window::Window(bool smokeTest)
     });
     connect(m_prepare,&QPushButton::clicked,this,[this] {
         if (QMessageBox::question(this,"Prepare system?",
-            "Start NetworkManager if needed and load virtual-controller support? This can affect existing network connections. No packages will be installed and no GamePad session will start.",
+            barista::SystemPreparationDescription() + " No packages will be installed and no GamePad session will start.",
             QMessageBox::Ok | QMessageBox::Cancel,QMessageBox::Cancel) != QMessageBox::Ok) return;
         m_message->hide();
         m_client.Prepare();
@@ -1206,7 +1212,9 @@ bool Window::ConfirmWifi(bool pairing, const QString& interface)
             .arg(interface), QMessageBox::NoButton, this);
     QString information = pairing
         ? "This can replace your saved pairing and disconnect the GamePad from its Wii U. Stop releases the adapter; you may need to reconnect to your Wi-Fi network."
-        : "Stop releases the adapter; you may need to reconnect to your Wi-Fi network. Barista starts NetworkManager and loads controller support if needed. Your desktop may ask for permission.";
+        : (barista::ServiceIntegrationName() == "systemd"
+            ? "Stop releases the adapter; you may need to reconnect to your Wi-Fi network. Barista starts NetworkManager and loads controller support if needed. Your desktop may ask for permission."
+            : "Stop releases the adapter; you may need to reconnect to your Wi-Fi network. NetworkManager must already be enabled. Barista loads controller support if needed. Your desktop may ask for permission.");
     const QString country = m_country->text().trimmed().toUpper();
     if (!country.isEmpty())
         information += QString(" If the system is using the world regulatory domain, Barista will temporarily apply %1 system-wide and restore the prior setting when this session stops. Confirm %1 matches your physical location.").arg(country);
