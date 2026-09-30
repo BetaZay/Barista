@@ -4,6 +4,7 @@
 #include "cafe_theme.h"
 #include "pairing_pattern.h"
 #include "update_checker.h"
+#include "support_export.h"
 #include "api/diagnostics.h"
 #include <QApplication>
 #include <QButtonGroup>
@@ -53,6 +54,8 @@
 #include <array>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
+#include <QSignalBlocker>
 #include <QUrl>
 
 namespace {
@@ -381,6 +384,24 @@ Window::Window(bool smokeTest)
     m_hint->setObjectName("homeHint");
     m_hint->setWordWrap(true);
     readyLayout->addWidget(m_hint);
+    auto* errorActions = new QHBoxLayout;
+    m_errorDetails = new QPushButton("View details",ready);
+    m_errorDetails->setObjectName("errorDetailsButton");
+    m_errorRetry = new QPushButton("Retry",ready);
+    m_errorRetry->setObjectName("errorRetryButton");
+    m_errorDetails->hide(); m_errorRetry->hide();
+    errorActions->addWidget(m_errorDetails);
+    errorActions->addWidget(m_errorRetry);
+    errorActions->addStretch();
+    readyLayout->addLayout(errorActions);
+    connect(m_errorDetails,&QPushButton::clicked,this,[this] {
+        m_tabs->setCurrentIndex(2); m_settingsTabs->setCurrentIndex(2);
+        RefreshDiagnostics();
+    });
+    connect(m_errorRetry,&QPushButton::clicked,this,[this] {
+        if (!m_lastStatus.available) { m_client.Retry(); RefreshDiagnostics(); }
+        else if (m_start->isEnabled()) m_start->click();
+    });
     auto* deviceRow = new QHBoxLayout;
     auto* deviceIcon = new QLabel(ready);
     deviceIcon->setPixmap(CafeIcon(CafeSymbol::GamePad,QColor("#8b705a")).pixmap(32,32));
@@ -510,11 +531,20 @@ Window::Window(bool smokeTest)
     m_interface->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_interface->setMinimumContentsLength(12);
     m_interface->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);
-    for (const auto& interface : QNetworkInterface::allInterfaces())
+    if (smokeTest) m_availableInterfaces = {"wlan0"};
+    else for (const auto& interface : QNetworkInterface::allInterfaces())
         if (IsWifiInterface(interface))
-            m_interface->addItem(AdapterLabel(interface.name()),interface.name());
-    if (!m_interface->count()) m_interface->addItem("wlan0","wlan0");
-    settingsForm->addRow("GamePad &adapter:",m_interface);
+            m_availableInterfaces.push_back(interface.name());
+    for (const auto& interface : m_availableInterfaces)
+        m_interface->addItem(AdapterLabel(interface),interface);
+    if (!m_interface->count()) m_interface->addItem("No Wi-Fi adapters found");
+    auto* adapterRow = new QHBoxLayout;
+    adapterRow->addWidget(m_interface,1);
+    m_refreshAdapters = new QPushButton(CafeIcon(CafeSymbol::Refresh),"Refresh",settingsPage);
+    m_refreshAdapters->setObjectName("refreshAdaptersButton");
+    adapterRow->addWidget(m_refreshAdapters);
+    settingsForm->addRow("GamePad &adapter:",adapterRow);
+    connect(m_refreshAdapters,&QPushButton::clicked,this,&Window::RefreshAdapters);
     m_country = new QLineEdit(settingsPage);
     m_country->setObjectName("regulatoryCountry");
     m_country->setMaxLength(2);
@@ -554,6 +584,9 @@ Window::Window(bool smokeTest)
     if (!smokeTest) {
         QSettings settings;
         SelectInterface(m_interface,settings.value("interface",InterfaceName(m_interface)).toString());
+        if (!m_availableInterfaces.contains(InterfaceName(m_interface)) &&
+            barista::api::ValidInterfaceName(InterfaceName(m_interface).toStdString()))
+            m_interface->setItemText(m_interface->currentIndex(),InterfaceName(m_interface) + " (unavailable)");
         m_mode->setCurrentIndex(std::max(0,m_mode->findData(settings.value("mode","real"))));
         m_country->setText(settings.value("regulatoryCountry",SuggestedRegulatoryCountry()).toString().toUpper());
     }
@@ -822,6 +855,11 @@ Window::Window(bool smokeTest)
     m_logFiles->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_logFiles->setMinimumContentsLength(20);
     supportLayout->addWidget(m_logFiles);
+    m_includeLog = new QCheckBox("Include selected session log when copying or saving",support);
+    m_includeLog->setObjectName("includeSessionLog");
+    m_includeLog->setChecked(true);
+    m_includeLog->setEnabled(false);
+    supportLayout->addWidget(m_includeLog);
     auto* supportButtons = new QDialogButtonBox(Qt::Vertical,support);
     m_viewLog = supportButtons->addButton("View log",QDialogButtonBox::ActionRole);
     m_viewLog->setObjectName("viewLogButton");
@@ -844,17 +882,25 @@ Window::Window(bool smokeTest)
         if (!m_logDirectory.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(m_logDirectory));
     });
     connect(m_copyDiagnostics,&QPushButton::clicked,this,[this] {
-        QApplication::clipboard()->setText(m_supportReport);
+        QString error;
+        const QString report = SupportExport(error);
+        if (!error.isEmpty()) { m_message->setText(error); m_message->show(); return; }
+        QApplication::clipboard()->setText(report);
         m_message->setText("Support report copied. You can paste it into a bug report.");
         m_message->show();
     });
     connect(m_saveDiagnostics,&QPushButton::clicked,this,[this] {
+        QString error;
+        const QString report = SupportExport(error);
+        if (!error.isEmpty()) { m_message->setText(error); m_message->show(); return; }
         const QString suggested = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) +
             "/barista-support-" + QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss") + ".txt";
         const QString path = QFileDialog::getSaveFileName(this,"Save Barista support report",suggested,"Text files (*.txt)");
         if (path.isEmpty()) return;
-        QFile output(path);
-        if (!output.open(QIODevice::WriteOnly | QIODevice::Text) || output.write(m_supportReport.toUtf8()) < 0) {
+        QSaveFile output(path);
+        const QByteArray contents = report.toUtf8();
+        if (!output.open(QIODevice::WriteOnly | QIODevice::Text) ||
+            output.write(contents) != contents.size() || !output.commit()) {
             QMessageBox::warning(this,"Could not save report",output.errorString());
             return;
         }
@@ -967,6 +1013,9 @@ Window::Window(bool smokeTest)
         updateNotice->hide();
     });
     if (!smokeTest) {
+        auto* adapterTimer = new QTimer(this);
+        connect(adapterTimer,&QTimer::timeout,this,&Window::RefreshAdapters);
+        adapterTimer->start(3000);
         QTimer::singleShot(0,updates,[updates] { updates->Check(); });
         auto* updateTimer = new QTimer(this);
         connect(updateTimer,&QTimer::timeout,this,[this,updates] {
@@ -1056,6 +1105,12 @@ Window::Window(bool smokeTest)
             m_logFiles->clear(); m_logFiles->addItems(files);
             const int previous = m_logFiles->findText(selected);
             if (previous >= 0) m_logFiles->setCurrentIndex(previous);
+            else {
+                const auto match = QRegularExpression("(?:^|\\n)run_log=([^\\n]+)").match(report);
+                const int currentRun = m_logFiles->findText(match.captured(1));
+                if (currentRun >= 0) m_logFiles->setCurrentIndex(currentRun);
+            }
+            m_includeLog->setEnabled(!files.isEmpty());
             m_viewLog->setEnabled(!files.isEmpty());
             m_openLogs->setEnabled(!directory.isEmpty());
             m_copyDiagnostics->setEnabled(!report.isEmpty());
@@ -1204,8 +1259,9 @@ void Window::Quit()
 }
 bool Window::ConfirmWifi(bool pairing, const QString& interface)
 {
-    if (!barista::api::ValidInterfaceName(interface.toStdString())) {
-        m_message->setText("Choose a valid Wi-Fi adapter first."); m_message->show(); return false;
+    RefreshAdapters();
+    if (!barista::api::ValidInterfaceName(interface.toStdString()) || !m_availableInterfaces.contains(interface)) {
+        m_message->setText("Choose an available Wi-Fi adapter in Settings → General first."); m_message->show(); return false;
     }
     QMessageBox warning(QMessageBox::Warning, pairing ? "Pair your GamePad?" : "Start Barista?",
         QString("Barista will take over Wi-Fi adapter %1 for your GamePad. Internet access through this adapter will be interrupted. Use Ethernet or another Wi-Fi adapter to stay online.")
@@ -1239,6 +1295,46 @@ void Window::RefreshSavedGamePads()
 void Window::RefreshDiagnostics()
 {
     if (!m_smokeTest) m_client.RefreshDiagnostics();
+}
+
+void Window::RefreshAdapters()
+{
+    if (m_lastStatus.running || m_lastStatus.busy || m_pending) return;
+    QStringList interfaces;
+    if (m_smokeTest) interfaces = m_availableInterfaces;
+    else for (const auto& interface : QNetworkInterface::allInterfaces())
+        if (IsWifiInterface(interface)) interfaces.push_back(interface.name());
+    ApplyAdapters(interfaces);
+}
+
+void Window::ApplyAdapters(const QStringList& interfaces)
+{
+    QStringList available;
+    for (const auto& interface : interfaces)
+        if (barista::api::ValidInterfaceName(interface.toStdString())) available.push_back(interface);
+    available.removeDuplicates();
+    available.sort();
+    if (available == m_availableInterfaces) return;
+    const QString selected = InterfaceName(m_interface);
+    m_availableInterfaces = available;
+    {
+        const QSignalBlocker blocker(m_interface);
+        m_interface->clear();
+        for (const auto& interface : available)
+            m_interface->addItem(AdapterLabel(interface),interface);
+        if (barista::api::ValidInterfaceName(selected.toStdString())) {
+            if (!available.contains(selected)) m_interface->addItem(selected + " (unavailable)",selected);
+            m_interface->setCurrentIndex(m_interface->findData(selected));
+        }
+        if (!m_interface->count()) m_interface->addItem("No Wi-Fi adapters found");
+    }
+    ApplyStatus(m_lastStatus);
+}
+
+QString Window::SupportExport(QString& error) const
+{
+    return barista::BuildSupportExport(m_supportReport,m_logDirectory,
+        m_includeLog->isChecked() ? m_logFiles->currentText() : QString(),error);
 }
 
 void Window::ViewSelectedLog()
@@ -1513,10 +1609,11 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         status.capabilities.controllerSetup;
     const std::string country = m_country->text().trimmed().toUpper().toStdString();
     const bool validCountry = country.empty() || barista::api::ValidRegulatoryCountry(country);
-    m_start->setEnabled(!m_restartRequired && available && !running && !busy && supported && validCountry);
+    const bool validAdapter = m_availableInterfaces.contains(InterfaceName(m_interface));
+    m_start->setEnabled(!m_restartRequired && available && !running && !busy && supported && validCountry && validAdapter);
     m_pair->setEnabled(!m_restartRequired && available && !running && !busy && supported &&
         barista::api::ParsePairCode(m_code->text().toStdString()).has_value() &&
-        validCountry);
+        validCountry && validAdapter);
     m_stop->setEnabled(available && running && !busy && owned && phase != barista::api::SessionPhase::Stopping);
     m_waitingStop->setEnabled(m_stop->isEnabled());
     const bool canEditPair = available && !running && !busy && m_savedGamePads->currentItem();
@@ -1598,6 +1695,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     } else if (!supported) {
         stage = "Select Screen + controller in Settings → General.";
         stageTone = Tone::Warning;
+    } else if (!validAdapter) {
+        stage = "Choose an available Wi-Fi adapter in Settings → General.";
     } else if (!validCountry) {
         stage = "Check your country code in Settings → General.";
         stageTone = Tone::Warning;
@@ -1631,4 +1730,15 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         m_hint->show();
         SetTone(m_hint,Tone::Bad);
     }
+    if (available && !running && error.isEmpty() && !validAdapter)
+        m_hint->setText("Choose an available Wi-Fi adapter in Settings → General. Plug in your adapter or refresh the list.");
+    const bool hasError = !error.isEmpty() && !status.activating;
+    const bool retryable = !status.error || (status.error->code != barista::api::ErrorCode::Unauthorized &&
+        status.error->code != barista::api::ErrorCode::Unsupported &&
+        status.error->code != barista::api::ErrorCode::InvalidArgument);
+    m_errorDetails->setVisible(hasError);
+    m_errorRetry->setVisible(hasError);
+    m_errorRetry->setEnabled(hasError && retryable && !running && !busy &&
+        (!available || m_start->isEnabled()));
+    m_refreshAdapters->setEnabled(!running && !busy);
 }
