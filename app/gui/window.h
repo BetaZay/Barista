@@ -25,6 +25,8 @@ public slots:
     void RunInBackground();
     void Quit();
     void OpenPairing();
+    void RefreshAdapters();
+    void ApplyAdapters(const QStringList& interfaces);
 protected:
     void closeEvent(QCloseEvent* event) override;
 private slots:
@@ -37,6 +39,7 @@ private:
     void RefreshSavedGamePads();
     void RefreshDiagnostics();
     void ViewSelectedLog();
+    QString SupportExport(QString& error) const;
     void InitializePairingPattern();
     void UpdateHomeDevice();
     void CheckInstalledVersion();
@@ -62,6 +65,8 @@ private:
     QPushButton* m_waitingStop;
     QPushButton *m_renamePair, *m_removePair;
     QPushButton *m_viewLog, *m_openLogs, *m_copyDiagnostics, *m_saveDiagnostics;
+    QPushButton *m_refreshAdapters, *m_errorDetails, *m_errorRetry;
+    QCheckBox* m_includeLog;
     QCheckBox* m_background;
     QSystemTrayIcon* m_tray;
     QAction *m_trayStart, *m_trayStop;
@@ -70,6 +75,7 @@ private:
     barista::api::SessionStatus m_lastStatus;
     QString m_operationError;
     QString m_logDirectory, m_supportReport;
+    QStringList m_availableInterfaces;
     QString m_appLogoSource;
     bool m_pending = false;
     bool m_pairingRequested = false;

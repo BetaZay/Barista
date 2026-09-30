@@ -1,6 +1,7 @@
 #include "window.h"
 #include "cafe_icons.h"
 #include "pairing_pattern.h"
+#include "support_export.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QPushButton>
@@ -18,6 +19,12 @@
 #include <QPropertyAnimation>
 #include <QListWidget>
 #include <QFileInfo>
+#include <QFile>
+#include <QTemporaryDir>
+#include <QClipboard>
+#include <QDir>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QToolBar>
 #include <QMenuBar>
 #include <QAction>
@@ -34,6 +41,13 @@ int main(int argc, char** argv)
     try {
         Window window(true); window.show();
         QApplication::processEvents();
+        auto screenshot = [&](const QString& name) {
+            const QString directory = qEnvironmentVariable("BARISTA_QOL_SCREENSHOT_DIR");
+            if (directory.isEmpty()) return;
+            Check(QDir().mkpath(directory),"create screenshot directory");
+            QApplication::processEvents();
+            Check(window.grab().save(QDir(directory).filePath(name)),"save QoL screenshot");
+        };
         auto* start = window.findChild<QPushButton*>("startButton");
         auto* stop = window.findChild<QPushButton*>("stopButton");
         auto* pair = window.findChild<QPushButton*>("pairButton");
@@ -331,8 +345,7 @@ int main(int argc, char** argv)
         Check(!interfaceCombo->isEditable() && !interfaceCombo->lineEdit(),"adapter is selection-only");
         QSvgRenderer dropdownArrow(QStringLiteral(":/barista/icons/dropdown.svg"));
         Check(dropdownArrow.isValid(),"dropdown uses the bundled cafe-colored Kenney caret");
-        for (const QString name : {"wlan0","wlan1"})
-            if (interfaceCombo->findData(name) < 0) interfaceCombo->addItem(name,name);
+        window.ApplyAdapters({"wlan0","wlan1"});
         interfaceCombo->setCurrentIndex(interfaceCombo->findData("wlan0"));
         Check(selectedName(interfaceCombo) == "wlan0","Settings selects the pairing adapter");
         interfaceCombo->setCurrentIndex(interfaceCombo->findData("wlan1"));
@@ -476,6 +489,89 @@ int main(int argc, char** argv)
         window.OpenPairing(); cancelPair->click();
         Check(pairingStops == 3,"closing pairing does not stop a saved GamePad connection startup");
         status.running = false; status.phase = barista::api::SessionPhase::Idle;
+        status.error.reset(); apply();
+        window.ApplyAdapters({});
+        tabs->setCurrentIndex(2); settingsTabs->setCurrentIndex(0);
+        screenshot("qol-adapters.png");
+        Check(!start->isEnabled() && !pair->isEnabled(),"removing all adapters disables connection and pairing");
+        Check(interfaceCombo->currentText().contains("unavailable"),"missing selected adapter remains visible");
+        window.ApplyAdapters({"wlan2"});
+        Check(!start->isEnabled(),"another adapter does not silently replace the selected adapter");
+        interfaceCombo->setCurrentIndex(interfaceCombo->findData("wlan2"));
+        Check(start->isEnabled(),"selecting a newly attached adapter enables connection");
+        window.ApplyAdapters({"wlan2","wlan2","bad/name","wlan3"});
+        Check(interfaceCombo->count() == 2 && selectedName(interfaceCombo) == "wlan2",
+            "refresh preserves selection and rejects invalid or duplicate adapters");
+        status.running = true; status.phase = barista::api::SessionPhase::Runtime; apply();
+        window.ApplyAdapters({"wlan3"});
+        Check(stop->isEnabled() && selectedName(interfaceCombo) == "wlan2",
+            "adapter removal preserves session cleanup and the selected interface");
+        status.running = false; status.phase = barista::api::SessionPhase::Idle;
+        window.ApplyAdapters({"wlan0","wlan1"});
+        interfaceCombo->setCurrentIndex(interfaceCombo->findData("wlan0"));
+        status.error = barista::api::Error{.code=barista::api::ErrorCode::Failed,.message="Connection failed"}; apply();
+        auto* errorDetails = window.findChild<QPushButton*>("errorDetailsButton");
+        auto* errorRetry = window.findChild<QPushButton*>("errorRetryButton");
+        Check(errorDetails && errorRetry && errorRetry->isEnabled(),"idle connection failure offers retry");
+        tabs->setCurrentIndex(0);
+        screenshot("qol-error-actions.png");
+        bool retryConfirmed = false;
+        const int operationsBeforeRetry = operations;
+        QTimer::singleShot(0,[&] {
+            for (auto* widget : QApplication::topLevelWidgets())
+                if (auto* warning = qobject_cast<QMessageBox*>(widget)) {
+                    retryConfirmed = warning->text().contains("take over"); warning->reject();
+                }
+        });
+        errorRetry->click();
+        Check(retryConfirmed && operations == operationsBeforeRetry,"retry retains Wi-Fi confirmation and cancellation launches no operation");
+        errorDetails->click();
+        Check(tabs->currentIndex() == 2 && settingsTabs->currentIndex() == 2,"error details open Support directly");
+        status.error->code = barista::api::ErrorCode::Unsupported; apply();
+        Check(!errorRetry->isEnabled(),"unsupported errors require corrective action before retry");
+        status.error->code = barista::api::ErrorCode::Failed;
+        status.running = true; status.phase = barista::api::SessionPhase::Runtime; apply();
+        Check(!errorRetry->isEnabled(),"retry cannot start another session while one is running");
+        status.running = false; status.phase = barista::api::SessionPhase::Idle;
+        status.error.reset(); apply();
+        Check(errorDetails->isHidden() && errorRetry->isHidden(),"recovery hides error actions");
+        QTemporaryDir logs;
+        Check(logs.isValid(),"temporary session log directory");
+        QFile sessionLog(logs.filePath("session.log"));
+        Check(sessionLog.open(QIODevice::WriteOnly),"create selected session log");
+        sessionLog.write("phase=runtime\nSESSION_FAILED: sanitized details\n"); sessionLog.close();
+        const QString report = "Barista support report\nphase=idle\nrun_log=session.log\n";
+        emit client->Diagnostics(report,logs.path(),{"maintenance.log","session.log"},"session-id");
+        tabs->setCurrentIndex(2); settingsTabs->setCurrentIndex(2);
+        for (auto* scroll : window.findChildren<QScrollArea*>())
+            if (scroll->widget() && scroll->widget()->objectName() == "supportPanel")
+                scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
+        screenshot("qol-support-export.png");
+        Check(window.findChild<QComboBox*>("supportLogFiles")->currentText() == "session.log",
+            "diagnostics prefer the report's relevant session log over maintenance");
+        copyDiagnostics->click();
+        Check(QApplication::clipboard()->text().contains("phase=idle") &&
+            QApplication::clipboard()->text().contains("SESSION_FAILED: sanitized details") &&
+            QApplication::clipboard()->text().contains("selected session"),"copy includes report and clearly separated selected log");
+        window.findChild<QCheckBox*>("includeSessionLog")->setChecked(false);
+        copyDiagnostics->click();
+        Check(QApplication::clipboard()->text() == report,"report-only export remains available");
+        QString exportError;
+        Check(barista::BuildSupportExport(report,logs.path(),"../private.log",exportError).isEmpty() &&
+            !exportError.isEmpty(),"export rejects path traversal");
+#ifdef __unix__
+        Check(QFile::link(sessionLog.fileName(),logs.filePath("linked.log")),"create log symlink");
+        Check(barista::BuildSupportExport(report,logs.path(),"linked.log",exportError).isEmpty() &&
+            !exportError.isEmpty(),"export does not follow log symlinks");
+#endif
+        Check(sessionLog.open(QIODevice::WriteOnly | QIODevice::Append),"append oversized log");
+        sessionLog.write(QByteArray(1024 * 1024,'x')); sessionLog.close();
+        const QString boundedExport = barista::BuildSupportExport(report,logs.path(),"session.log",exportError);
+        Check(exportError.isEmpty() && boundedExport.contains("Log truncated to 1 MiB"),"export bounds large logs and explicitly reports truncation");
+        window.findChild<QCheckBox*>("includeSessionLog")->setChecked(true);
+        QApplication::clipboard()->setText("previous clipboard");
+        sessionLog.remove(); copyDiagnostics->click();
+        Check(QApplication::clipboard()->text() == "previous clipboard","missing session log cannot silently replace clipboard with incomplete report");
         status.serviceVersion = "9.9.999"; apply();
         Check(!start->isEnabled() && !pair->isEnabled(),"software mismatch blocks new sessions");
         Check(window.findChild<QLabel*>("updateStatus")->text().contains("Restart Barista"),"software mismatch explains required restart");
