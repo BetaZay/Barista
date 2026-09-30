@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+[ ! -d /run/barista-package-upgrade ] || exit 1
+"@BARISTA_OPENRC_RC_SERVICE@" --ifnotstarted barista start
+# rc-service starts the supervisor before the daemon claims its bus name.
+attempt=0
+while [ "$attempt" -lt 10 ]; do
+    "@CMAKE_INSTALL_FULL_LIBEXECDIR@/barista/barista-service-ready" && exit 0
+    attempt=$((attempt + 1))
+    [ "$attempt" -eq 10 ] || sleep 1
+done
+echo "Barista did not register its system D-Bus name; check the service logs." >&2
+exit 1

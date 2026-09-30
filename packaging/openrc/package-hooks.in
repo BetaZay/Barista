@@ -1,0 +1,39 @@
+#!/bin/sh
+barista_pre() {
+    [ -d /run/openrc ] || return 0
+    state=0
+    "@BARISTA_OPENRC_RC_SERVICE@" barista status >/dev/null 2>&1 || state=$?
+    # OpenRC status 3 means stopped. Reject transitional or crashed states.
+    case "$state" in
+        0|3) ;;
+        *) echo "Resolve the Barista OpenRC service state before upgrading (status $state)." >&2; return 1 ;;
+    esac
+    if [ ! -d /run/barista-package-upgrade ]; then
+        mkdir -m 700 /run/barista-package-upgrade || return 1
+        if [ "$state" -eq 0 ]; then
+            touch /run/barista-package-upgrade/restart
+        fi
+    fi
+    if [ "$state" -eq 0 ]; then
+        if ! "@BARISTA_OPENRC_RC_SERVICE@" barista stop; then
+            barista_post
+            return 1
+        fi
+    fi
+}
+
+barista_post() {
+    [ -d /run/barista-package-upgrade ] || return 0
+    restart=no
+    [ ! -f /run/barista-package-upgrade/restart ] || restart=yes
+    rm -f /run/barista-package-upgrade/restart
+    rmdir /run/barista-package-upgrade || return 1
+    if [ "$restart" = yes ]; then
+        "@BARISTA_OPENRC_RC_SERVICE@" --ifnotstarted barista start || return 1
+    fi
+    # Restore the idle service without reconnecting a GamePad.
+}
+
+pre_upgrade() { barista_pre; }
+post_upgrade() { barista_post; }
+post_install() { barista_post; }

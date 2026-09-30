@@ -129,6 +129,46 @@ upgrade success/failure without root or another operating system. A booted runit
 system and real GamePad remain necessary to confirm distribution integration
 and hardware behavior.
 
+### Using OpenRC instead of systemd
+
+Use `-DBARISTA_INIT_SYSTEM=openrc` for an OpenRC service in `/etc/init.d/barista`:
+
+```sh
+cmake -S . -B build-openrc -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+  -DBARISTA_INIT_SYSTEM=openrc
+cmake --build build-openrc --parallel
+ctest --test-dir build-openrc --output-on-failure
+sudo cmake --install build-openrc
+sudo rc-update add barista default
+sudo rc-service barista start
+```
+
+The service uses OpenRC's `supervise-daemon` and the same directory launcher as
+runit. It requires the `dbus` service and orders enabled NetworkManager and
+polkit services before Barista. Enable those services using your distribution's
+names first (`NetworkManager` or `networkmanager`, for example). Barista still
+checks NetworkManager through D-Bus before starting a GamePad session.
+
+D-Bus activation calls `rc-service --ifnotstarted barista start` and waits for
+Barista's system bus name before returning success. CPack's OpenRC upgrade hooks
+block activation and manual starts during replacement, stop a running service,
+and restore only a previously running service. Crashed or transitional service
+states abort the upgrade with a diagnostic. Restoring the service leaves it
+idle. Stop it with `sudo rc-service barista stop`; for manual CMake reinstalls,
+stop it first and start it afterward.
+
+Configure `BARISTA_OPENRC_SERVICE_DIR`, `BARISTA_OPENRC_RUN`, and
+`BARISTA_OPENRC_RC_SERVICE` if the target uses paths other than `/etc/init.d`,
+`/sbin/openrc-run`, and `/sbin/rc-service`. OpenRC tools are required on the
+target, not the build machine. The target also needs `dbus-send` and standard
+shell utilities. Official repository and Arch PKGBUILD builds remain systemd
+builds; use source installation or CPack for this option.
+
+Tests simulate OpenRC status codes, service dependencies, activation readiness
+and timeouts, and upgrade recovery. A booted OpenRC distribution, privileged
+service lifecycle, and physical GamePad have not been tested by these simulations.
+
 Installed builds keep shareable per-run, per-pairing-cycle, and maintenance logs in
 `/var/log/barista/support`. Settings → Support can view these files and create a
 support report without elevated privileges. Raw engine logs are kept separately

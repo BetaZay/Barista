@@ -10,7 +10,7 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 @unittest.skipUnless(os.name == "posix", "Requires Unix shell utilities and FIFOs")
-class InitScriptTests(unittest.TestCase):
+class ScriptTestCase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -47,11 +47,14 @@ esac
         replacements = {
             "@BARISTA_RUNIT_SV@": str(self.sv),
             "@BARISTA_RUNIT_SERVICE_DIR@": str(self.service),
+            "@BARISTA_OPENRC_RC_SERVICE@": str(self.bin / "rc-service"),
+            "@BARISTA_OPENRC_RUN@": str(self.bin / "openrc-run"),
             "@CMAKE_INSTALL_FULL_LIBEXECDIR@": str(self.root / "libexec"),
             "/run/barista-package-upgrade": str(self.marker),
             "/run/barista": str(self.root / "runtime"),
             "/var/log/barista": str(self.root / "logs"),
             "/var/lib/barista": str(self.root / "state"),
+            "/run/openrc": str(self.root / "openrc"),
         }
         for before, after in replacements.items():
             text = text.replace(before, after)
@@ -64,6 +67,7 @@ esac
         return subprocess.run(["sh", "-ec", '. "$1"; ' + command, "sh", str(self.hooks)],
                               env=dict(self.env, **env), capture_output=True, text=True)
 
+class InitScriptTests(ScriptTestCase):
     def test_active_upgrade_stops_and_restores_idle_service(self):
         result = self.invoke("barista_pre; barista_post")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -120,11 +124,11 @@ esac
     def test_check_requires_bus_registration(self):
         self.executable("dbus-send", '#!/bin/sh\necho "boolean ${INIT_BUS_OWNER:-false}"\n')
         for owner, expected in [("false", 1), ("true", 0)]:
-            result = subprocess.run(["sh", str(REPOSITORY / "packaging/runit/check")],
+            result = subprocess.run(["sh", str(REPOSITORY / "packaging/linux/service-ready")],
                                     env=dict(self.env, INIT_BUS_OWNER=owner))
             self.assertEqual(result.returncode, expected)
         self.executable("dbus-send", "#!/bin/sh\nexit 1\n")
-        self.assertNotEqual(subprocess.run(["sh", str(REPOSITORY / "packaging/runit/check")],
+        self.assertNotEqual(subprocess.run(["sh", str(REPOSITORY / "packaging/linux/service-ready")],
                                           env=self.env).returncode, 0)
 
     def test_launcher_creates_directories_and_executes_daemon(self):
@@ -145,6 +149,112 @@ esac
         self.assertNotEqual(subprocess.run([str(launcher)], env=self.env,
                                           capture_output=True).returncode, 0)
         self.assertFalse(self.log.exists())
+
+
+class OpenRCTests(ScriptTestCase):
+    def setUp(self):
+        super().setUp()
+        (self.root / "openrc").mkdir()
+        self.executable("rc-service", '''#!/bin/sh
+echo "$*" >> "$INIT_LOG"
+if [ "$1" = --ifnotstarted ]; then shift; fi
+case "$2" in
+status) exit "${INIT_STATUS_RESULT:-0}" ;;
+stop) exit "${INIT_STOP_RESULT:-0}" ;;
+start) exit "${INIT_START_RESULT:-0}" ;;
+esac
+''')
+        self.hooks = self.render("packaging/openrc/package-hooks.in", "openrc-hooks")
+        self.activate = self.render("packaging/openrc/activate.in", "openrc-activate")
+        ready = self.root / "libexec/barista/barista-service-ready"
+        ready.parent.mkdir(parents=True)
+        ready.write_text('''#!/bin/sh
+echo ready >> "$INIT_LOG"
+count=0
+[ ! -f "$INIT_COUNT" ] || read -r count < "$INIT_COUNT"
+count=$((count + 1))
+echo "$count" > "$INIT_COUNT"
+[ "$count" -ge "${INIT_READY_AFTER:-1}" ]
+''')
+        ready.chmod(0o755)
+        self.env["INIT_COUNT"] = str(self.root / "ready-count")
+        self.executable("sleep", "#!/bin/sh\nexit 0\n")
+
+    def test_active_upgrade_stops_and_restores_service(self):
+        result = self.invoke("barista_pre; barista_post")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [
+            "barista status", "barista stop", "--ifnotstarted barista start"])
+        self.assertFalse(self.marker.exists())
+
+    def test_stopped_service_stays_stopped_and_blocks_activation_during_upgrade(self):
+        self.assertEqual(self.invoke("barista_pre", INIT_STATUS_RESULT="3").returncode, 0)
+        self.assertTrue(self.marker.exists())
+        result = subprocess.run([str(self.activate)], env=self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.invoke("barista_post").returncode, 0)
+        self.assertEqual(self.log.read_text().splitlines(), ["barista status"])
+
+    def test_non_openrc_environment_is_ignored(self):
+        (self.root / "openrc").rmdir()
+        self.assertEqual(self.invoke("barista_pre; barista_post").returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_crashed_or_transitional_service_aborts_upgrade(self):
+        for state in ["1", "4", "8", "16", "32", "64"]:
+            with self.subTest(state=state):
+                self.assertNotEqual(self.invoke("barista_pre", INIT_STATUS_RESULT=state).returncode, 0)
+                self.assertFalse(self.marker.exists())
+        self.assertNotIn("stop", self.log.read_text())
+
+    def test_stop_failure_restores_activation_and_aborts(self):
+        self.assertNotEqual(self.invoke("barista_pre", INIT_STOP_RESULT="1").returncode, 0)
+        self.assertIn("--ifnotstarted barista start", self.log.read_text())
+        self.assertFalse(self.marker.exists())
+
+    def test_interrupted_upgrade_retains_restart_intent(self):
+        self.marker.mkdir()
+        (self.marker / "restart").touch()
+        self.assertEqual(self.invoke("barista_pre; barista_post", INIT_STATUS_RESULT="3").returncode, 0)
+        self.assertIn("--ifnotstarted barista start", self.log.read_text())
+
+    def test_restart_failure_is_reported(self):
+        self.assertNotEqual(self.invoke("barista_pre; barista_post", INIT_START_RESULT="1").returncode, 0)
+
+    def test_activation_waits_for_bus_registration(self):
+        result = subprocess.run([str(self.activate)], env=dict(self.env, INIT_READY_AFTER="3"),
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [
+            "--ifnotstarted barista start", "ready", "ready", "ready"])
+
+    def test_activation_times_out_without_bus_registration(self):
+        result = subprocess.run([str(self.activate)], env=dict(self.env, INIT_READY_AFTER="100"),
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not register", result.stderr)
+        self.assertEqual(self.log.read_text().splitlines().count("ready"), 10)
+
+    def test_start_failure_does_not_wait_for_readiness(self):
+        result = subprocess.run([str(self.activate)], env=dict(self.env, INIT_START_RESULT="1"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("ready", self.log.read_text())
+
+    def test_service_pre_start_blocks_manual_starts_during_upgrade(self):
+        service = self.render("packaging/openrc/barista.in", "openrc-service")
+        def start_pre():
+            return subprocess.run(["sh", "-ec", 'eerror() { :; }; . "$1"; start_pre', "sh", str(service)],
+                                  env=self.env, capture_output=True)
+        self.assertEqual(start_pre().returncode, 0)
+        self.marker.mkdir()
+        self.assertNotEqual(start_pre().returncode, 0)
+
+    def test_service_orders_bus_and_enabled_optional_dependencies(self):
+        service = self.render("packaging/openrc/barista.in", "openrc-service")
+        result = subprocess.run(["sh", "-ec", 'need() { echo "need $*"; }; use() { echo "use $*"; }; . "$1"; depend',
+                                 "sh", str(service)], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["need dbus", "use NetworkManager networkmanager polkit"])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/bin/sh
-# sv start must wait for the system bus name, not merely a live process.
+# Activation must wait for the system bus name, not merely a live process.
 set -eu
 dbus-send --system --print-reply --reply-timeout=1000 --dest=org.freedesktop.DBus \
     /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner \

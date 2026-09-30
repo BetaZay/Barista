@@ -90,18 +90,30 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         configure_file(../packaging/linux/barista.service.in barista.service @ONLY)
         set(BARISTA_DBUS_EXEC "${CMAKE_INSTALL_FULL_LIBEXECDIR}/barista/barista-service")
         set(BARISTA_DBUS_SYSTEMD "SystemdService=barista.service")
-        if(BARISTA_INIT_SYSTEM STREQUAL "runit")
+        if(NOT BARISTA_INIT_SYSTEM STREQUAL "systemd")
             set(BARISTA_DBUS_SYSTEMD "")
             configure_file(../packaging/linux/service-launch.in service-launch @ONLY)
             install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/service-launch
                 DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-service-launch)
+        endif()
+        if(BARISTA_INIT_SYSTEM STREQUAL "runit")
             configure_file(../packaging/runit/run.in runit-run @ONLY)
             configure_file(../packaging/runit/activate.in runit-activate @ONLY)
             install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/runit-run DESTINATION ${BARISTA_RUNIT_SERVICE_DIR} RENAME run)
-            install(PROGRAMS ../packaging/runit/check DESTINATION ${BARISTA_RUNIT_SERVICE_DIR})
+            install(PROGRAMS ../packaging/linux/service-ready DESTINATION ${BARISTA_RUNIT_SERVICE_DIR} RENAME check)
             install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/runit-activate
                 DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-runit-activate)
             set(BARISTA_DBUS_EXEC "${CMAKE_INSTALL_FULL_LIBEXECDIR}/barista/barista-runit-activate")
+        elseif(BARISTA_INIT_SYSTEM STREQUAL "openrc")
+            configure_file(../packaging/openrc/barista.in openrc-barista @ONLY)
+            configure_file(../packaging/openrc/activate.in openrc-activate @ONLY)
+            install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/openrc-barista
+                DESTINATION ${BARISTA_OPENRC_SERVICE_DIR} RENAME barista)
+            install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/openrc-activate
+                DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-openrc-activate)
+            install(PROGRAMS ../packaging/linux/service-ready
+                DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-service-ready)
+            set(BARISTA_DBUS_EXEC "${CMAKE_INSTALL_FULL_LIBEXECDIR}/barista/barista-openrc-activate")
         endif()
         configure_file(../packaging/linux/org.barista.Service1.service.in org.barista.Service1.service @ONLY)
         # systemd units are not architecture-specific libraries (lib64 or a
