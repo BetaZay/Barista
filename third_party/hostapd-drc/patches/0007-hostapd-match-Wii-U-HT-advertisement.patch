@@ -1,7 +1,7 @@
 From 7d915124d45335dfd22583aeb12ddbcfc5dfaa2a Mon Sep 17 00:00:00 2001
 From: Barista <barista@example.invalid>
 Date: Wed, 2 Sep 2026 21:00:00 -0600
-Subject: [PATCH 7/7] hostapd: match Wii U HT advertisement
+Subject: [PATCH] hostapd: match Wii U HT advertisement on hostap 2.12
 
 Use the HT capability, A-MPDU, and RIFS values observed from a real Wii U
 pairing AP. Omit the modern Extended Capabilities IE that the console does
@@ -16,9 +16,8 @@ diff --git a/src/ap/beacon.c b/src/ap/beacon.c
 index 5081f11..b768d88 100644
 --- a/src/ap/beacon.c
 +++ b/src/ap/beacon.c
-@@ -759,7 +759,9 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
- 		pos = csa_pos;
- 	}
+@@ -895,6 +895,8 @@ static u8 * hostapd_gen_probe_resp(struct hostapd_data *hapd,
+ 	pos = csa_pos;
  
 +#ifndef CONFIG_TENDONIN
  	pos = hostapd_eid_supported_op_classes(hapd, pos);
@@ -56,16 +55,16 @@ index f90f125..a942340 100644
  	os_memcpy(cap->supported_mcs_set, hapd->iface->current_mode->mcs_set,
  		  16);
  
-@@ -96,6 +102,9 @@ u8 * hostapd_eid_ht_operation(struct hostapd_data *hapd, u8 *eid)
+@@ -143,6 +149,9 @@ u8 * hostapd_eid_ht_operation(struct hostapd_data *hapd, u8 *eid)
  
  	oper->primary_chan = hapd->iconf->channel;
  	oper->operation_mode = host_to_le16(hapd->iface->ht_op_mode);
 +#ifdef CONFIG_TENDONIN
 +	oper->ht_param |= HT_INFO_HT_PARAM_RIFS_MODE;
 +#endif /* CONFIG_TENDONIN */
- 	if (hapd->iconf->secondary_channel == 1)
- 		oper->ht_param |= HT_INFO_HT_PARAM_SECONDARY_CHNL_ABOVE |
- 			HT_INFO_HT_PARAM_STA_CHNL_WIDTH;
+ 	set_ht_param(hapd, oper);
+ 
+ 	pos += sizeof(*oper);
 diff --git a/src/ap/ieee802_11_shared.c b/src/ap/ieee802_11_shared.c
 index 3dd3a6a..9dfd525 100644
 --- a/src/ap/ieee802_11_shared.c
