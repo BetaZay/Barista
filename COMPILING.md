@@ -16,7 +16,8 @@ Install a C++20 compiler, CMake 3.20 or newer, Ninja, Git, Python 3, Qt 6 Core/
 Widgets/Network/DBus development packages, OpenSSL development headers, and
 FreeType development headers for the GamePad UI, plus the `libnl` development
 packages required by hostapd. On Linux, `pkcheck`,
-`modprobe`, and `systemctl` must be available for the full service build.
+`modprobe`, and (for the default systemd integration) `systemctl` must be
+available for the full service build.
 
 Package names vary. On Debian/Ubuntu-like distributions the relevant package
 families are commonly `build-essential`, `cmake`, `ninja-build`, `git`,
@@ -76,6 +77,97 @@ sudo cmake --install build-release
 Installation places the desktop file, D-Bus activation service, polkit policy,
 root-owned engine, and Barista's patched hostapd together. Open Barista as the
 regular desktop user; do not start the GUI with `sudo` or `pkexec`.
+
+### Using runit instead of systemd
+
+Configure the full Linux build with `-DBARISTA_INIT_SYSTEM=runit`. This does not
+require `systemctl`; it installs a runit service in `/etc/sv/barista` and routes
+D-Bus activation through `sv start`. The service's readiness check waits for
+its system D-Bus name. Official repository packages still use systemd; use a
+source build or a CPack package configured for runit on a runit distribution.
+
+```sh
+cmake -S . -B build-runit -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+  -DBARISTA_INIT_SYSTEM=runit
+cmake --build build-runit --parallel
+ctest --test-dir build-runit --output-on-failure
+sudo cmake --install build-runit
+```
+
+Enable the distribution's system D-Bus, NetworkManager, and polkit services
+first. Barista checks NetworkManager over D-Bus and reports an actionable error
+if it is absent; it does not try to start it using systemctl. The `uinput`
+module is still loaded through `modprobe` when needed.
+
+Enable Barista by linking its service directory into your distribution's active
+runit service directory. For example, on a system using `/var/service`:
+
+```sh
+sudo ln -s /etc/sv/barista /var/service/barista
+sudo sv -w 10 start /etc/sv/barista
+```
+
+Use your distribution's actual active directory (some use `/run/runit/service`
+or `/service`). `BARISTA_RUNIT_SERVICE_DIR` changes the installed definition
+directory, and `BARISTA_RUNIT_SV` changes the installed `sv` executable path
+(default `/usr/bin/sv`). Both are configure-time paths; `sv` need not be
+installed on the build machine. The target needs `sv`, `dbus-send`, and the
+standard shell utilities. Keep these helpers and service definitions root-owned.
+
+The run script creates the runtime, state, and log directories with the required
+permissions and executes the privileged service directly, so runit supervises
+the daemon. Stop it with `sudo sv -w 30 stop /etc/sv/barista`. CPack's runit
+upgrade hooks stop it, block D-Bus activation during replacement, and restore
+the service only if it was running beforehand. A restarted service remains idle;
+it does not reconnect the GamePad. For manual CMake reinstalls, stop the service
+first and start it afterward. Disabling it permanently also requires removing
+its link from the active directory; opening the GUI can otherwise start it again.
+
+Automated tests simulate activation, readiness, directory permissions, and
+upgrade success/failure without root or another operating system. A booted runit
+system and real GamePad remain necessary to confirm distribution integration
+and hardware behavior.
+
+### Using OpenRC instead of systemd
+
+Use `-DBARISTA_INIT_SYSTEM=openrc` for an OpenRC service in `/etc/init.d/barista`:
+
+```sh
+cmake -S . -B build-openrc -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+  -DBARISTA_INIT_SYSTEM=openrc
+cmake --build build-openrc --parallel
+ctest --test-dir build-openrc --output-on-failure
+sudo cmake --install build-openrc
+sudo rc-update add barista default
+sudo rc-service barista start
+```
+
+The service uses OpenRC's `supervise-daemon` and the same directory launcher as
+runit. It requires the `dbus` service and orders enabled NetworkManager and
+polkit services before Barista. Enable those services using your distribution's
+names first (`NetworkManager` or `networkmanager`, for example). Barista still
+checks NetworkManager through D-Bus before starting a GamePad session.
+
+D-Bus activation calls `rc-service --ifnotstarted barista start` and waits for
+Barista's system bus name before returning success. CPack's OpenRC upgrade hooks
+block activation and manual starts during replacement, stop a running service,
+and restore only a previously running service. Crashed or transitional service
+states abort the upgrade with a diagnostic. Restoring the service leaves it
+idle. Stop it with `sudo rc-service barista stop`; for manual CMake reinstalls,
+stop it first and start it afterward.
+
+Configure `BARISTA_OPENRC_SERVICE_DIR`, `BARISTA_OPENRC_RUN`, and
+`BARISTA_OPENRC_RC_SERVICE` if the target uses paths other than `/etc/init.d`,
+`/sbin/openrc-run`, and `/sbin/rc-service`. OpenRC tools are required on the
+target, not the build machine. The target also needs `dbus-send` and standard
+shell utilities. Official repository and Arch PKGBUILD builds remain systemd
+builds; use source installation or CPack for this option.
+
+Tests simulate OpenRC status codes, service dependencies, activation readiness
+and timeouts, and upgrade recovery. A booted OpenRC distribution, privileged
+service lifecycle, and physical GamePad have not been tested by these simulations.
 
 Installed builds keep shareable per-run, per-pairing-cycle, and maintenance logs in
 `/var/log/barista/support`. Settings → Support can view these files and create a

@@ -1,0 +1,24 @@
+#!@BARISTA_OPENRC_RUN@
+description="Barista GamePad service"
+supervisor="supervise-daemon"
+command="@CMAKE_INSTALL_FULL_LIBEXECDIR@/barista/barista-service-launch"
+pidfile="/run/barista-supervisor.pid"
+umask="0077"
+retry="TERM/25/KILL/5"
+stopgroup="yes"
+respawn_delay=2
+respawn_max=5
+respawn_period=60
+
+depend() {
+    need dbus
+    # Service names differ across distributions; use enabled services only.
+    use NetworkManager networkmanager polkit
+}
+
+start_pre() {
+    if [ -d /run/barista-package-upgrade ]; then
+        eerror "Barista package replacement is in progress; retry after it finishes."
+        return 1
+    fi
+}

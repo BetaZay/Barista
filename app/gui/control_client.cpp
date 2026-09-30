@@ -1,4 +1,5 @@
 #include "control_client.h"
+#include "../service_integration.h"
 #include "api/diagnostics.h"
 #include <QCoreApplication>
 #include <QDateTime>
@@ -31,7 +32,9 @@ QString UnavailableSupportReport()
         .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), QCoreApplication::applicationVersion(),
             QSysInfo::prettyProductName(), QSysInfo::kernelType(), QSysInfo::kernelVersion(),
             QString::fromUtf8(advice.summary.data(),static_cast<qsizetype>(advice.summary.size())),
-            QString::fromUtf8(advice.action.data(),static_cast<qsizetype>(advice.action.size())));
+            QString::fromUtf8(advice.action.data(),static_cast<qsizetype>(advice.action.size()))) +
+        "\nservice_integration=" + barista::ServiceIntegrationName() +
+        "\nservice_recovery_command=" + barista::ServiceRecoveryCommand() + "\n";
 }
 #endif
 
@@ -41,6 +44,10 @@ barista::api::SessionStatus UnavailableStatus(const QString& message)
     status.error = barista::api::Error{
         .code = barista::api::ErrorCode::Unavailable,
         .message = message.toStdString(),
+        .diagnosticCode = "SERVICE_UNAVAILABLE",
+        .action = barista::ServiceRecoveryCommand().isEmpty() ? "Real GamePad connections require Linux."
+            : ("Check system D-Bus and the installation. Start the installed service with: " +
+                barista::ServiceRecoveryCommand()).toStdString(),
     };
     return status;
 }
