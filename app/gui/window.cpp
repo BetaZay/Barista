@@ -152,6 +152,19 @@ void SelectInterface(QComboBox* combo, const QString& interface)
     }
 }
 
+bool IsWifiInterface(const QNetworkInterface& interface)
+{
+    if (interface.type() == QNetworkInterface::Wifi)
+        return true;
+
+#ifdef Q_OS_LINUX
+    return QFileInfo::exists(
+        "/sys/class/net/" + interface.name() + "/phy80211");
+#else
+    return false;
+#endif
+}
+
 QString AdapterLabel(const QString& interface)
 {
     const QString device = QFileInfo("/sys/class/net/" + interface + "/device").canonicalFilePath();
@@ -497,7 +510,7 @@ Window::Window(bool smokeTest)
     m_interface->setMinimumContentsLength(12);
     m_interface->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);
     for (const auto& interface : QNetworkInterface::allInterfaces())
-        if (interface.type() == QNetworkInterface::Wifi)
+        if (IsWifiInterface(interface))
             m_interface->addItem(AdapterLabel(interface.name()),interface.name());
     if (!m_interface->count()) m_interface->addItem("wlan0","wlan0");
     settingsForm->addRow("GamePad &adapter:",m_interface);
