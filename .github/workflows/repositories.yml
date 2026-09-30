@@ -75,7 +75,7 @@ jobs:
           path: site
       - uses: actions/deploy-pages@v4
         id: deploy
-      - name: Record successful Stable promotion
+      - name: Finalize publication and clean up releases
         run: python3 .github/scripts/repositories.py finalize
       - name: Remove signing material
         if: always()

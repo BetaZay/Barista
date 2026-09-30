@@ -94,6 +94,9 @@ echo test > %{buildroot}/usr/share/barista/test
                     shutil.copy2(file, remote / Path(file).name)
             elif command == "edit":
                 records[tag]["draft"] = False
+            elif command == "delete":
+                records.pop(tag)
+                shutil.rmtree(remote)
             elif command == "download":
                 directory = Path(args[args.index("--dir") + 1])
                 pattern = args[args.index("--pattern") + 1] if "--pattern" in args else "*"
@@ -164,6 +167,7 @@ echo test > %{buildroot}/usr/share/barista/test
             repositories.prepare()
             repositories.finalize()
             self.assertIn("v0.1.123", records)
+            self.assertNotIn("stable-intent-0.1.123", records)
             # Native signature verification must reject damaged RPM bytes.
             damaged = Path("damaged.rpm")
             damaged.write_bytes(signed_rpm.read_bytes()[:-32] + b"x" * 32)

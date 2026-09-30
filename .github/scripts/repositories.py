@@ -1,4 +1,4 @@
-"""Signed static repositories. Published build-* releases are immutable archives.
+"""Signed static repositories. Retained build-* releases are immutable archives.
 
 Only the protected, serialized repository workflow calls this script. A failed
 assembly never replaces Pages. Stable tags are written only after deployment.
@@ -266,17 +266,35 @@ def prepare():
             "--prerelease", "--title", "Stable promotion intent " + promote,
             "--notes", "Approved Stable promotion. The serialized repository publisher completes deployment and creates the v tag.")
     write_json(Path("promotion.json"), builds[max(stable, key=version)] if stable else {})
+    write_json(Path("cleanup.json"), sorted(set(builds) - keep, key=version))
 
 
 def finalize():
     manifest = json.loads(Path("promotion.json").read_text())
-    if not manifest:
-        return
-    tag = "v" + manifest["version"]
-    if any(r["tag_name"] == tag and not r["draft"] for r in releases()):
-        return
-    run("gh", "release", "create", tag, "--target", manifest["source"], "--title", "Barista " + manifest["version"],
-        "--notes", "Stable promotion of the exact signed packages archived at build-" + manifest["version"] + ".")
+    records = releases()
+    published = {r["tag_name"] for r in records if not r["draft"]}
+    if manifest:
+        tag = "v" + manifest["version"]
+        if tag not in published:
+            run("gh", "release", "create", tag, "--target", manifest["source"],
+                "--title", "Barista " + manifest["version"],
+                "--notes", "Stable promotion of the exact signed packages archived at build-" + manifest["version"] + ".")
+            published.add(tag)
+
+    # The intent is needed only until its matching Stable release exists. Keep
+    # both release and tag removal retryable for interrupted finalization.
+    for item in records:
+        intent = re.fullmatch("stable-intent-(" + PATTERN + ")", item["tag_name"])
+        if intent and not item["draft"] and "v" + intent.group(1) in published:
+            run("gh", "release", "delete", item["tag_name"], "--yes", "--cleanup-tag")
+
+    # Cleanup happens after deployment so a failed publication does not remove
+    # archives that still back the live repositories.
+    for number in json.loads(Path("cleanup.json").read_text()):
+        version(number)
+        tag = "build-" + number
+        if tag in published:
+            run("gh", "release", "delete", tag, "--yes", "--cleanup-tag")
 
 
 if __name__ == "__main__":

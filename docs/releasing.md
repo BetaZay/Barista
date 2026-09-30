@@ -55,18 +55,21 @@ versions, signs packages/metadata, and archives packages plus a signed
 `build.json` at `build-major.minor.build`. The manifest contains unsigned input
 hashes, final package hashes, the source commit, and originating workflow run.
 
-Published archives are immutable by policy: never overwrite assets or move
+Published archives are immutable while retained: never overwrite assets or move
 their tags. Rerunning an unchanged publisher reuses the archive; if rebuilt
 inputs differ it fails rather than replacing the version. An interrupted draft
 upload may be recreated because it has never been published. Enable suitable
-GitHub tag protections for `build-*` and `v*` without blocking release creation.
+GitHub tag protections for `build-*` and `v*` without blocking the publisher's
+release creation and retention cleanup.
 
 Stable promotion selects an existing signed archive and deploys its exact bytes.
 Before deployment an immutable `stable-intent-major.minor.build` release records
 the approved promotion. Only after Pages reports success is `vmajor.minor.build`
 created. If deployment or final tagging fails, the next publication completes
-that intent instead of reverting Stable. Protect `stable-intent-*` tags too.
-No rebuild or version allocation occurs during promotion.
+that intent instead of reverting Stable. After the matching `v*` release exists,
+the publisher removes the temporary intent release and tag. If protecting
+`stable-intent-*` tags, allow the publisher to create and delete them. No rebuild
+or version allocation occurs during promotion.
 
 Both channels share a publication lock. The site is assembled from authenticated
 archives, with APT signatures, RPM package/repomd signatures, and Arch package/
@@ -77,11 +80,12 @@ RPM packages explicitly use the supported v4 format so Fedora's RPM 6 builder
 and Ubuntu 24.04's publication/signing tools share a format. [RPM 6 otherwise
 defaults to v6 packages](https://rpm.org/releases/6.0.0).
 
-Pages retains the latest ten Preview and three Stable builds, plus builds less
-than seven days old. Every build's archive remains on GitHub Releases. If the
-site exceeds 900 MiB, publication fails before deployment instead of removing
-the grace period or breaking the existing site. Review capacity and move hosting
-if needed. The manifest for GUI notices deploys with its corresponding packages.
+Pages and GitHub Releases retain the latest ten Preview and three Stable builds,
+plus builds less than seven days old. Once Pages deployment succeeds, the
+publisher deletes older `build-*` pre-releases and their tags. If the site exceeds
+900 MiB, publication fails before deployment instead of removing the grace period
+or breaking the existing site. Review capacity and move hosting if needed. The
+manifest for GUI notices deploys with its corresponding packages.
 
 ## Acceptance checks before enabling public updates
 

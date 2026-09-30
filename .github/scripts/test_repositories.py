@@ -1,10 +1,11 @@
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import tempfile
 import subprocess
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import repositories
 from version import assign
@@ -51,6 +52,37 @@ class RepositoryTests(unittest.TestCase):
         builds["0.1.7"]["published"] = now.isoformat()
         keep = repositories.retained(builds, ["0.1.1", "0.1.2", "0.1.3", "0.1.4"], now)
         self.assertEqual(keep, {f"0.1.{i}" for i in range(21, 31)} | {"0.1.2", "0.1.3", "0.1.4", "0.1.7"})
+
+    @patch("repositories.run")
+    @patch("repositories.releases")
+    def test_finalize_releases_and_cleans_up(self, releases, run):
+        releases.return_value = [
+            {"tag_name": "stable-intent-0.1.9", "draft": False},
+            {"tag_name": "stable-intent-0.1.8", "draft": False},
+            {"tag_name": "v0.1.8", "draft": False},
+            {"tag_name": "build-0.1.1", "draft": False},
+            {"tag_name": "build-0.1.9", "draft": False},
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            promotion = Path(root) / "promotion.json"
+            cleanup = Path(root) / "cleanup.json"
+            promotion.write_text(json.dumps({"version": "0.1.9", "source": "a" * 40}))
+            cleanup.write_text(json.dumps(["0.1.1"]))
+            original = Path.cwd()
+            try:
+                os.chdir(root)
+                repositories.finalize()
+            finally:
+                os.chdir(original)
+
+        run.assert_any_call("gh", "release", "create", "v0.1.9", "--target", "a" * 40,
+                            "--title", "Barista 0.1.9",
+                            "--notes", "Stable promotion of the exact signed packages archived at build-0.1.9.")
+        run.assert_any_call("gh", "release", "delete", "stable-intent-0.1.9", "--yes", "--cleanup-tag")
+        run.assert_any_call("gh", "release", "delete", "stable-intent-0.1.8", "--yes", "--cleanup-tag")
+        run.assert_any_call("gh", "release", "delete", "build-0.1.1", "--yes", "--cleanup-tag")
+        self.assertNotIn(call("gh", "release", "delete", "build-0.1.9", "--yes", "--cleanup-tag"),
+                         run.call_args_list)
 
     @patch("repositories.run")
     def test_archive_checksums(self, run):
