@@ -727,8 +727,11 @@ void Service::Prepare(bool controller, const QString& caller, Completion done)
             });
         } else finish({});
     };
-    if (!BusServiceRunning("org.freedesktop.NetworkManager"))
-        RunSetup(BARISTA_SYSTEMCTL,{"start","NetworkManager.service"},loadController);
+    if (!BusServiceRunning("org.freedesktop.NetworkManager")) {
+        if (QString::fromLatin1(BARISTA_SYSTEMCTL).isEmpty())
+            finish("NetworkManager is not running. Enable its system service with your distribution's service manager, then retry.");
+        else RunSetup(BARISTA_SYSTEMCTL,{"start","NetworkManager.service"},loadController);
+    }
     else loadController({});
 }
 void Service::StopSession()

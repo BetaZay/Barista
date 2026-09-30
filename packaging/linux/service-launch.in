@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+# D-Bus and non-systemd supervisors do not create systemd's managed directories.
+umask 0077
+install -d -m 0755 /run/barista /var/log/barista
+install -d -m 0700 /var/lib/barista
+exec "@CMAKE_INSTALL_FULL_LIBEXECDIR@/barista/barista-service"
