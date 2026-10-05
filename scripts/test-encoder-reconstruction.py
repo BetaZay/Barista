@@ -107,6 +107,32 @@ def main():
             raise ValueError(f'Fade luma MSE exceeds 25: {mse}')
         print(f'Fade sampled MSE={mse:.4f}; encoded bytes={encoded_size}')
 
+    # Colored fades and a textured sliding panel exercise changing chroma,
+    # motion prediction and graphics crossing the logical six-row chunks.
+    count = 48
+    source = bytearray()
+    for index in range(count):
+        source.append(index == 0)
+        fading = index < 24
+        phase = index if fading else index - 24
+        amplitude = 23 - abs(2 * phase - 23)
+        for plane in range(3):
+            width, height = (864, 480) if plane == 0 else (432, 240)
+            black = 16 if plane == 0 else 128
+            left = -width // 3 + phase * (width + width // 3) // 23
+            for y in range(0, height, 16):
+                row = bytearray()
+                for x in range(width):
+                    texture = 32 + ((x // 8 + y // 16 + plane * 2) % 7) * 27
+                    if fading:
+                        value = black + round((texture - black) * amplitude / 23)
+                    else:
+                        value = texture if left <= x < left + width // 3 else black
+                    row.append(value)
+                source.extend(row * min(16, height - y))
+    check(args, source, count, False)
+    print('Colored fades and sliding graphics: all reconstructed reference pixels match')
+
 
 if __name__ == '__main__':
     main()

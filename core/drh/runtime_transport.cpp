@@ -1,5 +1,6 @@
 #include "drh/runtime_transport.h"
 #include "ap_tsf_clock.h"
+#include "monitor_tsf_sample.h"
 
 #include <array>
 #include <algorithm>
@@ -1098,6 +1099,15 @@ private:
 				m_config.tsf_monitor_interface + ": " + std::strerror(errno));
 			return;
 		}
+		const int timestamping = 1;
+		if (::setsockopt(m_tsf_monitor_fd, SOL_SOCKET, SO_TIMESTAMPNS,
+			&timestamping, sizeof(timestamping)) != 0)
+		{
+			queue_status("Media clock: could not enable kernel monitor receive timestamps");
+			::close(m_tsf_monitor_fd);
+			m_tsf_monitor_fd = -1;
+			return;
+		}
 		sockaddr_ll address{};
 		address.sll_family = AF_PACKET;
 		address.sll_protocol = htons(ETH_P_ALL);
@@ -1111,7 +1121,7 @@ private:
 			return;
 		}
 		queue_status("Media clock: waiting for hardware TSF on " +
-			m_config.tsf_monitor_interface);
+			m_config.tsf_monitor_interface + "; kernel RX timestamps remove socket queue delay");
 	}
 
 	void drain_tsf_monitor()
@@ -1119,7 +1129,14 @@ private:
 		std::array<uint8_t, 8192> packet{};
 		for (;;)
 		{
-			const ssize_t size = ::recv(m_tsf_monitor_fd, packet.data(), packet.size(), 0);
+			alignas(cmsghdr) std::array<char, CMSG_SPACE(sizeof(timespec))> control{};
+			iovec buffer{packet.data(), packet.size()};
+			msghdr message{};
+			message.msg_iov = &buffer;
+			message.msg_iovlen = 1;
+			message.msg_control = control.data();
+			message.msg_controllen = control.size();
+			const ssize_t size = ::recvmsg(m_tsf_monitor_fd, &message, 0);
 			if (size < 0)
 			{
 				if (errno == EINTR)
@@ -1128,6 +1145,28 @@ private:
 			}
 			if (size == 0)
 				break;
+			if (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC))
+				continue;
+			std::optional<int64_t> receivedNs;
+			for (auto* header = CMSG_FIRSTHDR(&message); header; header = CMSG_NXTHDR(&message, header))
+			{
+				if (header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_TIMESTAMPNS &&
+					header->cmsg_len >= CMSG_LEN(sizeof(timespec)))
+				{
+					timespec received{};
+					std::memcpy(&received, CMSG_DATA(header), sizeof(received));
+					receivedNs = int64_t(received.tv_sec) * 1000000000 + received.tv_nsec;
+				}
+			}
+			if (!receivedNs) continue;
+			const auto steadyBefore = SteadyMicroseconds();
+			const auto realtimeNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::system_clock::now().time_since_epoch()).count();
+			const auto steadyAfter = SteadyMicroseconds();
+			if (steadyAfter - steadyBefore > 100) continue;
+			const auto sampledAt = MonitorTsfSampleTime(
+				steadyBefore + (steadyAfter - steadyBefore) / 2, realtimeNs, *receivedNs);
+			if (!sampledAt) continue;
 			const auto tsf = ReadRadiotapTsf(
 				std::span<const uint8_t>(packet.data(), static_cast<size_t>(size)));
 			if (!tsf.has_value())
@@ -1135,9 +1174,11 @@ private:
 			bool first_sample;
 			{
 				std::lock_guard clock_lock(m_clock_mutex);
+				if (m_monitor_tsf != 0 && (*tsf <= m_monitor_tsf || *sampledAt <= m_monitor_tsf_sampled_at))
+					continue;
 				first_sample = m_monitor_tsf == 0;
 				m_monitor_tsf = *tsf;
-				m_monitor_tsf_sampled_at = SteadyMicroseconds();
+				m_monitor_tsf_sampled_at = *sampledAt;
 			}
 			if (first_sample)
 				queue_status("Media clock synchronized to hardware TSF=" + std::to_string(*tsf));

@@ -50,7 +50,10 @@ static_assert(!VideoInitFlag(true, false, true));
 constexpr size_t kWidth = DrcVideoWidth;
 constexpr size_t kHeight = DrcVideoHeight;
 constexpr size_t kRawFrameSize = DrcVideoFrameBytes;
-constexpr size_t kMaxVideoPayload = 1400;
+// The real console and Vanilla control captures split raw DRH chunks at 1694
+// bytes. Together with the 16-byte VSTRM header, this remains below the
+// runtime session's 1800-byte IP MTU and preserves the observed boundaries.
+constexpr size_t kMaxVideoPayload = 1694;
 constexpr size_t kAudioFramesPerPacket = 416;
 constexpr size_t kAudioSamplesPerPacket = kAudioFramesPerPacket * 2;
 // Real-console PCM: 416 stereo frames at 48 kHz (1664 bytes per packet).
@@ -515,6 +518,16 @@ bool MediaStreamer::protocol_self_test(std::string& error)
 		error = "VSTRM packet layout validation failed";
 		return false;
 	}
+	const std::vector<uint8_t> maximum_payload(kMaxVideoPayload);
+	const auto maximum_packet = BuildVideoPacket(maximum_payload, 0x321, 0x12345678,
+		true, true, true, false, true);
+	if (maximum_packet.size() != 16 + kMaxVideoPayload ||
+		(maximum_packet[2] & 7) != (kMaxVideoPayload >> 8) ||
+		maximum_packet[3] != (kMaxVideoPayload & 0xff))
+	{
+		error = "maximum VSTRM payload layout validation failed";
+		return false;
+	}
 	for (const bool test_idr : {false, true})
 	{
 		const auto baseline = BuildVideoPacket(chunks[0].bytes, 0x321, 0x12345678,
@@ -617,6 +630,7 @@ void MediaStreamer::video_loop()
 	}
 	uint16_t sequence = 0;
 	uint64_t frame_number = 0;
+	uint64_t last_idr_frame = 0;
 	auto next_status = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 	bool initialized = false;
 	bool force_idr = true;
@@ -642,8 +656,6 @@ void MediaStreamer::video_loop()
 	std::mutex recovery_mutex;
 	bool recovering = true;
 	uint64_t recovery_generation = 0;
-	const char* fast_encode = std::getenv("DRCD_FAST_ENCODE");
-	const char* option_order = std::getenv("DRCD_REFERENCE_VIDEO_OPTIONS");
 	const bool send_time_video = DefaultEnabled("DRCD_SEND_TIME_VIDEO");
 	const bool recovery_init = DefaultEnabled("DRCD_IDR_INIT");
 	const bool chunk_pacing = DefaultEnabled("DRCD_CHUNK_PACING");
@@ -651,11 +663,13 @@ void MediaStreamer::video_loop()
 	const bool all_idr = all_idr_option && std::strcmp(all_idr_option, "1") == 0;
 	m_transport.report_status(all_idr
 		? "Video experiment: every frame independently encoded as IDR; increased encode/radio load expected"
-		: "Video reference chain: baseline IDR/P encoding");
+		: "Video reference chain experiment: IDR after 60 frames without one; requested recovery remains immediate");
 	m_transport.report_status(chunk_pacing
 		? "Video pacing: 0/3/6/9/11ms chunk starts; multi-packet IDR/P chunks spread through 2.5/5/7.5/10/13ms"
 		: "Video chunk pacing disabled: whole-frame burst");
-	m_transport.report_status("Video recovery: IDR / format-only slot / P; coalesce until resumed P delivery; DRCD_IDR_PAUSE retired");
+	if (chunk_pacing)
+		m_transport.report_status("Video chunk deadlines: fixed to the published format slot; late first packets do not shift later chunks");
+	m_transport.report_status("Video recovery experiment: IDR / format-only slot / P; reopen requests at resumed P start; DRCD_IDR_PAUSE retired");
 	m_transport.report_status(recovery_init
 		? "Video recovery experiment: init bit on every IDR packet"
 		: "Video recovery: baseline init bit on first session frame only");
@@ -663,16 +677,20 @@ void MediaStreamer::video_loop()
 		? "Media sync: format AP TSF-1250us, video 5000us later with identical timestamp; PCM unchanged"
 		: "Video timestamp: baseline before encoding and pacing sleep");
 	m_transport.report_status("DRH native encoder: fixed QP=32, chroma QP offset=0, continuous CABAC slice");
+	m_transport.report_status("Video encoder experiment: skip unused CAVLC residual serialization; preserve CABAC and reconstruction state");
 	m_transport.report_status(x264::OptionsFromEnvironment().disablePlanarPrediction
 		? "Video planar prediction: disabled for GamePad compatibility"
 		: "Video planar prediction: enabled; GamePad compatibility unverified");
-	const bool reference_options = option_order && std::strcmp(option_order, "1") == 0;
+	const bool reference_options = DefaultEnabled("DRCD_REFERENCE_VIDEO_OPTIONS");
 	m_transport.report_status(reference_options
-		? "Video options: reference console order experiment"
+		? "Video options: reference console order (IDR / rate / decode / rows)"
 		: "Video options: baseline order");
-	m_transport.report_status(fast_encode && std::strcmp(fast_encode, "1") == 0
+	m_transport.report_status(x264::OptionsFromEnvironment().fastSearch
 		? "Video encoder: MiniH264 fast search (preset 9)"
 		: "Video encoder: MiniH264 default search (preset 5)");
+	m_transport.report_status("Video prediction experiment: P-skip disabled; explicit inter coding and residual analysis retained");
+	m_transport.report_status("Video motion experiment: zero motion vectors; explicit same-position inter prediction with residual corrections");
+	m_transport.report_status("Video motion search setting: integer-pixel luma motion; fractional search disabled, preset 5 retained");
 	m_transport.report_status("Video recovery: requested IDRs; cyclic intra-refresh is not implemented");
 	SerialVideoSender sender;
 	FormatSlotScheduler formats([&](std::optional<uint32_t> legacy) {
@@ -730,7 +748,8 @@ void MediaStreamer::video_loop()
 			interval_resync_events += resync_requested;
 			const bool coalesced = resync_requested && recovering;
 			interval_coalesced_events += coalesced;
-			force_idr = all_idr || (resync_requested && !coalesced) || force_idr;
+			force_idr = all_idr || frame_number - last_idr_frame >= 60 ||
+				(resync_requested && !coalesced) || force_idr;
 			if (force_idr) { recovering = true; ++recovery_generation; }
 			frame_recovery_generation = recovery_generation;
 		}
@@ -759,6 +778,7 @@ void MediaStreamer::video_loop()
 		auto chunks = std::move(encoded->chunks);
 		if (idr)
 		{
+			last_idr_frame = frame_number;
 			if (!force_idr)
 			{
 				std::lock_guard lock(recovery_mutex);
@@ -826,11 +846,25 @@ void MediaStreamer::video_loop()
 			m_transport.report_status("Video start late by " + std::to_string(late_us) +
 				"us; shared format/video timestamp preserved; late_starts=" + std::to_string(late_video_starts));
 		bool sends_ok = true;
+		if (!idr)
+		{
+			std::lock_guard lock(recovery_mutex);
+			// Clear requests from the settling IDR/gap before the resumed P
+			// starts. Requests during this P may describe a new failure.
+			// An older P cannot reopen a newer recovery generation.
+			if (recovering && frame_recovery_generation == recovery_generation)
+			{
+				m_transport.consume_video_resync_event();
+				recovering = false;
+			}
+		}
 		for (size_t packet_index = 0; packet_index < frame_packets.size(); ++packet_index)
 		{
 			if (chunk_pacing)
 			{
-				std::this_thread::sleep_until(frame_send_started + packet_offsets[packet_index]);
+				// The format packet already committed this frame's timeline.
+				// A late first packet must not add its delay to every later chunk.
+				std::this_thread::sleep_until(frame_deadline + packet_offsets[packet_index]);
 				if (m_stop.load()) break;
 			}
 			sends_ok = m_transport.send(barista::drh::RuntimeChannel::Video,
@@ -840,18 +874,6 @@ void MediaStreamer::video_loop()
 		{
 			m_transport.report_status("Video send failed; stopping media to preserve reference order: " + error);
 			m_stop.store(true);
-		}
-		if (!idr && !m_stop.load())
-		{
-			std::lock_guard lock(recovery_mutex);
-			// Drain requests accumulated during this recovery before reopening
-			// the gate. A later request remains eligible for another recovery.
-			// An older P must not complete a newer IDR being encoded concurrently.
-			if (recovering && frame_recovery_generation == recovery_generation)
-			{
-				m_transport.consume_video_resync_event();
-				recovering = false;
-			}
 		}
 		if (dump_frame)
 		{

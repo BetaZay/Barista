@@ -24,6 +24,11 @@ int main(int argc, char** argv)
     create.num_layers = 1; create.const_input_flag = 1;
     create.b_drh_mode = 1;
     create.disable_planar_prediction_flag = options.disablePlanarPrediction;
+    // Match the native trial's motion policy while retaining full CAVLC;
+    // both independently decoded streams must match every reference pixel.
+    create.disable_subpixel_motion_flag = 1;
+    create.disable_pskip_flag = 1;
+    create.zero_motion_flag = 1;
     int persistentSize, scratchSize;
     if (H264E_sizeof(&create, &persistentSize, &scratchSize))
         throw std::runtime_error("invalid encoder parameters");

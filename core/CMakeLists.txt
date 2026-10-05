@@ -212,6 +212,12 @@ if(BUILD_TESTING)
             target_link_libraries(drcd_app_hook_tests PRIVATE barista_drh_server)
             add_test(NAME drcd_app_hook_tests COMMAND drcd_app_hook_tests)
             set_tests_properties(drcd_app_hook_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 15)
+            add_test(NAME drcd_resumed_p_recovery_tests COMMAND drcd_app_hook_tests)
+            set_tests_properties(drcd_resumed_p_recovery_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 15
+                ENVIRONMENT "DRCD_TEST_RESUMED_P_REQUEST=1")
+            add_test(NAME drcd_periodic_idr_tests COMMAND drcd_app_hook_tests)
+            set_tests_properties(drcd_periodic_idr_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 15
+                ENVIRONMENT "DRCD_TEST_PERIODIC_IDR=1")
             foreach(profile all_idr reference_audio combined)
                 add_test(NAME drcd_${profile}_experiment_tests COMMAND drcd_app_hook_tests)
                 set_tests_properties(drcd_${profile}_experiment_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 15)

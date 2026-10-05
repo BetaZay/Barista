@@ -90,6 +90,11 @@ int main()
     auto next_resync = Clock::now() + std::chrono::milliseconds(500);
     auto burst_until = Clock::time_point{};
     auto next_burst = Clock::time_point{};
+    const bool resumed_request_test = std::getenv("DRCD_TEST_RESUMED_P_REQUEST") != nullptr;
+    const bool periodic_idr_test = std::getenv("DRCD_TEST_PERIODIC_IDR") != nullptr;
+    auto resumed_request_at = Clock::time_point{};
+    auto resumed_request_sent = Clock::time_point{};
+    bool resumed_request_answered = false;
     while (Clock::now() - started < std::chrono::seconds(3))
     {
         if (client.connected() && !activated)
@@ -106,7 +111,7 @@ int main()
         }
         const bool periodic_request = Clock::now() >= next_resync;
         const bool burst_request = Clock::now() < burst_until && Clock::now() >= next_burst;
-        if (periodic_request || burst_request)
+        if (!periodic_idr_test && (periodic_request || burst_request))
         {
             auto message_address = console;
             message_address.sin_port = htons(50010);
@@ -115,6 +120,16 @@ int main()
                 reinterpret_cast<sockaddr*>(&message_address), sizeof(message_address));
             if (periodic_request) next_resync = Clock::now() + std::chrono::milliseconds(500);
             next_burst = Clock::now() + std::chrono::milliseconds(2);
+        }
+        if (resumed_request_at != Clock::time_point{} && Clock::now() >= resumed_request_at &&
+            resumed_request_sent == Clock::time_point{})
+        {
+            auto message_address = console;
+            message_address.sin_port = htons(50010);
+            const uint8_t request[]{1,0,0,0};
+            sendto(video, request, sizeof(request), 0,
+                reinterpret_cast<sockaddr*>(&message_address), sizeof(message_address));
+            resumed_request_sent = Clock::now();
         }
         std::array<uint8_t, 128> received{};
         input_received |= client.read_input(received) && received[2] == 0x80;
@@ -160,7 +175,17 @@ int main()
                         (previous_idr ? after_idr_gaps : after_p_gaps).push_back(gap);
                     }
                     previous_frame_time = received_at;
+                    const bool follows_idr = previous_idr;
                     previous_idr = std::find(packet + 8, packet + 16, uint8_t{0x80}) != packet + 16;
+                    // Inject one request within the first resumed P, after
+                    // startup. It must survive until another recovery IDR.
+                    if (resumed_request_test && follows_idr && !previous_idr && frames > 5 &&
+                        resumed_request_at == Clock::time_point{})
+                        resumed_request_at = received_at + std::chrono::milliseconds(5);
+                    if (previous_idr && resumed_request_sent != Clock::time_point{} &&
+                        received_at > resumed_request_sent &&
+                        received_at - resumed_request_sent < std::chrono::milliseconds(100))
+                        resumed_request_answered = true;
                     if (previous_idr && !all_idr)
                         burst_until = received_at + std::chrono::milliseconds(24);
                     predicted_frames += !previous_idr;
@@ -253,7 +278,7 @@ int main()
         const auto idr_gap = after_idr_gaps.empty() ? 0 : after_idr_gaps[after_idr_gaps.size()/2];
         const auto p_gap = after_p_gaps.empty() ? 0 : after_p_gaps[after_p_gaps.size()/2];
         std::cout << "post_idr_median_us=" << idr_gap << " post_p_median_us=" << p_gap << '\n';
-        spacing_ok = after_idr_gaps.size() >= 4 && idr_gap >= 30000 &&
+        spacing_ok = after_idr_gaps.size() >= (periodic_idr_test ? 3u : 4u) && idr_gap >= 30000 &&
             idr_gap < (all_idr ? 60000 : 43000);
         if (!all_idr)
             spacing_ok &= after_p_gaps.size() >= 100 && p_gap >= 14000 && p_gap < 23000;
@@ -279,7 +304,32 @@ int main()
         }
     std::cout << "format_packets=" << format_times.size() << " recovery_gaps=" << recovery_gaps
               << " recovery_slots_ok=" << recovery_slots_ok << '\n';
+    bool periodic_idrs_ok = true;
+    if (periodic_idr_test)
+    {
+        size_t last_idr = 0;
+        unsigned periodic_idrs = 0;
+        for (size_t i = 0; i < video_order.size(); ++i)
+        {
+            if (!video_order[i].second) continue;
+            std::cout << "idr_frame=" << i << " distance=" << i - last_idr << '\n';
+            // Idle-surface handoff and source activation can force startup
+            // IDRs; their ordering spans several asynchronously encoded frames.
+            if (i >= 10)
+            {
+                periodic_idrs_ok &= i - last_idr == 60;
+                ++periodic_idrs;
+            }
+            last_idr = i;
+        }
+        periodic_idrs_ok &= periodic_idrs >= 2;
+        std::cout << "unsolicited_periodic_idrs=" << periodic_idrs
+                  << " periodic_idrs_ok=" << periodic_idrs_ok << '\n';
+    }
+    if (resumed_request_test)
+        std::cout << "request_within_resumed_P_answered=" << resumed_request_answered << '\n';
     return frames >= minimum_frames && format_times.size() >= 165 && recovery_slots_ok &&
+        periodic_idrs_ok && (!resumed_request_test || resumed_request_answered) &&
         pcm_packets >= 300 && input_received && audible_pcm && timing_ok &&
-        reference_chain_ok && spacing_ok && pacing_ok && (!recovery_test || (recovery_idrs >= 4 && recovery_flags_ok)) ? 0 : 1;
+        reference_chain_ok && spacing_ok && pacing_ok && (!recovery_test || (recovery_idrs >= (periodic_idr_test ? 3u : 4u) && recovery_flags_ok)) ? 0 : 1;
 }
