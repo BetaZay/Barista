@@ -184,7 +184,8 @@ if(BUILD_TESTING)
                 add_test(NAME barista_x11_${capture_variant}_capture COMMAND ${BARISTA_XVFB_RUN}
                     -a -s "-screen 0 800x600x24" $<TARGET_FILE:barista_x11_${capture_variant}_test>)
                 set_tests_properties(barista_x11_${capture_variant}_capture PROPERTIES
-                    ENVIRONMENT "QT_QPA_PLATFORM=xcb;XDG_SESSION_TYPE=x11" TIMEOUT 20)
+                    ENVIRONMENT "QT_QPA_PLATFORM=xcb;XDG_SESSION_TYPE=x11" TIMEOUT 20
+                    RESOURCE_LOCK barista_xvfb)
             endforeach()
         endif()
     endif()

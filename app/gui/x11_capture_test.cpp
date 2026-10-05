@@ -24,6 +24,7 @@ int main(int argc, char** argv)
     QEventLoop exposed;
     QTimer::singleShot(200, &exposed, &QEventLoop::quit);
     exposed.exec();
+    QGuiApplication::sync();
     QCursor::setPos(5, 5);
     // Provide the EWMH application list normally owned by an X11 window manager.
     auto* connection = xcb_connect(nullptr, nullptr);
@@ -34,7 +35,8 @@ int main(int argc, char** argv)
     xcb_change_property(connection, XCB_PROP_MODE_REPLACE, root, atom->atom, XCB_ATOM_WINDOW, 32, 1,
                         &id);
     std::free(atom);
-    xcb_flush(connection);
+    // Complete the property update before another connection reads the list.
+    std::free(xcb_get_input_focus_reply(connection, xcb_get_input_focus(connection), nullptr));
     xcb_disconnect(connection);
     X11Capture native;
     bool listed = false;
@@ -151,14 +153,23 @@ int main(int argc, char** argv)
         }
     }
     if (!released)
+    {
+        std::cerr << "Desktop input was not released on stop\n";
         return 6;
+    }
     QString captureError;
     window.hide();
     QApplication::processEvents();
+    // The capture connection is independent of Qt's connection. Wait until
+    // the X server has processed Qt's unmap before checking window state.
+    QGuiApplication::sync();
     if (!native.Grab(QGuiApplication::primaryScreen(), quint32(window.winId()), captureError)
              .isNull() ||
         captureError.isEmpty())
+    {
+        std::cerr << "Hidden X11 window was captured or returned no error\n";
         return 7;
+    }
     std::cout << "X11 monitor/window streams, input bridge, release and unavailable-window checks "
                  "passed\n";
     return 0;
