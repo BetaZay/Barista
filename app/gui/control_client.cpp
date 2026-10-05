@@ -226,3 +226,25 @@ void ControlClient::Call(const QString& method, const QVariantList& arguments)
     emit Status(UnavailableStatus("No radio/service backend is implemented on this platform yet."));
 #endif
 }
+
+void ControlClient::SubmitDesktopText(const QString& text)
+{
+    Call("SubmitDesktopText", {text});
+}
+
+void ControlClient::SubmitDesktopInput(const QByteArray& report)
+{
+#ifdef BARISTA_LINUX_CONTROL
+    if (m_desktopInputPending) return;
+    auto message = QDBusMessage::createMethodCall("org.barista.Service1", "/org/barista/Service1",
+                                                 "org.barista.Service1", "SubmitDesktopInput");
+    message.setArguments({report}); message.setAutoStartService(false);
+    m_desktopInputPending = true;
+    auto* watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(message, 1000), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](auto* finished) {
+        m_desktopInputPending = false; finished->deleteLater();
+    });
+#else
+    Q_UNUSED(report);
+#endif
+}

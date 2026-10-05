@@ -983,10 +983,43 @@ void MediaStreamer::video_loop()
 
 void MediaStreamer::input_loop()
 {
+    uint64_t keyboard_connection = 0;
 	// Input must not wait for the next encoded frame (IDRs can take >60ms).
 	m_transport.report_status("AppHook input forwarding: independent 1ms worker");
 	while (!m_stop.load())
 	{
+        if (m_home_menu_enabled)
+        {
+            const auto connection = m_bridge->connection_revision();
+            if (keyboard_connection != connection)
+            {
+                m_home_menu->cancel_keyboard();
+                m_home_menu->take_keyboard_result();
+                keyboard_connection = connection;
+            }
+            barista::api::KeyboardCommand command;
+            for (unsigned count = 0; count < 16 && m_bridge->read_keyboard_command(command); ++count)
+            {
+                if (command.connectionRevision != keyboard_connection) continue;
+                if (command.cancel) m_home_menu->cancel_keyboard(command.request.id);
+                else if (!m_home_menu->show_keyboard(command.request))
+                    m_bridge->submit_keyboard_result({command.request.id, barista::api::KeyboardOutcome::Busy, {}}, keyboard_connection);
+                else play_home_menu_sound();
+            }
+            if (auto result = m_home_menu->take_keyboard_result())
+            {
+                m_bridge->submit_keyboard_result(*result, keyboard_connection);
+                play_home_menu_sound();
+            }
+        }
+        else
+        {
+            barista::api::KeyboardCommand command;
+            for (unsigned count = 0; count < 16 && m_bridge->read_keyboard_command(command); ++count)
+                m_bridge->submit_keyboard_result({command.request.id,
+                    command.cancel ? barista::api::KeyboardOutcome::Cancelled : barista::api::KeyboardOutcome::Busy,
+                    {}}, command.connectionRevision);
+        }
 		// Bound the batch so shutdown cannot be starved by incoming traffic.
 		for (unsigned count = 0; count < 256; ++count)
 		{

@@ -15,7 +15,7 @@ if(NOT BARISTA_BUILD_DESKTOP)
     return()
 endif()
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network Svg)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network Svg Multimedia)
 set(CMAKE_AUTOMOC ON)
 set(BARISTA_INTERFACE_ICONS
     "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/dropdown.svg"
@@ -38,14 +38,21 @@ set(BARISTA_INTERFACE_ICONS
 )
 add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/cafe_icons.cpp gui/cafe_icons.h
     gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h gui/control_client.cpp gui/control_client.h
-    gui/single_instance.cpp gui/single_instance.h gui/update_checker.cpp gui/update_checker.h)
-target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
+    gui/single_instance.cpp gui/single_instance.h gui/update_checker.cpp gui/update_checker.h
+    gui/desktop_streamer.cpp gui/desktop_streamer.h)
+target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Multimedia barista_core drc_ipc)
 qt_add_resources(barista branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
     FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
 qt_add_resources(barista interface_icons PREFIX "/barista/icons" BASE "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons"
     FILES ${BARISTA_INTERFACE_ICONS})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 REQUIRED COMPONENTS DBus)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+    pkg_check_modules(XCB_CAPTURE REQUIRED IMPORTED_TARGET xcb xcb-xfixes)
+    target_sources(barista PRIVATE gui/portal_capture.cpp gui/portal_capture.h gui/x11_capture.cpp gui/x11_capture.h)
+    target_link_libraries(barista PRIVATE PkgConfig::PIPEWIRE PkgConfig::XCB_CAPTURE)
+    target_compile_definitions(barista PRIVATE BARISTA_PORTAL_CAPTURE=1 BARISTA_X11_CAPTURE=1)
     target_link_libraries(barista PRIVATE Qt6::DBus)
     target_compile_definitions(barista PRIVATE BARISTA_LINUX_CONTROL=1)
     if(BARISTA_BUILD_ENGINE)
@@ -65,6 +72,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
         if(BUILD_TESTING)
             find_package(Python3 COMPONENTS Interpreter REQUIRED)
+            add_executable(barista_uinput_test service/uinput_output_test.cpp service/uinput_output.cpp)
+            target_link_libraries(barista_uinput_test PRIVATE barista_core)
+            target_link_options(barista_uinput_test PRIVATE
+                "-Wl,--wrap=open" "-Wl,--wrap=ioctl" "-Wl,--wrap=write" "-Wl,--wrap=close")
+            add_test(NAME barista_uinput COMMAND barista_uinput_test)
             add_test(NAME barista_capture_analysis COMMAND ${Python3_EXECUTABLE}
                 -m unittest discover -s ${PROJECT_SOURCE_DIR}/scripts/capture-analysis -p "test_*.py")
             add_test(NAME barista_capture_workflow COMMAND ${Python3_EXECUTABLE}
@@ -137,15 +149,45 @@ if(BUILD_TESTING)
     set_tests_properties(barista_single_instance PROPERTIES TIMEOUT 10)
     add_executable(barista_window_test gui/window_test.cpp gui/window.cpp gui/window.h
         gui/cafe_icons.cpp gui/cafe_icons.h gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h
-        gui/control_client.cpp gui/control_client.h gui/update_checker.cpp gui/update_checker.h)
-    target_link_libraries(barista_window_test PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg barista_core)
+        gui/control_client.cpp gui/control_client.h gui/update_checker.cpp gui/update_checker.h
+        gui/desktop_streamer.cpp gui/desktop_streamer.h)
+    target_link_libraries(barista_window_test PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Multimedia barista_core drc_ipc)
     qt_add_resources(barista_window_test test_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
         FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
     qt_add_resources(barista_window_test test_interface_icons PREFIX "/barista/icons" BASE "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons"
         FILES ${BARISTA_INTERFACE_ICONS})
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        target_link_libraries(barista_window_test PRIVATE Qt6::DBus)
+        target_link_libraries(barista_window_test PRIVATE Qt6::DBus PkgConfig::PIPEWIRE PkgConfig::XCB_CAPTURE)
+        target_sources(barista_window_test PRIVATE gui/portal_capture.cpp gui/portal_capture.h gui/x11_capture.cpp gui/x11_capture.h)
+        target_compile_definitions(barista_window_test PRIVATE BARISTA_PORTAL_CAPTURE=1 BARISTA_X11_CAPTURE=1)
         target_compile_definitions(barista_window_test PRIVATE BARISTA_LINUX_CONTROL=1)
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_program(BARISTA_DBUS_RUN_SESSION dbus-run-session REQUIRED)
+        add_executable(barista_portal_test gui/portal_capture_test.cpp gui/portal_capture.cpp gui/portal_capture.h)
+        target_link_libraries(barista_portal_test PRIVATE Qt6::Core Qt6::Gui Qt6::DBus PkgConfig::PIPEWIRE)
+        add_test(NAME barista_portal_capture COMMAND ${BARISTA_DBUS_RUN_SESSION} -- $<TARGET_FILE:barista_portal_test>)
+        set_tests_properties(barista_portal_capture PROPERTIES TIMEOUT 10)
+        foreach(capture_variant IN ITEMS native legacy)
+            add_executable(barista_x11_${capture_variant}_test gui/x11_capture_test.cpp
+                gui/x11_capture.cpp gui/x11_capture.h gui/desktop_streamer.cpp gui/desktop_streamer.h)
+            target_link_libraries(barista_x11_${capture_variant}_test PRIVATE Qt6::Widgets Qt6::Multimedia
+                drc_ipc PkgConfig::XCB_CAPTURE)
+            target_compile_definitions(barista_x11_${capture_variant}_test PRIVATE BARISTA_X11_CAPTURE=1)
+            if(capture_variant STREQUAL "legacy")
+                target_compile_definitions(barista_x11_${capture_variant}_test PRIVATE BARISTA_FORCE_LEGACY_CAPTURE=1)
+            endif()
+        endforeach()
+        find_program(BARISTA_XVFB_RUN xvfb-run)
+        if(BARISTA_XVFB_RUN)
+            foreach(capture_variant IN ITEMS native legacy)
+                add_test(NAME barista_x11_${capture_variant}_capture COMMAND ${BARISTA_XVFB_RUN}
+                    -a -s "-screen 0 800x600x24" $<TARGET_FILE:barista_x11_${capture_variant}_test>)
+                set_tests_properties(barista_x11_${capture_variant}_capture PROPERTIES
+                    ENVIRONMENT "QT_QPA_PLATFORM=xcb;XDG_SESSION_TYPE=x11" TIMEOUT 20
+                    RESOURCE_LOCK barista_xvfb)
+            endforeach()
+        endif()
     endif()
     add_test(NAME barista_window_actions COMMAND barista_window_test)
     set_tests_properties(barista_window_actions PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
@@ -155,6 +197,7 @@ if(BUILD_TESTING)
     add_test(NAME barista_settings_smoke COMMAND barista --smoke-test --smoke-settings)
     add_test(NAME barista_connection_smoke COMMAND barista --smoke-test --smoke-connection)
     add_test(NAME barista_about_smoke COMMAND barista --smoke-test --smoke-about)
+    add_test(NAME barista_desktop_smoke COMMAND barista --smoke-test --smoke-desktop)
     set_tests_properties(barista_gui_smoke barista_pairing_smoke barista_advanced_smoke
-        barista_settings_smoke barista_connection_smoke barista_about_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+        barista_settings_smoke barista_connection_smoke barista_about_smoke barista_desktop_smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
 endif()

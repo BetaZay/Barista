@@ -1,4 +1,6 @@
 import unittest
+import re
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -56,6 +58,42 @@ class DocumentationTests(unittest.TestCase):
             file = root / "README.md"
             file.write_text('```md\n[example](not-a-real-file.md)\n```')
             self.assertEqual(missing_links(root, file), [])
+
+
+class BuildDependencyTests(unittest.TestCase):
+    @staticmethod
+    def installed_packages(job, manager):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/continuous.yml").read_text()
+        section = re.search(r"(?ms)^  " + re.escape(job) + r":\n(.*?)(?=^  [\w-]+:\n|\Z)", workflow)[1]
+        for line in section.replace("\\\n", " ").splitlines():
+            if manager not in line:
+                continue
+            words = shlex.split(line)
+            if manager not in words:
+                continue
+            index = words.index(manager)
+            if manager == "pacman" and "-Syu" in words:
+                return set(word for word in words[index + 1:] if not word.startswith("-"))
+            if "install" in words[index + 1:]:
+                return set(word for word in words[words.index("install", index) + 1:] if not word.startswith("-"))
+        raise AssertionError(f"No dependency installer found for {job}")
+
+    def test_capture_test_dependencies_are_explicit(self):
+        for job, manager, dependency in (("test", "apt-get", "python3-cryptography"),
+                                          ("deb", "apt-get", "python3-cryptography"),
+                                          ("rpm", "dnf", "python3-cryptography")):
+            with self.subTest(job=job):
+                self.assertIn(dependency, self.installed_packages(job, manager))
+
+    def test_arch_installs_package_dependencies_before_makepkg(self):
+        root = Path(__file__).resolve().parents[2]
+        pkgbuild = (root / "packaging/arch/PKGBUILD").read_text()
+        required = set()
+        for field in ("depends", "checkdepends"):
+            required.update(shlex.split(re.search(r"(?m)^" + field + r"=\((.*?)\)$", pkgbuild)[1]))
+        installed = self.installed_packages("arch", "pacman")
+        self.assertFalse(required - installed, f"Arch CI dependencies missing: {sorted(required - installed)}")
 
 
 if __name__ == "__main__":

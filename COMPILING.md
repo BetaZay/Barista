@@ -13,14 +13,16 @@ Barista has two build layers:
 ## Prerequisites
 
 Install a C++20 compiler, CMake 3.20 or newer, Ninja, Git, Python 3, Qt 6 Core/
-Widgets/Network/DBus development packages, OpenSSL development headers, and
-FreeType development headers for the GamePad UI, plus the `libnl` development
-packages required by hostapd. On Linux, `pkcheck`,
+Widgets/Network/DBus/Svg/Multimedia development packages (Qt 6.4 or newer),
+OpenSSL development headers, FreeType development headers for the GamePad UI,
+PipeWire and XCB/XFixes development headers on Linux, and the `libnl` development packages
+required by hostapd. On Linux, `pkcheck`,
 `modprobe`, and `systemctl` must be available for the full service build.
 
 Package names vary. On Debian/Ubuntu-like distributions the relevant package
 families are commonly `build-essential`, `cmake`, `ninja-build`, `git`,
-`python3`, `qt6-base-dev`, `qt6-svg-dev`, `libfreetype-dev`, `libssl-dev`,
+`python3`, `qt6-base-dev`, `qt6-svg-dev`, `qt6-multimedia-dev`,
+`libpipewire-0.3-dev`, `libxcb1-dev`, `libxcb-xfixes0-dev`, `libfreetype-dev`, `libssl-dev`,
 `libnl-3-dev`, and
 `libnl-genl-3-dev`. Install the matching Qt 6 DBus development package if your
 distribution splits it out.
@@ -56,6 +58,20 @@ ctest --test-dir build-desktop --output-on-failure
 
 It does not provide Wi-Fi pairing, radio streaming, or a virtual controller.
 
+Desktop sharing on Wayland needs PipeWire and a ScreenCast portal backend for
+your desktop environment. X11 supports monitors and application windows on
+Qt 6.4 and newer. A full installed build supports desktop mode; see
+the [desktop controls and source selection](docs/user-guide.md#desktop-mode).
+For an optional capture-only check on your logged-in Wayland desktop, run
+`build/app/barista_portal_test --live` and choose a source in the system picker.
+It exits after receiving a frame or after 60 seconds. CTest uses a private mock
+portal and never opens the picker.
+
+Install Xvfb and xauth to include the isolated X11 monitor/window streaming
+tests in CTest (`xvfb`/`xauth` on Debian or `xorg-server-xvfb`/`xorg-xauth` on
+Arch). The suite exercises modern Qt capture and the Qt 6.4 fallback without
+accessing the desktop display or a GamePad.
+
 ## Install on Linux
 
 Installing directly with CMake does not subscribe the machine to Barista's
@@ -76,6 +92,12 @@ sudo cmake --install build-release
 Installation places the desktop file, D-Bus activation service, polkit policy,
 root-owned engine, and Barista's patched hostapd together. Open Barista as the
 regular desktop user; do not start the GUI with `sudo` or `pkexec`.
+
+The default CMake prefix is `/usr/local`. If you use that prefix, launch
+`/usr/local/bin/barista`; `/usr/bin/barista` may still be an older packaged
+version. Fully quit any running Barista before launching the new binary,
+because a second launch forwards to the existing window. Always set
+`-DCMAKE_BUILD_TYPE=Release` when installing for a physical GamePad session.
 
 Installed builds keep shareable per-run, per-pairing-cycle, and maintenance logs in
 `/var/log/barista/support`. Settings → Support can view these files and create a

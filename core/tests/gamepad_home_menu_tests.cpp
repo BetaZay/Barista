@@ -82,6 +82,9 @@ int main()
 	SetTouch(report, 700, 190, true);
 	update = menu.process_input(report);
 	Expect(update.brightness == 3, "touch did not select a brightness level");
+    SetTouch(report, 790, 190, true);
+    update = menu.process_input(report);
+    Expect(update.brightness == 5, "dragging brightness stopped after the first touch report");
 	Expect(std::all_of(report.begin() + 36, report.begin() + 76,
 		[](uint8_t value) { return value == 0; }), "menu touch leaked to the application");
 	SetTouch(report, 0, 0, false);
