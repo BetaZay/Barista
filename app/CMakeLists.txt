@@ -50,6 +50,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_definitions(barista PRIVATE BARISTA_LINUX_CONTROL=1)
     if(BARISTA_BUILD_ENGINE)
         find_program(BARISTA_PKCHECK pkcheck REQUIRED)
+        find_program(BARISTA_PKEXEC pkexec REQUIRED)
         find_program(BARISTA_MODPROBE modprobe REQUIRED)
         find_program(BARISTA_SYSTEMCTL systemctl REQUIRED)
         # Resolve directory aliases, retaining modprobe's name for kmod dispatch.
@@ -63,6 +64,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         qt_add_resources(barista-service service_branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
             FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
         if(BUILD_TESTING)
+            find_package(Python3 COMPONENTS Interpreter REQUIRED)
+            add_test(NAME barista_capture_analysis COMMAND ${Python3_EXECUTABLE}
+                -m unittest discover -s ${PROJECT_SOURCE_DIR}/scripts/capture-analysis -p "test_*.py")
+            add_test(NAME barista_capture_workflow COMMAND ${Python3_EXECUTABLE}
+                ${PROJECT_SOURCE_DIR}/scripts/test-capture-workflow.py)
             add_executable(barista_log_sanitizer_test service/log_sanitizer_test.cpp
                 service/log_sanitizer.cpp service/log_sanitizer.h)
             target_link_libraries(barista_log_sanitizer_test PRIVATE Qt6::Core)
@@ -81,6 +87,31 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             BARISTA_MODPROBE="${BARISTA_MODPROBE_DIR}/${BARISTA_MODPROBE_NAME}"
             BARISTA_SYSTEMCTL="${BARISTA_SYSTEMCTL}")
         install(TARGETS barista-service RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista)
+        add_executable(barista-capture service/capture_main.cpp)
+        target_link_libraries(barista-capture PRIVATE Qt6::Core Qt6::DBus)
+        target_compile_definitions(barista-capture PRIVATE
+            BARISTA_PKEXEC="${BARISTA_PKEXEC}"
+            BARISTA_CAPTURE_HELPER="${CMAKE_INSTALL_FULL_LIBEXECDIR}/barista/barista-capture-helper")
+        install(TARGETS barista-capture RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT CaptureWorkflow)
+        install(PROGRAMS ../scripts/barista-capture-helper.py
+            DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-capture-helper COMPONENT CaptureWorkflow)
+        install(DIRECTORY ../scripts/capture-analysis/
+            DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista/capture-analysis COMPONENT CaptureWorkflow
+            FILES_MATCHING PATTERN "*.py" PATTERN "test_*.py" EXCLUDE PATTERN "__pycache__" EXCLUDE)
+        configure_file(../packaging/linux/org.barista.capture-session.policy.in
+            org.barista.capture-session.policy @ONLY)
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.barista.capture-session.policy
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions COMPONENT CaptureWorkflow)
+        set(BARISTA_CAPTURE_AUTH_USER "" CACHE STRING "Optional local active user allowed to capture/manage sessions without prompting")
+        if(NOT BARISTA_CAPTURE_AUTH_USER STREQUAL "")
+            if(NOT BARISTA_CAPTURE_AUTH_USER MATCHES "^[a-z_][a-z0-9_-]*[$]?$")
+                message(FATAL_ERROR "BARISTA_CAPTURE_AUTH_USER must be a local account name")
+            endif()
+            configure_file(../packaging/linux/49-barista-capture.rules.in
+                49-barista-capture.rules @ONLY)
+            install(FILES ${CMAKE_CURRENT_BINARY_DIR}/49-barista-capture.rules
+                DESTINATION /etc/polkit-1/rules.d COMPONENT CaptureAuthorization)
+        endif()
         install(PROGRAMS $<TARGET_FILE:drcd> DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-engine)
         install(PROGRAMS "${DRC_HOSTAPD_BINARY}" DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/barista RENAME barista-hostapd)
         configure_file(../packaging/linux/barista.service.in barista.service @ONLY)

@@ -87,22 +87,30 @@ def encoder_settings(intra_refresh=True):
             'DRCD_INTRA_REFRESH':'1' if intra_refresh else '0'}
 
 
+def write_annex_b(records, output):
+    """Restore the receiver's synthetic slice headers without changing CABAC."""
+    frames = split_frames(records)
+    start = b'\0\0\0\1'
+    output.write(start+bytes.fromhex('67640020ac2b406c1ef368')+start+bytes.fromhex('68ee060ce8'))
+    number = 0
+    for chunks in frames:
+        idr = 128 in chunks[0][0][2][8:16]
+        if idr:
+            number = 0
+        slice_header = 0x25b804ff if idr else 0x21e003ff | ((number&255)<<13)
+        payload = b''.join(r[2][16:] for c in chunks for r in c)
+        output.write(start+reconstruct.escape(slice_header.to_bytes(4,'big')+payload))
+        number += 1
+    return len(frames)
+
+
 def convert(source, destination, encoder, intra_refresh=True):
     header, records = read_replay(source)
     frames = split_frames(records)
     output = [r for r in records if r[1] != 0]
     changed_slots = 0
     with tempfile.TemporaryFile() as annex:
-        start = b'\0\0\0\1'
-        annex.write(start+bytes.fromhex('67640020ac2b406c1ef368')+start+bytes.fromhex('68ee060ce8'))
-        number = 0
-        for chunks in frames:
-            idr = 128 in chunks[0][0][2][8:16]
-            if idr: number = 0
-            slice_header = 0x25b804ff if idr else 0x21e003ff | ((number&255)<<13)
-            payload = b''.join(r[2][16:] for c in chunks for r in c)
-            annex.write(start+reconstruct.escape(slice_header.to_bytes(4,'big')+payload))
-            number += 1
+        write_annex_b(records, annex)
         annex.seek(0)
         # Disable SPS cropping: the transport encoder needs all 864 columns,
         # including the ten normally hidden columns. Do not stretch 854 to 864.

@@ -127,6 +127,10 @@ if(BUILD_TESTING)
         target_link_libraries(drcd_encoder_recon_probe PRIVATE barista_drh_encoder)
         find_package(Python3 COMPONENTS Interpreter QUIET)
         find_program(DRCD_TEST_FFMPEG ffmpeg)
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME drcd_replay_preparation_tests
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/prepare-real-replay-tests.py)
+        endif()
         if(Python3_Interpreter_FOUND AND DRCD_TEST_FFMPEG)
             add_test(NAME drcd_encoder_reconstruction_tests
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/test-encoder-reconstruction.py
