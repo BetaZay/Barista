@@ -13,7 +13,7 @@ becoming the source of truth.
   lifecycle.
 - [Linux D-Bus API](dbus.md) documents the installed system-service adapter.
 - [Media and input](media.md) covers the portable frame contracts and the
-  current Linux-local AppHook connector.
+  current Linux-local AppHook connector, including GamePad software-keyboard prompts.
 - [Transports and VM direction](transports.md) states what exists today and how
   a bundled VM or remote backend should fit without duplicating the API.
 

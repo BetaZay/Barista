@@ -15,6 +15,28 @@ constexpr size_t FrameBytes = Width * Height * 3 / 2;
 // MUG (Media User Gateway) is Barista's Linux-local AppHook transport. It lets
 // any desktop application provide screen/audio and receive GamePad input; no
 // pairing keys or hardware privileges cross this interface.
+struct KeyboardRequest
+{
+    uint32_t id = 0;
+    std::string title = "Enter text";
+    std::string initialText;
+    uint32_t maxCharacters = 256;
+    bool password = false;
+};
+enum class KeyboardOutcome : uint32_t { Submitted = 0, Cancelled = 1, Busy = 2 };
+struct KeyboardResult
+{
+    uint32_t id = 0;
+    KeyboardOutcome outcome = KeyboardOutcome::Cancelled;
+    std::string text;
+};
+struct KeyboardCommand
+{
+    KeyboardRequest request;
+    bool cancel = false;
+    uint64_t connectionRevision = 0; // Server-side connection identity, never on the wire.
+};
+
 class AppHook
 {
 public:
@@ -35,6 +57,14 @@ public:
     void submit_input(std::span<const uint8_t> report);
     bool read_input(std::array<uint8_t, 128>& report) const;
     bool read_rumble() const;
+    // Optional client text-entry API. Poll results on the application's UI thread.
+    bool request_keyboard(const KeyboardRequest& request);
+    bool cancel_keyboard(uint32_t id);
+    bool read_keyboard_result(KeyboardResult& result);
+    // Engine side; results are tied to the connection that requested them.
+    bool read_keyboard_command(KeyboardCommand& command);
+    bool submit_keyboard_result(const KeyboardResult& result, uint64_t connectionRevision);
+    uint64_t connection_revision() const;
     bool read_video(std::span<uint8_t> i420, bool& active);
     void read_pcm(std::span<uint8_t> s16le);
     struct ConnectedAppInfo

@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include "api/types.h"
 #include "control_client.h"
+class DesktopStreamer;
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -40,6 +41,8 @@ private:
     void InitializePairingPattern();
     void UpdateHomeDevice();
     void CheckInstalledVersion();
+    void RefreshDesktopSources();
+    void StartDesktopSharing();
     bool m_restartRequired = false;
     QLabel* m_updateStatus = nullptr;
     ControlClient m_client;
@@ -58,7 +61,13 @@ private:
     std::array<QLabel*,4> m_pairSymbolLabels{};
     QWidget* m_pairSymbols;
     QPushButton *m_start, *m_stop, *m_pair, *m_copy, *m_prepare;
-    QPushButton *m_screenMode, *m_controllerMode;
+    QPushButton *m_screenMode, *m_controllerMode, *m_desktopMode;
+    DesktopStreamer* m_desktop;
+    QWidget* m_desktopPanel;
+    QComboBox* m_desktopSource;
+    QPushButton *m_desktopChoose, *m_desktopStop, *m_desktopKeyboard;
+    QLabel* m_desktopStatus;
+    bool m_desktopAttempted = false;
     QPushButton* m_waitingStop;
     QPushButton *m_renamePair, *m_removePair;
     QPushButton *m_viewLog, *m_openLogs, *m_copyDiagnostics, *m_saveDiagnostics;

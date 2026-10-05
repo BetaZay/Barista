@@ -1,4 +1,6 @@
 #include "window.h"
+#include "desktop_streamer.h"
+#include "desktop_backend.h"
 #include "cafe_icons.h"
 #include "pairing_pattern.h"
 #include <QApplication>
@@ -32,6 +34,12 @@ int main(int argc, char** argv)
 {
     QApplication app(argc,argv);
     try {
+        Check(DesktopUsesPortal("wayland", ""), "native Wayland selects portal");
+        Check(DesktopUsesPortal("wayland-egl", "wayland"), "Wayland EGL selects portal");
+        Check(DesktopUsesPortal("xcb", "wayland"), "XWayland still selects the Wayland portal");
+        Check(!DesktopUsesPortal("xcb", "x11"), "native X11 uses direct capture");
+        Check(!DesktopUsesPortal("xcb", ""), "X11 without session metadata uses direct capture");
+        Check(!DesktopUsesPortal("offscreen", "wayland"), "offscreen tests never open the live portal");
         Window window(true); window.show();
         QApplication::processEvents();
         auto* start = window.findChild<QPushButton*>("startButton");
@@ -61,6 +69,14 @@ int main(int argc, char** argv)
         auto* back = window.findChild<QPushButton*>("navHome");
         auto* screenMode = window.findChild<QPushButton*>("screenModeButton");
         auto* controllerMode = window.findChild<QPushButton*>("controllerModeButton");
+        auto* desktopMode = window.findChild<QPushButton*>("desktopModeButton");
+        auto* desktopPanel = window.findChild<QWidget*>("desktopSharingPanel");
+        QImage tall(100,200,QImage::Format_RGB888); tall.fill(Qt::red);
+        const auto mirrored = DesktopStreamer::Letterbox(tall);
+        Check(mirrored.size() == QSize(864,480) && mirrored.pixelColor(427,240) == QColor(Qt::red) &&
+              mirrored.pixelColor(20,240) == QColor(Qt::black) && mirrored.pixelColor(860,240) == QColor(Qt::black),
+              "desktop mirroring preserves aspect ratio and coded padding");
+        Check(desktopMode && desktopPanel && desktopPanel->isHidden(), "desktop capture controls hidden outside desktop mode");
         Check(preferences && back && screenMode && controllerMode,"sidebar navigation and mode controls");
         const QSize initialSize = window.size();
         Check(window.findChild<QLabel*>("homeLogo"),"Home displays Barista branding");
@@ -227,7 +243,16 @@ int main(int argc, char** argv)
         controllerMode->click();
         Check(controllerMode->isChecked() && !screenMode->isChecked() &&
             window.findChild<QComboBox*>("modeCombo")->currentData() == "controller","segmented mode updates session mode");
+        desktopMode->click();
+        Check(desktopMode->isChecked() && !controllerMode->isChecked() &&
+            window.findChild<QComboBox*>("modeCombo")->currentData() == "desktop" &&
+            !desktopPanel->isHidden(), "desktop mode exposes source selection");
+        Check(!window.findChild<QPushButton*>("desktopChooseSourceButton")->isEnabled(),
+            "desktop sharing cannot start without an owned connected session");
+        auto* keyboardButton = window.findChild<QPushButton*>("desktopKeyboardButton");
+        Check(keyboardButton && !keyboardButton->isEnabled(), "keyboard requires active desktop sharing");
         screenMode->click();
+        Check(desktopPanel->isHidden(), "desktop source panel hides when leaving mode");
         Check(pairingContent->isHidden() && pair->text() == "Pair","pairing is initially instruction-only");
         auto* startDialog = window.findChild<QDialog*>("waitingDialog");
         auto* startStatus = window.findChild<QLabel*>("waitingStatus");
@@ -367,7 +392,7 @@ int main(int argc, char** argv)
         auto* sessionStatus = window.findChild<QLabel*>("sessionStatus");
         Check(sessionStatus && sessionStatus->styleSheet().contains("#efaaa0"),"waiting GamePad has readable warning color");
         Check(!start->isVisible() && stop->isVisible(),"running shows only disconnect action");
-        Check(!screenMode->isEnabled() && !controllerMode->isEnabled(),"running session locks mode controls");
+        Check(!screenMode->isEnabled() && !controllerMode->isEnabled() && !desktopMode->isEnabled(),"running session locks mode controls");
         status.gamePadConnected = true; apply();
         Check(sessionStatus->text().contains("connected") && sessionStatus->styleSheet().contains("#a4c49a"),"connected GamePad is green");
         Check(sessionStatus->isVisible(),"connection status remains visible after moving out of status bar");

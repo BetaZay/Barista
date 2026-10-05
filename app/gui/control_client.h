@@ -13,6 +13,8 @@ public:
     void Start(const barista::api::StartSessionRequest& request);
     void Pair(const barista::api::PairRequest& request);
     void Stop();
+    void SubmitDesktopInput(const QByteArray& report);
+    void SubmitDesktopText(const QString& text);
     void Prepare();
     void Retry();
     void RefreshGamePads();
@@ -28,7 +30,7 @@ signals:
     void Diagnostics(const QString& report, const QString& directory, const QStringList& files, const QString& sessionId);
 private:
     void Call(const QString& method, const QVariantList& arguments = {});
-    bool m_pollPending = false, m_operationPending = false;
+    bool m_pollPending = false, m_operationPending = false, m_desktopInputPending = false;
     bool m_stopAfterOperation = false;
     qint64 m_nextRetry = 0;
 };

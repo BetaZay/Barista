@@ -116,7 +116,7 @@ little-endian 16-byte header followed by at most 16,384 payload bytes:
 | Offset | Type | Meaning |
 | --- | --- | --- |
 | 0 | `uint32` | Magic `0x3147554d` (`MUG1`) |
-| 4 | `uint32` | Type: video `1`, idle `2`, active `3`, PCM `4`, input `5`, reject `6` |
+| 4 | `uint32` | Type: video `1`, idle `2`, active `3`, PCM `4`, input `5`, reject `6`, rumble `7`; optional keyboard `8`–`10` below |
 | 8 | `uint32` | Frame/message ID |
 | 12 | `uint32` | Byte offset within a chunked frame |
 
@@ -125,3 +125,100 @@ it has no network authentication, negotiation, or encryption and must not be
 exposed over TCP. The server accepts the configured desktop UID (or root), sets
 the socket mode to `0600`, and rejects duplicate clients. Companion `.lock` and
 `.idle.i420` files are implementation metadata, not separate public APIs.
+
+## GamePad software keyboard
+
+The streaming engine provides a touch keyboard in the custom Home Menu style.
+A connector can use it for a game or application text prompt instead of drawing
+its own keyboard. Continue submitting video and heartbeats while the prompt is
+open; Barista draws the keyboard over that stream and consumes GamePad buttons,
+sticks and touch until the prompt closes. Desktop mode uses the same interface.
+
+```cpp
+barista::api::KeyboardRequest request{
+    .id = 1, // Unique among this connection's outstanding prompts.
+    .title = "Player name",
+    .initialText = "Link",
+    .maxCharacters = 16,
+    .password = false,
+};
+if (!hook.request_keyboard(request))
+{
+    // Disconnected, invalid request, or outgoing queue full: use your fallback.
+}
+
+barista::api::KeyboardResult result;
+while (hook.read_keyboard_result(result))
+{
+    if (result.id != request.id)
+        continue;
+    if (result.outcome == barista::api::KeyboardOutcome::Submitted)
+    {
+        // Apply result.text (UTF-8) on the application's UI/emulation thread.
+    }
+    else if (result.outcome == barista::api::KeyboardOutcome::Cancelled)
+    {
+        // Close the prompt without changing the application's original text.
+    }
+    else
+    {
+        // Busy: another prompt is open. Keep the application's fallback available.
+    }
+}
+// If the application dismisses its prompt:
+hook.cancel_keyboard(request.id);
+```
+
+There is one visible prompt at a time. A busy response also covers an engine
+started with its GamePad overlays disabled. Titles are limited to 256 UTF-8 bytes;
+initial and submitted text are limited to 4,096 UTF-8 bytes. `maxCharacters`
+accepts 1–1,024 Unicode scalars, not UTF-16 units or grapheme clusters. Invalid
+UTF-8, embedded controls and initial text over the requested limit are rejected.
+The first key layout enters printable English ASCII, with sticky Shift,
+numbers, punctuation and a symbol page; valid Unicode initial text is preserved
+and Backspace removes one complete scalar. Password prompts display masking
+characters. Cancellation and busy responses contain no text. AppHook queues
+are bounded to 16 messages in each direction.
+
+Tap a key, or use the D-pad to select and A to type. B deletes, X toggles Shift,
+Plus submits and HOME cancels. Cancel and Done are also touch buttons. Held
+buttons and a closing touch remain consumed until released. Disconnecting
+closes the prompt; requests and results are discarded across reconnects, so a
+connector must reissue a still-needed prompt on the new connection. The server
+ties each result to the requesting connection's internal revision.
+
+The keyboard extension is opt-in. Existing connectors send and receive the
+same media/input packets. New keyboard calls require an engine implementing
+these messages; MUG1 has no capability negotiation, so requesting a keyboard
+from an older engine can disconnect the connector. Keep the normal keyboard
+as a fallback when supporting older Barista installations.
+
+### External connector wire format
+
+The existing 16-byte MUG1 header remains unchanged. All keyboard messages use
+header message ID = prompt ID (nonzero), byte offset = 0, and one packet:
+
+| Type | Direction | Payload |
+| --- | --- | --- |
+| `8` | Client → engine | LE `uint32 maxCharacters`, LE `uint32 flags` (bit 0: password), LE `uint32 titleByteLength`, title UTF-8 bytes, initial-text UTF-8 bytes |
+| `9` | Client → engine | Empty payload; cancel the header's prompt ID |
+| `10` | Engine → client | LE `uint32 outcome` (`0` submitted, `1` cancelled, `2` busy), followed by UTF-8 text; empty text for cancelled/busy |
+
+Unknown flags, malformed lengths, invalid text or overflowing incoming queues
+close the connection. This endpoint remains local and restricted to the session
+owner; keyboard messages grant no radio or arbitrary system-event access.
+
+### Cemu integration points
+
+The neighboring Cemu fork already has `src/Common/BaristaAppHook.{h,cpp}` and
+an emulated keyboard in `src/Cafe/OS/libs/swkbd/swkbd.cpp`. To route its game
+prompts through this API, extend that connector with packet types 8–10 and a
+thread-safe result queue. Request a keyboard when `SwkbdAppearInputForm` opens
+an input form, converting the initial UTF-16 string and character limit to
+this UTF-8 contract. Poll on Cemu's emulation/UI thread, convert a submitted
+result back to its form buffer and follow its existing confirmation path.
+Cancel when `SwkbdDisappearInputForm` closes the form; retain Cemu's current
+keyboard when disconnected, busy or unavailable. Its keyboard-only API uses
+per-key callbacks and needs a separate adapter; a final-string response is
+suited to input forms. This change supplies the Barista interface; the Cemu
+fork and the existing Cemu 2.8 AppImage are not patched by this feature.

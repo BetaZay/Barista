@@ -220,6 +220,15 @@ Service::Service(QObject* parent) : QObject(parent)
     });
     connect(&m_statusSocket, &QLocalSocket::disconnected, this, &Service::ParseStatus);
     connect(&m_inputTimer, &QTimer::timeout, this, [this] {
+        if (m_mode == barista::api::SessionMode::Desktop && !m_stopping && m_worker.state() != QProcess::NotRunning) {
+            const bool fresh = m_connected && std::chrono::steady_clock::now() - m_desktopReceived < std::chrono::milliseconds(150);
+            if (!fresh) m_controller.CancelDesktopText();
+            if (!m_controller.Submit(fresh ? m_desktopState : barista::ControllerState{})) {
+                m_error = "Desktop input write failed; session stopped";
+                m_errorCode = "CONTROLLER_WRITE_FAILED"; StopWorker();
+            }
+            return;
+        }
         if (!m_input) return;
         std::array<uint8_t,128> raw{};
         const auto state = m_input->read_input(raw) ? barista::DecodeInput(raw) : barista::ControllerState{};
@@ -268,7 +277,7 @@ barista::api::SessionStatus Service::Status(bool ownedByCaller) const
             .action = std::string(advice.action),
         };
     }
-    if (ownedByCaller && m_mode == barista::api::SessionMode::Real)
+    if (ownedByCaller && m_mode != barista::api::SessionMode::Controller)
         status.mediaEndpoint = m_endpoint.toStdString();
 
     for (const auto* tool : {"iw", "ip", "nmcli"})
@@ -276,7 +285,7 @@ barista::api::SessionStatus Service::Status(bool ownedByCaller) const
         if (QStandardPaths::findExecutable(tool,{"/usr/sbin","/usr/bin","/sbin","/bin"}).isEmpty())
             status.health.missingTools.emplace_back(tool);
     }
-    if (m_mode == barista::api::SessionMode::Real && !m_endpoint.isEmpty())
+    if (m_mode != barista::api::SessionMode::Controller && !m_endpoint.isEmpty())
     {
         barista::api::AppHook::ConnectedAppInfo appInfo{};
         if (barista::api::AppHook::read_app_lock(m_endpoint.toStdString(), appInfo))
@@ -644,7 +653,7 @@ void Service::StartSessionWithCountry(const QString& interface, const QString& m
         if (m_worker.state() != QProcess::NotRunning) { done("Stop the current session before starting another one"); return; }
         m_error.clear(); m_errorCode.clear(); m_mode = *parsedMode; m_interface = interface;
         StartSupportRun("run", ModeName(*parsedMode));
-        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,mode=*parsedMode,country,uid,caller,done](QString error) {
+        Prepare(*parsedMode != barista::api::SessionMode::Real,caller,[this,interface,mode=*parsedMode,country,uid,caller,done](QString error) {
             if (!error.isEmpty()) { done(error); CloseSupportRun(); return; }
             done(Start(interface,mode,{},country,uid,caller));
         });
@@ -667,7 +676,7 @@ void Service::PairWithCountry(const QString& interface, const QString& code, con
         if (m_worker.state() != QProcess::NotRunning) { done("Stop the current session before starting another one"); return; }
         m_error.clear(); m_errorCode.clear(); m_mode = *parsedMode; m_interface = interface;
         StartSupportRun("pair", ModeName(*parsedMode));
-        Prepare(*parsedMode == barista::api::SessionMode::Controller,caller,[this,interface,code,mode=*parsedMode,country,uid,caller,done](QString error) {
+        Prepare(*parsedMode != barista::api::SessionMode::Real,caller,[this,interface,code,mode=*parsedMode,country,uid,caller,done](QString error) {
             if (!error.isEmpty()) { done(error); CloseSupportRun(); return; }
             done(Start(interface,mode,code,country,uid,caller));
         });
@@ -723,7 +732,7 @@ void Service::Prepare(bool controller, const QString& caller, Completion done)
             RunSetup(BARISTA_MODPROBE,{"uinput"},[caller,finish](QString result) {
                 if (!BusServiceRunning(caller)) finish("Caller disconnected");
                 else if (!result.isEmpty()) finish(result);
-                else finish(QFileInfo::exists("/dev/uinput") ? QString() : "This kernel did not provide /dev/uinput. Controller only mode is unavailable.");
+                else finish(QFileInfo::exists("/dev/uinput") ? QString() : "This kernel did not provide /dev/uinput. Desktop and controller input are unavailable.");
             });
         } else finish({});
     };
@@ -774,6 +783,15 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
     if (!barista::WriteIdleScreen("/run/barista/idle.i420", idleError)) {
         RecordDiagnostic("ENGINE_START_FAILED", "media"); CloseSupportRun(); return idleError;
     }
+    m_desktopState = {}; m_desktopReceived = {};
+    if (mode == barista::api::SessionMode::Desktop) {
+        std::string error;
+        if (!m_controller.StartDesktop(error)) {
+            m_phase = "idle"; m_errorCode = "CONTROLLER_UNAVAILABLE";
+            RecordDiagnostic(m_errorCode, "controller"); CloseSupportRun();
+            return QString::fromStdString(error);
+        }
+    }
     if (mode == barista::api::SessionMode::Controller) {
         std::string error;
         if (!m_controller.Start(error)) {
@@ -800,7 +818,7 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
         env.insert("DRCD_REGULATORY_COUNTRY",regulatoryCountry);
     env.insert("BARISTA_MUG_SOCKET",m_endpoint);
     env.insert("BARISTA_IDLE_I420","/run/barista/idle.i420");
-    env.insert("BARISTA_HOME_MENU",mode == barista::api::SessionMode::Real ? "1" : "0");
+    env.insert("BARISTA_HOME_MENU",mode != barista::api::SessionMode::Controller ? "1" : "0");
     env.insert("BARISTA_CLIENT_UID",QString::number(mode == barista::api::SessionMode::Controller ? 0 : uid));
     env.insert("BARISTA_SESSION_ID",m_sessionId);
     env.insert("DRCD_LOG_STDERR","1");
@@ -816,6 +834,31 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
     m_phase = "starting";
     m_worker.start(BARISTA_WORKER,args);
     return {};
+}
+void Service::SubmitDesktopInput(const QByteArray& report)
+{
+    // Session ownership authorizes this fixed input bridge, not arbitrary events.
+    if (!calledFromDBus() || message().service() != m_owner ||
+        m_mode != barista::api::SessionMode::Desktop || m_stopping ||
+        m_worker.state() == QProcess::NotRunning || (report.size() != 128 && !report.isEmpty())) {
+        if (calledFromDBus()) sendErrorReply(QDBusError::AccessDenied, "No owned desktop session");
+        return;
+    }
+    if (report.isEmpty()) m_controller.CancelDesktopText();
+    m_desktopState = barista::DecodeInput({reinterpret_cast<const uint8_t*>(report.constData()), size_t(report.size())});
+    m_desktopReceived = std::chrono::steady_clock::now();
+}
+void Service::SubmitDesktopText(const QString& text)
+{
+    if (!calledFromDBus() || message().service() != m_owner ||
+        m_mode != barista::api::SessionMode::Desktop || !m_connected || m_stopping ||
+        m_worker.state() == QProcess::NotRunning) {
+        if (calledFromDBus()) sendErrorReply(QDBusError::AccessDenied, "No owned desktop session");
+        return;
+    }
+    const auto bytes = text.toUtf8();
+    if (!m_controller.TypeDesktopText({bytes.constData(), size_t(bytes.size())}))
+        sendErrorReply(QDBusError::InvalidArgs, "Desktop typing accepts at most 1024 printable ASCII characters; wait for previous typing to finish");
 }
 void Service::StopWorker()
 {

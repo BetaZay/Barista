@@ -35,6 +35,7 @@ enum class SessionMode
 {
     Real,
     Controller,
+    Desktop,
 };
 
 inline constexpr std::string_view SessionModeName(SessionMode mode)
@@ -45,6 +46,8 @@ inline constexpr std::string_view SessionModeName(SessionMode mode)
         return "real";
     case SessionMode::Controller:
         return "controller";
+    case SessionMode::Desktop:
+        return "desktop";
     }
     return "real";
 }
@@ -55,6 +58,8 @@ inline constexpr std::optional<SessionMode> ParseSessionMode(std::string_view va
         return SessionMode::Real;
     if (value == "controller")
         return SessionMode::Controller;
+    if (value == "desktop")
+        return SessionMode::Desktop;
     return std::nullopt;
 }
 

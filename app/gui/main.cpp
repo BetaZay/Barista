@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QMessageBox>
 #include <QDialog>
+#include <QPushButton>
 #include <memory>
 #ifdef BARISTA_LINUX_CONTROL
 #include <unistd.h>
@@ -54,12 +55,14 @@ int main(int argc,char** argv)
         window.OpenPairing();
     if (smoke && (app.arguments().contains("--smoke-advanced") ||
         app.arguments().contains("--smoke-settings") || app.arguments().contains("--smoke-about") ||
-        app.arguments().contains("--smoke-connection"))) {
+        app.arguments().contains("--smoke-connection") || app.arguments().contains("--smoke-desktop"))) {
         window.findChild<QTabWidget*>("mainPages")->setCurrentIndex(2);
         window.findChild<QTabWidget*>("settingsTabs")->setCurrentIndex(
             app.arguments().contains("--smoke-about") ? 3 : app.arguments().contains("--smoke-advanced") ? 2 :
             app.arguments().contains("--smoke-connection") ? 1 : 0);
     }
+    if (smoke && app.arguments().contains("--smoke-desktop"))
+        window.findChild<QPushButton*>("desktopModeButton")->click();
     if (smoke) QTimer::singleShot(200,&app,[&] {
         const auto index = app.arguments().indexOf("--smoke-screenshot");
         if (index >= 0) {

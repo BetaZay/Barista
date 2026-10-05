@@ -33,6 +33,8 @@ public slots:
     void PairWithCountry(const QString& interface, const QString& code, const QString& mode, const QString& regulatoryCountry);
     void StopSession();
     void PrepareSystem();
+    void SubmitDesktopInput(const QByteArray& report);
+    void SubmitDesktopText(const QString& text);
 private:
     using Completion = std::function<void(QString)>;
     std::vector<barista::api::GamePad> GamePads() const;
@@ -74,4 +76,6 @@ private:
     int m_battery = 0;
     std::unique_ptr<barista::api::AppHook> m_input;
     barista::UinputOutput m_controller;
+    barista::ControllerState m_desktopState{};
+    std::chrono::steady_clock::time_point m_desktopReceived{};
 };
