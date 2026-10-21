@@ -1,0 +1,33 @@
+#!/bin/sh
+# Stop through runsv so the daemon cannot restart during replacement.
+barista_pre() {
+    [ -p "@BARISTA_RUNIT_SERVICE_DIR@/supervise/control" ] || return 0
+    if [ ! -d /run/barista-package-upgrade ]; then
+        state=$("@BARISTA_RUNIT_SV@" status "@BARISTA_RUNIT_SERVICE_DIR@") || return 1
+        mkdir -m 700 /run/barista-package-upgrade || return 1
+        case "$state" in
+            *"want down"*) ;;
+            run:*) touch /run/barista-package-upgrade/restart ;;
+        esac
+    fi
+    if ! "@BARISTA_RUNIT_SV@" -w 30 stop "@BARISTA_RUNIT_SERVICE_DIR@"; then
+        barista_post
+        return 1
+    fi
+}
+
+barista_post() {
+    [ -d /run/barista-package-upgrade ] || return 0
+    restart=no
+    [ ! -f /run/barista-package-upgrade/restart ] || restart=yes
+    rm -f /run/barista-package-upgrade/restart
+    rmdir /run/barista-package-upgrade || return 1
+    if [ "$restart" = yes ]; then
+        "@BARISTA_RUNIT_SV@" -w 10 start "@BARISTA_RUNIT_SERVICE_DIR@" || return 1
+    fi
+    # Starting the idle service does not reconnect a GamePad.
+}
+
+pre_upgrade() { barista_pre; }
+post_upgrade() { barista_post; }
+post_install() { barista_post; }

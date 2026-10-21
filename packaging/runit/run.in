@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+exec 2>&1
+exec "@CMAKE_INSTALL_FULL_LIBEXECDIR@/barista/barista-service-launch"

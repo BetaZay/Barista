@@ -1,4 +1,5 @@
 #include "log_sanitizer.h"
+#include "../service_integration.h"
 
 #include <QStringList>
 #include <iostream>
@@ -30,6 +31,10 @@ bool Check(const QString& input, const QStringList& retained, const QStringList&
 
 int main()
 {
+    if (barista::ServiceIntegrationName() != "systemd" &&
+        (barista::ServiceRecoveryCommand().contains("systemctl") ||
+         barista::SystemPreparationDescription().contains("Start NetworkManager"))) return 1;
+    if (barista::ShellQuote("/path/with'quote") != "'/path/with'\\''quote'") return 1;
     if (!Check("drcd-backend: adapter-check: wlan0 driver=brcmfmac phy=phy0 ap=yes monitor=no 5ghz=yes pairing-channel=ready",
             {"adapter-check", "wlan0", "brcmfmac", "monitor=no", "pairing-channel=ready"}, {})) return 1;
     if (!Check("hostapd[pairing]: wlan0: AP-STA-CONNECTED aa:bb:cc:dd:ee:ff",

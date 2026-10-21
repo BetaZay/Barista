@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+# Keep D-Bus activation under runsv, including during package replacement.
+[ ! -d /run/barista-package-upgrade ] || exit 1
+exec "@BARISTA_RUNIT_SV@" -w 10 start "@BARISTA_RUNIT_SERVICE_DIR@"
