@@ -1,4 +1,5 @@
 #include "drh/ap_tsf_clock.h"
+#include "drh/monitor_tsf_sample.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -18,6 +19,22 @@ void expect(bool condition, const char* message)
 
 int main()
 {
+	// Delaying userspace drain must not change the extrapolated hardware TSF.
+	constexpr int64_t receivedNs = 1700000000000000000;
+	constexpr int64_t capturedUs = 1000000;
+	for (const int64_t delayUs : {0, 500, 2500, 20000})
+	{
+		const auto sample = barista::drh::MonitorTsfSampleTime(capturedUs + delayUs,
+			receivedNs + delayUs * 1000, receivedNs);
+		expect(sample && *sample == capturedUs, "monitor queue delay changed the clock anchor");
+		const uint64_t tsf = 5000000;
+		expect(tsf + (capturedUs + delayUs - *sample) == tsf + delayUs,
+			"hardware TSF was not advanced by the time spent queued");
+	}
+	expect(!barista::drh::MonitorTsfSampleTime(capturedUs, receivedNs, 0), "missing timestamp accepted");
+	expect(!barista::drh::MonitorTsfSampleTime(capturedUs, receivedNs, receivedNs + 1), "future timestamp accepted");
+	expect(!barista::drh::MonitorTsfSampleTime(capturedUs + 2000000, receivedNs + 2000000000, receivedNs),
+		"stale monitor sample accepted");
 	using namespace std::chrono;
 	const auto origin = steady_clock::now();
 	bool unavailable = false;

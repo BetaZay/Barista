@@ -25,6 +25,8 @@ must remain unprivileged.
 | `Pair` | `interface: string`, `code: string`, `mode: string` | Empty on completion; compatibility entry point without a country override |
 | `PairWithCountry` | `interface: string`, `code: string`, `mode: string`, `regulatoryCountry: string` | Empty on completion |
 | `StopSession` | none | Empty on completion |
+| `SubmitDesktopText` | `text: s` | Empty; queue up to 1,024 printable ASCII characters for desktop typing |
+| `SubmitDesktopInput` | `report: ay` | Empty; 128-byte native input report or empty bytes to release input |
 | `PrepareSystem` | none | Empty on completion |
 | `RenameGamePad` | `mac: string`, `name: string` | Empty |
 | `RemoveGamePad` | `mac: string` | Empty |
@@ -33,6 +35,17 @@ The session, pairing, stop, and preparation methods use PolicyKit and may
 hold the D-Bus reply while user authorization or setup completes. The bundled
 Qt client allows 150 seconds for mutations and 25 seconds for reads; those are
 client policy, not wire-level guarantees.
+
+`SubmitDesktopInput` and `SubmitDesktopText` are internal desktop bridges. Only the D-Bus connection
+owning a running `desktop` session can call it. Session startup is authorized
+through PolicyKit; individual reports use that ownership check. Reports older
+than 150 ms at the service are replaced with neutral input. The GUI also sends
+neutral input when the AppHook input stream goes stale or capture stops.
+Desktop text is queued only for the owning connected Desktop session, typed
+at one character per tick and cancelled when input expires. Another text
+submission is rejected while the previous one is pending. Root only injects
+bounded printable ASCII through fixed key mappings; arbitrary keycodes and
+input device access are not exposed.
 
 `RenameGamePad` and `RemoveGamePad` currently return no structured persistence
 result. Call `SavedGamePads` afterward if confirmation matters.
@@ -54,7 +67,7 @@ unknown keys so fields can be added compatibly.
 | `running` | `running` | Boolean |
 | `phase` | `phase` | `idle`, `preparing`, `pairing`, `starting`, `runtime`, `stopping`, or `failed` |
 | `connected` | `gamePadConnected` | Boolean |
-| `mode` | `mode` | Empty, `real`, or `controller` |
+| `mode` | `mode` | Empty, `real`, `controller`, or `desktop` |
 | `interface` | `interfaceName` | String |
 | `batteryAvailable` | Presence of `batteryPercent` | Boolean |
 | `battery` | `batteryPercent` | Unsigned integer; meaningful only when available |

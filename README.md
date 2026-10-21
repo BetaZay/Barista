@@ -13,6 +13,8 @@ Barista is experimental software and is not affiliated with Nintendo.
 - Pair a real Wii U GamePad and reconnect using saved credentials.
 - Stream video and audio from compatible applications, with GamePad input.
 - Use the GamePad as a controller through Linux `uinput`.
+- Mirror a monitor or application window and navigate the desktop with the sticks and buttons.
+- Type with a built-in GamePad touch keyboard, also available to applications through AppHook text prompts.
 - Integrate other applications through [AppHook](docs/api/README.md).
 
 ## Requirements

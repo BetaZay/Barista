@@ -50,6 +50,7 @@ Session modes are serialized as:
 | --- | --- | --- |
 | `SessionMode::Real` | `real` | Screen, audio, and controller input through AppHook |
 | `SessionMode::Controller` | `controller` | GamePad input exposed through the host virtual-controller path |
+| `SessionMode::Desktop` | `desktop` | Desktop video through AppHook; mouse and keyboard input through the owning GUI/service bridge |
 
 Use `SessionModeName()` and `ParseSessionMode()` at adapter boundaries rather
 than duplicating string conversion.

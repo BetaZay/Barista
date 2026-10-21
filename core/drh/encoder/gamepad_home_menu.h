@@ -1,5 +1,6 @@
 #pragma once
 
+#include "api/app_hook.h"
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -29,6 +30,11 @@ public:
 	void render(std::span<uint8_t> i420, bool battery_valid, uint8_t battery_charge,
 		uint8_t opacity = 255) const;
 
+    bool show_keyboard(const barista::api::KeyboardRequest& request);
+    void cancel_keyboard(uint32_t id = 0);
+    std::optional<barista::api::KeyboardResult> take_keyboard_result();
+    bool keyboard_open() const;
+
 	bool open() const { return m_open.load(); }
 	uint64_t revision() const { return m_revision.load(); }
 	uint8_t opacity() const;
@@ -36,6 +42,15 @@ public:
 	bool rumble_active() const;
 
 private:
+    void activate_keyboard_key(size_t key);
+    void finish_keyboard(barista::api::KeyboardOutcome outcome);
+    bool m_keyboard_open = false, m_keyboard_shift = false, m_keyboard_symbols = false;
+    barista::api::KeyboardRequest m_keyboard_request;
+    std::string m_keyboard_text;
+    size_t m_keyboard_selected = 10;
+    uint32_t m_keyboard_captured_buttons = 0;
+    bool m_keyboard_captured_touch = false;
+    std::optional<barista::api::KeyboardResult> m_keyboard_result;
 	struct FontData;
 	mutable std::mutex m_mutex;
 	std::unique_ptr<FontData> m_fonts;

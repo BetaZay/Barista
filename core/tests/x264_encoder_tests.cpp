@@ -39,6 +39,10 @@ int main()
     auto configured = barista::drh::x264::OptionsFromEnvironment();
     Check(!configured.fastSearch && configured.disablePlanarPrediction,
         "native environment defaults are unsafe");
+    setenv("DRCD_FAST_ENCODE", "0", 1);
+    configured = barista::drh::x264::OptionsFromEnvironment();
+    Check(!configured.fastSearch && configured.disablePlanarPrediction,
+        "slow comparison preset cannot be selected");
     setenv("DRCD_FAST_ENCODE", "1", 1);
     setenv("DRCD_DISABLE_PLANAR_PREDICTION", "0", 1);
     configured = barista::drh::x264::OptionsFromEnvironment();

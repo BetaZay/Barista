@@ -1,6 +1,7 @@
 #include "drh/encoder/gamepad_home_menu.h"
 
 #include "drh/encoder/encoder.h"
+#include "api/keyboard_text.h"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -98,6 +99,50 @@ TouchPoint ReadTouch(std::span<const uint8_t> report)
 		std::clamp(calibrated_y, 0, 479)};
 }
 
+enum class KeyAction { Character, Shift, Symbols, Backspace, Space, Cancel, Done };
+struct KeyboardKey
+{
+    int x, y, width, row;
+    std::string label;
+    KeyAction action = KeyAction::Character;
+};
+std::vector<KeyboardKey> KeyboardKeys(bool shift, bool symbols)
+{
+    std::vector<KeyboardKey> keys;
+    const std::array<std::string, 3> rows = symbols
+        ? std::array<std::string, 3>{"!@#$%^&*()", "[]{}<>+=/\\", "_-:;\"'?,."}
+        : std::array<std::string, 3>{shift ? "!@#$%^&*()" : "1234567890",
+                                    shift ? "QWERTYUIOP" : "qwertyuiop",
+                                    shift ? "ASDFGHJKL" : "asdfghjkl"};
+    for (int row = 0; row < 3; ++row)
+    {
+        const int width = (780 - (static_cast<int>(rows[row].size()) - 1) * 6) / rows[row].size();
+        for (size_t column = 0; column < rows[row].size(); ++column)
+            keys.push_back({42 + static_cast<int>(column) * (width + 6), 194 + row * 50,
+                            width, row, std::string(1, rows[row][column])});
+    }
+    keys.push_back({42, 344, 92, 3, "Shift", KeyAction::Shift});
+    const std::string bottom = symbols ? "`~|\\,:;" : shift ? "ZXCVBNM" : "zxcvbnm";
+    for (size_t column = 0; column < bottom.size(); ++column)
+        keys.push_back({140 + static_cast<int>(column) * 72, 344, 66, 3, std::string(1, bottom[column])});
+    keys.push_back({650, 344, 172, 3, "Backspace", KeyAction::Backspace});
+    keys.push_back({42, 394, 110, 4, symbols ? "ABC" : "#+=", KeyAction::Symbols});
+    keys.push_back({158, 394, 380, 4, "Space", KeyAction::Space});
+    keys.push_back({544, 394, 126, 4, "Cancel", KeyAction::Cancel});
+    keys.push_back({676, 394, 146, 4, "Done", KeyAction::Done});
+    return keys;
+}
+void Neutralize(std::span<uint8_t> report)
+{
+    if (report.size() != 128) return;
+    report[2] = report[3] = report[80] = 0;
+    for (size_t offset = 6; offset < 14; offset += 2)
+    {
+        report[offset] = 2;
+        report[offset + 1] = 8;
+    }
+    std::fill(report.begin() + 36, report.begin() + 76, 0);
+}
 void ClearButtons(std::span<uint8_t> report)
 {
 	if (report.size() <= 80)
@@ -250,7 +295,9 @@ public:
 			return 0;
 		int width = 0;
 		FT_UInt previous = 0;
-		for (const unsigned char ch : text)
+		std::vector<uint32_t> characters;
+		barista::api::Utf8Characters(text, characters);
+		for (const uint32_t ch : characters)
 		{
 			const FT_UInt index = FT_Get_Char_Index(face, ch);
 			if (previous != 0 && index != 0 && FT_HAS_KERNING(face))
@@ -272,7 +319,9 @@ public:
 		if (face == nullptr || FT_Set_Pixel_Sizes(face, 0, size) != 0)
 			return;
 		FT_UInt previous = 0;
-		for (const unsigned char ch : value)
+		std::vector<uint32_t> characters;
+		barista::api::Utf8Characters(value, characters);
+		for (const uint32_t ch : characters)
 		{
 			const FT_UInt index = FT_Get_Char_Index(face, ch);
 			if (previous != 0 && index != 0 && FT_HAS_KERNING(face))
@@ -450,6 +499,77 @@ struct GamepadHomeMenu::FontData
 GamepadHomeMenu::GamepadHomeMenu() : m_fonts(std::make_unique<FontData>()) {}
 GamepadHomeMenu::~GamepadHomeMenu() = default;
 
+bool GamepadHomeMenu::show_keyboard(const barista::api::KeyboardRequest& request)
+{
+    std::vector<uint32_t> characters;
+    if (!request.id || !request.maxCharacters || request.maxCharacters > 1024 ||
+        request.title.size() > 256 || request.initialText.size() > 4096 ||
+        !barista::api::Utf8Characters(request.title, characters) ||
+        !barista::api::Utf8Characters(request.initialText, characters) ||
+        characters.size() > request.maxCharacters) return false;
+    std::lock_guard lock(m_mutex);
+    if (m_keyboard_open || m_keyboard_result) return false;
+    m_keyboard_request = request;
+    m_keyboard_text = request.initialText;
+    m_keyboard_selected = 10;
+    m_keyboard_shift = m_keyboard_symbols = false;
+    m_keyboard_open = true;
+    m_open.store(false);
+    m_transition_from = 0; m_transition_started_ms = 0;
+    ++m_revision;
+    return true;
+}
+bool GamepadHomeMenu::keyboard_open() const
+{
+    std::lock_guard lock(m_mutex);
+    return m_keyboard_open;
+}
+void GamepadHomeMenu::finish_keyboard(barista::api::KeyboardOutcome outcome)
+{
+    m_keyboard_result = barista::api::KeyboardResult{m_keyboard_request.id, outcome,
+        outcome == barista::api::KeyboardOutcome::Submitted ? m_keyboard_text : std::string{}};
+    m_keyboard_text.clear(); m_keyboard_request.initialText.clear();
+    m_keyboard_open = false;
+    ++m_revision;
+}
+void GamepadHomeMenu::cancel_keyboard(uint32_t id)
+{
+    std::lock_guard lock(m_mutex);
+    if (m_keyboard_open && (!id || id == m_keyboard_request.id))
+        finish_keyboard(barista::api::KeyboardOutcome::Cancelled);
+}
+std::optional<barista::api::KeyboardResult> GamepadHomeMenu::take_keyboard_result()
+{
+    std::lock_guard lock(m_mutex);
+    auto result = std::move(m_keyboard_result);
+    m_keyboard_result.reset();
+    return result;
+}
+void GamepadHomeMenu::activate_keyboard_key(size_t index)
+{
+    const auto keys = KeyboardKeys(m_keyboard_shift, m_keyboard_symbols);
+    if (index >= keys.size()) return;
+    const auto key = keys[index];
+    switch (key.action)
+    {
+    case KeyAction::Character:
+    case KeyAction::Space:
+    {
+        std::vector<uint32_t> characters;
+        barista::api::Utf8Characters(m_keyboard_text, characters);
+        if (characters.size() < m_keyboard_request.maxCharacters)
+            m_keyboard_text += key.action == KeyAction::Space ? " " : key.label;
+        break;
+    }
+    case KeyAction::Shift: m_keyboard_shift = !m_keyboard_shift; break;
+    case KeyAction::Symbols: m_keyboard_symbols = !m_keyboard_symbols; break;
+    case KeyAction::Backspace: barista::api::EraseLastCharacter(m_keyboard_text); break;
+    case KeyAction::Cancel: finish_keyboard(barista::api::KeyboardOutcome::Cancelled); break;
+    case KeyAction::Done: finish_keyboard(barista::api::KeyboardOutcome::Submitted); break;
+    }
+    ++m_revision;
+}
+
 HomeMenuUpdate GamepadHomeMenu::process_input(std::span<uint8_t> report)
 {
 	HomeMenuUpdate update;
@@ -460,6 +580,61 @@ HomeMenuUpdate GamepadHomeMenu::process_input(std::span<uint8_t> report)
 	m_previous_buttons = buttons;
 	const bool touch_started = touch.pressed && !m_touch_pressed;
 	m_touch_pressed = touch.pressed;
+    if (m_keyboard_open)
+    {
+        const auto keys = KeyboardKeys(m_keyboard_shift, m_keyboard_symbols);
+        m_keyboard_selected = std::min(m_keyboard_selected, keys.size() - 1);
+        if (pressed & (kButtonLeft | kButtonRight))
+        {
+            const auto row = keys[m_keyboard_selected].row;
+            const int direction = pressed & kButtonRight ? 1 : -1;
+            const int next = static_cast<int>(m_keyboard_selected) + direction;
+            if (next >= 0 && next < static_cast<int>(keys.size()) && keys[next].row == row)
+                m_keyboard_selected = next;
+            ++m_revision;
+        }
+        if (pressed & (kButtonUp | kButtonDown))
+        {
+            const auto selected = keys[m_keyboard_selected];
+            const int targetRow = selected.row + (pressed & kButtonDown ? 1 : -1);
+            int distance = 10000;
+            for (size_t index = 0; index < keys.size(); ++index)
+                if (keys[index].row == targetRow)
+                {
+                    const int delta = std::abs(keys[index].x + keys[index].width / 2 -
+                                               selected.x - selected.width / 2);
+                    if (delta < distance) { m_keyboard_selected = index; distance = delta; }
+                }
+            ++m_revision;
+        }
+        if (pressed & kButtonHome) finish_keyboard(barista::api::KeyboardOutcome::Cancelled);
+        else if (pressed & 0x8) finish_keyboard(barista::api::KeyboardOutcome::Submitted);
+        else if (pressed & kButtonB) { barista::api::EraseLastCharacter(m_keyboard_text); ++m_revision; }
+        else if (pressed & 0x2000) { m_keyboard_shift = !m_keyboard_shift; ++m_revision; }
+        else if (pressed & kButtonA) activate_keyboard_key(m_keyboard_selected);
+        if (m_keyboard_open && touch_started)
+            for (size_t index = 0; index < keys.size(); ++index)
+                if (touch.x >= keys[index].x && touch.x < keys[index].x + keys[index].width &&
+                    touch.y >= keys[index].y && touch.y < keys[index].y + 44)
+                {
+                    m_keyboard_selected = index;
+                    activate_keyboard_key(index);
+                    break;
+                }
+        m_keyboard_captured_buttons |= buttons;
+        if (touch.pressed) m_keyboard_captured_touch = true;
+        Neutralize(report);
+        update.display_changed = pressed || touch_started || !m_keyboard_open;
+        return update;
+    }
+    // Consume the closing gesture until its release, including stick movement.
+    m_keyboard_captured_buttons &= buttons;
+    if (m_keyboard_captured_buttons || m_keyboard_captured_touch)
+    {
+        if (!touch.pressed) m_keyboard_captured_touch = false;
+        Neutralize(report);
+        return update;
+    }
 	const bool was_open = m_open.load();
 	bool is_open = was_open;
 	bool touch_changed = false;
@@ -581,6 +756,7 @@ bool GamepadHomeMenu::rumble_enabled() const
 uint8_t GamepadHomeMenu::opacity() const
 {
 	std::lock_guard lock(m_mutex);
+	if (m_keyboard_open) return 255;
 	if (m_transition_started_ms == 0)
 		return m_open.load() ? 255 : 0;
 	const int64_t elapsed = std::clamp(SteadyMilliseconds() - m_transition_started_ms,
@@ -609,7 +785,7 @@ void GamepadHomeMenu::render(std::span<uint8_t> frame, bool battery_valid,
 		else
 			DrawCoffeeMark(canvas);
 		canvas.text(m_fonts->semibold, 72, 45, "Barista", 28, kWarmWhite);
-		canvas.text(m_fonts->regular, 342, 43, "GamePad quick settings", 19,
+		canvas.text(m_fonts->regular, 342, 43, m_keyboard_open ? "GamePad keyboard" : "GamePad quick settings", 19,
 			Color{226, 210, 198});
 
 		const int battery_percent = battery_valid
@@ -621,6 +797,46 @@ void GamepadHomeMenu::render(std::span<uint8_t> frame, bool battery_valid,
 			kWarmWhite);
 		DrawBattery(canvas, 758, 24, battery_percent);
 
+        if (m_keyboard_open)
+        {
+            std::string title = m_keyboard_request.title;
+            while (canvas.text_width(m_fonts->semibold, title, 23) > 630 && !title.empty())
+                barista::api::EraseLastCharacter(title);
+            canvas.text(m_fonts->semibold, 42, 106, title, 23, kBrown);
+            canvas.stroked_rounded_rect(42, 120, 780, 58, 14, 2, kBorder, kWarmWhite);
+            std::vector<uint32_t> characters;
+            barista::api::Utf8Characters(m_keyboard_text, characters);
+            const auto count = std::to_string(characters.size()) + "/" + std::to_string(m_keyboard_request.maxCharacters);
+            const int countWidth = canvas.text_width(m_fonts->regular, count, 16);
+            canvas.text(m_fonts->regular, 822 - countWidth, 105, count, 16, kMuted);
+            std::string display = m_keyboard_request.password ? std::string(characters.size(), '*') : m_keyboard_text;
+            // Keep the trailing portion visible without cutting a UTF-8 scalar.
+            while (canvas.text_width(m_fonts->regular, display, 24) > 744 && !display.empty())
+            {
+                size_t next = 1;
+                while (next < display.size() && (static_cast<uint8_t>(display[next]) & 0xc0) == 0x80) ++next;
+                display.erase(0, next);
+            }
+            canvas.text(m_fonts->regular, 58, 159, display + "|", 24, kBrown);
+            const auto keys = KeyboardKeys(m_keyboard_shift, m_keyboard_symbols);
+            for (size_t index = 0; index < keys.size(); ++index)
+            {
+                const auto& key = keys[index];
+                const bool selected = index == m_keyboard_selected;
+                const bool toggled = key.action == KeyAction::Shift && m_keyboard_shift;
+                canvas.stroked_rounded_rect(key.x, key.y, key.width, 44, 10,
+                    selected ? 3 : 1, selected ? kBlue : kBorder,
+                    toggled ? Color{226, 246, 253} : kWarmWhite);
+                const int size = key.label.size() == 1 ? 23 : 17;
+                const int width = canvas.text_width(m_fonts->semibold, key.label, size);
+                canvas.text(m_fonts->semibold, key.x + (key.width - width) / 2,
+                            key.y + 29, key.label, size, kBrown);
+            }
+            canvas.text(m_fonts->regular, 42, 466,
+                "TOUCH / D-pad + A: Type     B: Backspace     X: Shift     +: Done     HOME: Cancel", 15, kMuted);
+        }
+        else
+        {
 		canvas.text(m_fonts->semibold, 42, 112, "GamePad", 28, kBrown);
 		canvas.text(m_fonts->regular, 178, 110, "Adjust settings without leaving your game",
 			16, kMuted);
@@ -670,6 +886,7 @@ void GamepadHomeMenu::render(std::span<uint8_t> frame, bool battery_valid,
 		hint(560, 28, "B", "Close");
 		hint(682, 64, "HOME", "Close");
 
+        }
 		m_cached_menu.resize(DrcVideoFrameBytes);
 		canvas.to_i420(m_cached_menu);
 		m_cached_revision = revision;

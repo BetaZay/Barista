@@ -133,6 +133,18 @@ typedef struct H264E_create_param_tag
     // GamePad decoder requires this, while standard H.264 users may enable it.
     int disable_planar_prediction_flag;
 
+    // Diagnostic compatibility experiment: retain integer motion search but
+    // skip fractional-pixel refinement. Default zero preserves normal search.
+    int disable_subpixel_motion_flag;
+
+    // If set, code P macroblocks explicitly rather than using P-skip.
+    // Default zero retains both early skip and all-zero skip conversion.
+    int disable_pskip_flag;
+
+    // Diagnostic: predict inter macroblocks from the same reference position.
+    // Default zero preserves motion search and interpolation.
+    int zero_motion_flag;
+
 #if H264E_SVC_API
     //          SVC extension
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -234,6 +246,10 @@ typedef struct H264E_run_param_tag
     // Internal Barista CABAC slice sink, valid for the duration of Encode.
     // A non-null sink keeps prediction continuous across all thirty rows.
     void *drh_cabac_context;
+
+    // Native adapter discards CAVLC output. Diagnostic callers leave this zero
+    // to retain the complete CAVLC stream alongside the CABAC slice sink.
+    int skip_unused_cavlc_residual_flag;
 
 } H264E_run_param_t;
 
@@ -9184,6 +9200,23 @@ static void encode_slice_header(h264e_enc_t *enc, int frame_type, int long_term_
 /**
 *   Macroblock transform, quantization and bitstream encoding
 */
+static void encode_residual(h264e_enc_t *enc, int16_t *quant, int count, uint8_t *nz_ctx)
+{
+    if (!enc->run_param.drh_cabac_context || !enc->run_param.skip_unused_cavlc_residual_flag)
+    {
+        h264e_vlc_encode(enc->bs, quant, count, nz_ctx);
+        return;
+    }
+    // CABAC already consumed these coefficients. Retain the nonzero counts
+    // used by neighbor/deblocking state without serializing discarded CAVLC.
+    unsigned nonzero = 0;
+    const int first = count == 15 ? 1 : 0;
+    const int end = count == 4 ? 4 : 16;
+    for (int i = first; i < end; ++i)
+        nonzero += quant[i] != 0;
+    *nz_ctx = (uint8_t)nonzero;
+}
+
 static void mb_write(h264e_enc_t *enc, int enc_type, int base_mode)
 {
     int i, uv, mb_type, cbpc, cbpl, cbp;
@@ -9303,7 +9336,8 @@ l_skip:
         cbpc = MIN(cbpc, 2);
 
         // Rollback to skip
-        if (!(enc->mb.type | cbpl | cbpc) && // Inter prediction, all-zero after quantization
+        if (!enc->param.disable_pskip_flag &&
+            !(enc->mb.type | cbpl | cbpc) && // Inter prediction, all-zero after quantization
             mv_equal(enc->mb.mv[0], enc->mb.mv_skip_pred)) // MV == MV preditor for skip
         {
             enc->mb.type = -1;
@@ -9433,7 +9467,7 @@ l_skip:
         // 1. Encode Luma DC (intra 16x16 only)
         if (intra16x16_flag)
         {
-            h264e_vlc_encode(enc->bs, qv->quant_dc, 16, nz + 4);
+            encode_residual(enc, qv->quant_dc, 16, nz + 4);
         }
 
         // 2. Encode luma residual (only if CBP non-zero)
@@ -9445,7 +9479,7 @@ l_skip:
                 if (cbp & (1 << (i >> 2)))
                 {
                     uint8_t *pnz = nz + 4 + (j & 3) - (j >> 2);
-                    h264e_vlc_encode(enc->bs, qv->qy[j].qv, 16 - intra16x16_flag, pnz);
+                    encode_residual(enc, qv->qy[j].qv, 16 - intra16x16_flag, pnz);
                     if (*pnz)
                     {
                         enc->df.nzflag |= 1 << (5 + (j & 3) + 5*(j >> 2));
@@ -9470,7 +9504,7 @@ l_skip:
             // 2.1. Encode chroma DC
             for (uv = 1; uv < 3; uv++)
             {
-                h264e_vlc_encode(enc->bs, uv == 1 ? qv->quant_dc_u : qv->quant_dc_v, 4, nzcdc + 1);
+                encode_residual(enc, uv == 1 ? qv->quant_dc_u : qv->quant_dc_v, 4, nzcdc + 1);
             }
 
             // 2.2. Encode chroma residual
@@ -9489,7 +9523,7 @@ l_skip:
                     for (i = 0; i < 4; i++)
                     {
                         int k = 2 + (i & 1) - (i >> 1);
-                        h264e_vlc_encode(enc->bs, pquv[i].qv, 15, nzc + k);
+                        encode_residual(enc, pquv[i].qv, 15, nzc + k);
                     }
                     for (i = 0; i < 2; i++)
                     {
@@ -9916,7 +9950,8 @@ restart:
     *ppbest = scratch;
 
     // 3. Fractional pel search
-    if (enc->run_param.encode_speed < 9 && mv_in_rect(*mv, &enc->frame.mv_qpel_limit))
+    if (!enc->param.disable_subpixel_motion_flag &&
+        enc->run_param.encode_speed < 9 && mv_in_rect(*mv, &enc->frame.mv_qpel_limit))
     {
         point_t vbest = *mv;
         pix_t *pbest = scratch;
@@ -10138,6 +10173,21 @@ static void inter_choose_mode(h264e_enc_t *enc)
         enc->df.df_mv[i].u32       = enc->mv_pred[8 + 4*enc->mb.x + i].u32;
     }
 
+    if (enc->param.zero_motion_flag)
+    {
+        // Keep explicit inter coding, residual quantization and reconstruction.
+        // The coded MVD cancels the predictor to produce absolute zero motion.
+        enc->mb.type = 0;
+        enc->mb.mv[0] = point(0, 0);
+        enc->mb.mvd[0] = mv_sub(point(0, 0), mv_pred_16x16);
+        interpolate_luma(ref_yuv, ref_stride,
+            mb_abs_mv(enc, point(0, 0)), point(16, 16), enc->pbest);
+        enc->mb.cost = h264e_sad_mb_unlaign_wh(enc->scratch->mb_pix_inp,
+            16, enc->pbest, point(16, 16)) +
+            me_mv_cost(point(0, 0), mv_pred_16x16, enc->rc.qp);
+        return;
+    }
+
     // Try skip mode
     if (mv_in_rect(mv_skip_a, &enc->frame.mv_qpel_limit))
     {
@@ -10145,7 +10195,8 @@ static void inter_choose_mode(h264e_enc_t *enc)
         interpolate_luma(ref_yuv, ref_stride, mv_skip_a, point(16, 16), enc->ptest);
         sad_skip = h264e_sad_mb_unlaign_8x8(enc->scratch->mb_pix_inp, 16, enc->ptest, sad4);
 
-        if (MAX(MAX(sad4[0], sad4[1]), MAX(sad4[2], sad4[3])) < g_skip_thr_inter[enc->rc.qp])
+        if (!enc->param.disable_pskip_flag &&
+            MAX(MAX(sad4[0], sad4[1]), MAX(sad4[2], sad4[3])) < g_skip_thr_inter[enc->rc.qp])
         {
             int uv, sad_uv;
 

@@ -15,6 +15,12 @@ void AppHook::submit_pcm(std::span<const int16_t>) {}
 void AppHook::submit_rumble(bool) {}
 void AppHook::submit_input(std::span<const uint8_t>) {}
 bool AppHook::read_input(std::array<uint8_t, 128>&) const { return false; }
+bool AppHook::request_keyboard(const KeyboardRequest&) { return false; }
+bool AppHook::cancel_keyboard(uint32_t) { return false; }
+bool AppHook::read_keyboard_result(KeyboardResult&) { return false; }
+bool AppHook::read_keyboard_command(KeyboardCommand&) { return false; }
+bool AppHook::submit_keyboard_result(const KeyboardResult&, uint64_t) { return false; }
+uint64_t AppHook::connection_revision() const { return 0; }
 bool AppHook::read_rumble() const { return false; }
 bool AppHook::read_video(std::span<uint8_t>, bool& active) { active = false; return false; }
 void AppHook::read_pcm(std::span<uint8_t> pcm) { std::fill(pcm.begin(), pcm.end(), 0); }

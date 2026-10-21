@@ -10,7 +10,9 @@ media = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(media)
 
 
-def prepare(path):
+def prepare(path, max_seconds=30):
+    if not 0 < max_seconds <= 30:
+        raise ValueError('Replay duration must be greater than zero and at most 30 seconds')
     packets, frames = [], []
     previous = {}
     frame = None
@@ -65,18 +67,45 @@ def prepare(path):
     if chain: chains.append(chain)
     if not chains:
         raise ValueError('No complete IDR-led reference chain; the Vanilla steady-state capture alone cannot bootstrap replay')
-    chain = max(chains, key=lambda c: c[-1]['packets'][-1][0] - c[0]['packets'][0][0])
+    # A radio capture may miss a format packet without losing any video.
+    # Select an actually replayable chain rather than rejecting the entire
+    # capture because its longest video-only chain has a format observation gap.
+    formats_by_stamp = {}
+    for packet in packets:
+        if packet[1] == 1:
+            formats_by_stamp.setdefault(packet[2][8:12][::-1], []).append(packet)
+    playable = []
+    for candidate in chains:
+        chain = []
+        for frame in candidate:
+            first_video = frame['packets'][0][0]
+            matching = [p for p in formats_by_stamp.get(frame['stamp'], [])
+                        if first_video - 100000 <= p[0] <= first_video]
+            if not matching:
+                if chain:
+                    playable.append(chain)
+                chain = []
+                continue
+            if not chain and not frame['idr']:
+                continue
+            frame['format'] = matching[-1]
+            chain.append(frame)
+        if chain:
+            playable.append(chain)
+    if not playable:
+        raise ValueError('No complete IDR-led chain with matching preceding format packets')
+    chain = max(playable, key=lambda c: c[-1]['packets'][-1][0] - c[0]['packets'][0][0])
     first = chain[0]['packets'][0][0]
+    beginning = chain[0]['format'][0]
     # Limit the artifact to 30 seconds, ending at a complete frame.
-    chain = [f for f in chain if f['packets'][-1][0] - first < 30_000_000]
+    chain = [f for f in chain if f['packets'][-1][0] - beginning < max_seconds * 1_000_000]
+    if not chain:
+        raise ValueError('Duration limit is shorter than the initial complete frame')
     last = chain[-1]['packets'][-1][0]
-    stamps = {f['stamp'] for f in chain}
     selected = [p for f in chain for p in f['packets']]
-    formats = [p for p in packets if p[1] == 1 and p[2][8:12][::-1] in stamps and first-100000 <= p[0] <= last]
-    if {p[2][8:12][::-1] for p in formats} != stamps:
-        raise ValueError('Selected video chain lacks matching format packets')
-    selected += formats
-    selected += [p for p in packets if p[1] == 2 and first <= p[0] <= last]
+    # Preserve format-only slots too: they are part of the console schedule,
+    # even when no video frame shares their timestamp.
+    selected += [p for p in packets if beginning <= p[0] <= last]
     selected.sort(key=lambda p: p[0])
     origin = selected[0][0]
     result = bytearray(b'DRCREP01' + struct.pack('<III', len(selected), first-origin, int.from_bytes(chain[0]['stamp'], 'big')))
@@ -85,6 +114,7 @@ def prepare(path):
         result.extend(p)
     return result, {'frames': len(chain), 'idr_frames': sum(f['idr'] for f in chain),
                     'packets': len(selected), 'duration_s': (last-origin)/1e6,
+                    'format_packets': sum(p[1] == 1 for p in selected),
                     'pcm_packets': sum(p[1] == 2 for p in selected)}
 
 

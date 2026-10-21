@@ -54,12 +54,22 @@ worker contains the native encoder implementation. A fresh Ninja Debug build
 with `BARISTA_BUILD_ENGINE=OFF` passes all six desktop-only tests (local socket
 access is required for the single-instance test).
 
-The native configuration exposes only fast search and planar prediction.
+The environment-selectable native configuration exposes fast search and planar prediction.
 `DRCD_VIDEO_QP`, `DRCD_QP28`, `DRCD_LEGACY_ENCODER_QUALITY`, and
 `DRCD_INTRA_REFRESH` are retired encoder settings and have no effect. QP is fixed
-at 32; recovery uses requested IDRs, not cyclic intra-refresh. Status messages
+at 32; recovery uses requested IDRs and a proactive reset after 60 frames,
+not cyclic intra-refresh. The retained native adapter also selects explicit
+zero-motion P coding; trial history and physical results are recorded below. Status messages
 report those native behaviors rather than the former x264 policies.
 No GamePad hardware playback or radio timing validation is claimed here.
+
+The native adapter now explicitly skips unused CAVLC residual serialization,
+while diagnostic callers retain complete CAVLC by default. An old/new native
+binary comparison on 48 colored fade/slide frames, including consecutive
+IDRs, preserves every CABAC byte and reference pixel for both presets. The
+full reconstruction suite still verifies CAVLC diagnostics and native CABAC.
+The 2026-10-04 hardware trial tentatively showed slightly less corruption;
+see `docs/gamepad-recovery-experiment.md` for measured results and limits.
 
 ## Completion evidence
 
@@ -77,3 +87,27 @@ No GamePad hardware playback or radio timing validation is claimed here.
 These are Linux x86_64 software results. They do not certify other CPU paths,
 GamePad firmware behavior, radio delivery, or end-to-end latency. Real-device
 playback remains the next integration check, not a result of FFmpeg validation.
+
+
+The 2026-10-04 integer-motion trial adds `disable_subpixel_motion_flag` to
+MiniH264 create parameters, selecting it only in NativeEncoder. It bypasses
+fractional-pixel refinement while retaining the preset's other search and
+reconstruction behavior. Zero-initialized diagnostic callers retain normal
+search. This tests an unproven physical decoder compatibility hypothesis;
+see `docs/gamepad-recovery-experiment.md` for outcome and disposition.
+
+
+The subsequent P-skip trial explicitly selects `disable_pskip_flag` in the
+native adapter and its comparison probe. It disables early approximate skip
+and zero-residual inter-to-skip conversion; ordinary callers default to zero.
+It retains explicit inter prediction and normal quantization/reconstruction.
+See the experiment report for physical results; this is a compatibility and
+small-fade-correction hypothesis, not a known hardware defect.
+
+
+The zero-motion trial selects `zero_motion_flag` only in NativeEncoder and
+its comparison probe. It constructs an explicit same-position inter candidate
+with an MVD cancelling its predictor, preserving residuals, intra selection
+and reconstruction. Ordinary callers default to normal motion search.
+This tests a remaining motion/chroma interpolation hypothesis; it may increase
+moving-scene residuals and does not establish a hardware decoder defect.

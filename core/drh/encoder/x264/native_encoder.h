@@ -22,6 +22,9 @@ public:
         parameters.const_input_flag = 1;
         parameters.b_drh_mode = 1;
         parameters.disable_planar_prediction_flag = options.disablePlanarPrediction;
+        parameters.disable_subpixel_motion_flag = 1;
+        parameters.disable_pskip_flag = 1;
+        parameters.zero_motion_flag = 1;
         int persistentSize = 0, scratchSize = 0;
         if (H264E_sizeof(&parameters, &persistentSize, &scratchSize))
             return;
@@ -73,6 +76,7 @@ public:
         run.encode_speed = m_speed;
         run.qp_min = run.qp_max = 32;
         run.drh_cabac_context = &slice;
+        run.skip_unused_cavlc_residual_flag = 1;
         unsigned char* diagnosticOutput = nullptr;
         int diagnosticSize = 0;
         try

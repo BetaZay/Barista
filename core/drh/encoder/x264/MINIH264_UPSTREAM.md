@@ -17,3 +17,35 @@ that a GamePad supports planar prediction. The production factory selects the
 native adapter, using the compatibility default unless configured otherwise.
 `DRCD_DISABLE_PLANAR_PREDICTION=0` permits planar prediction in that factory;
 leave it unset for GamePad use.
+
+When the native adapter opts into `skip_unused_cavlc_residual_flag` with a
+DRH CABAC context, the residual path now updates nonzero
+counts without serializing the unused CAVLC coefficient data. Motion search,
+quantization, CABAC emission and reconstruction remain active. The separate
+CAVLC output argument is diagnostic scaffolding in this mode and is not a
+decodable stream. Diagnostic callers leave this flag zero to retain complete
+CAVLC alongside CABAC. Ordinary encoding without a CABAC context retains CAVLC.
+
+
+The 2026-10-04 integer-motion trial adds `disable_subpixel_motion_flag` to
+MiniH264 create parameters, selecting it only in NativeEncoder. It bypasses
+fractional-pixel refinement while retaining the preset's other search and
+reconstruction behavior. Zero-initialized diagnostic callers retain normal
+search. This tests an unproven physical decoder compatibility hypothesis;
+see `docs/gamepad-recovery-experiment.md` for outcome and disposition.
+
+
+The subsequent P-skip trial explicitly selects `disable_pskip_flag` in the
+native adapter and its comparison probe. It disables early approximate skip
+and zero-residual inter-to-skip conversion; ordinary callers default to zero.
+It retains explicit inter prediction and normal quantization/reconstruction.
+See the experiment report for physical results; this is a compatibility and
+small-fade-correction hypothesis, not a known hardware defect.
+
+
+The zero-motion trial selects `zero_motion_flag` only in NativeEncoder and
+its comparison probe. It constructs an explicit same-position inter candidate
+with an MVD cancelling its predictor, preserving residuals, intra selection
+and reconstruction. Ordinary callers default to normal motion search.
+This tests a remaining motion/chroma interpolation hypothesis; it may increase
+moving-scene residuals and does not establish a hardware decoder defect.

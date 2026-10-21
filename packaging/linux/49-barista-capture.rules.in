@@ -1,0 +1,8 @@
+// Explicit developer-machine opt-in. Only this local, active account may use
+// the bounded capture helper and Barista's existing session management API.
+polkit.addRule(function(action, subject) {
+    if (subject.user == "@BARISTA_CAPTURE_AUTH_USER@" && subject.local && subject.active &&
+        (action.id == "org.barista.capture-session" || action.id == "org.barista.manage-session")) {
+        return polkit.Result.YES;
+    }
+});

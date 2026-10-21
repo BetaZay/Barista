@@ -1,4 +1,5 @@
 #include "api/app_hook.h"
+#include "api/keyboard_text.h"
 
 #include <algorithm>
 #include <atomic>
@@ -27,12 +28,31 @@ namespace
 using Clock = std::chrono::steady_clock;
 constexpr size_t Chunk = 16384;
 constexpr size_t MaxAudioSamples = 4800 * 2; // bounded to 100ms, never grow latency
-enum Type : uint32_t { Video = 1, Idle = 2, Active = 3, Pcm = 4, Input = 5, Reject = 6, Rumble = 7 };
+enum Type : uint32_t { Video = 1, Idle = 2, Active = 3, Pcm = 4, Input = 5, Reject = 6, Rumble = 7, KeyboardOpen = 8, KeyboardCancel = 9, KeyboardReply = 10 };
 // Fixed little-endian local protocol: magic, type, frame ID, byte offset.
 void put(uint8_t* p, uint32_t v) { for (unsigned i = 0; i < 4; ++i) p[i] = v >> (8 * i); }
 uint32_t get(const uint8_t* p)
 {
     return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+}
+bool ValidKeyboard(const KeyboardRequest& request)
+{
+    std::vector<uint32_t> characters;
+    if (!request.id || request.maxCharacters == 0 || request.maxCharacters > 1024 ||
+        request.title.size() > 256 || request.initialText.size() > 4096 ||
+        !Utf8Characters(request.title, characters) ||
+        !Utf8Characters(request.initialText, characters)) return false;
+    return characters.size() <= request.maxCharacters;
+}
+std::vector<uint8_t> EncodeKeyboard(const KeyboardRequest& request)
+{
+    std::vector<uint8_t> payload(12 + request.title.size() + request.initialText.size());
+    put(payload.data(), request.maxCharacters);
+    put(payload.data() + 4, request.password ? 1 : 0);
+    put(payload.data() + 8, request.title.size());
+    std::copy(request.title.begin(), request.title.end(), payload.begin() + 12);
+    std::copy(request.initialText.begin(), request.initialText.end(), payload.begin() + 12 + request.title.size());
+    return payload;
 }
 struct Rgb { std::vector<uint8_t> bytes; unsigned width = 0, height = 0; };
 
@@ -167,7 +187,11 @@ public:
     std::array<uint8_t, 128> input{};
     Clock::time_point input_time{}, video_time{}, heartbeat{};
     bool active = false, rumble = false, input_pending = false;
-    uint64_t idle_revision = 0;
+    uint64_t idle_revision = 0, connection_revision = 0;
+    std::deque<KeyboardCommand> keyboard_commands;
+    std::deque<KeyboardResult> keyboard_results;
+    std::deque<KeyboardCommand> outgoing_keyboard;
+    std::deque<KeyboardResult> outgoing_results;
     int listener = -1;
     std::string path;
     dev_t socket_dev{};
@@ -243,10 +267,39 @@ public:
             write_lock_file(lock_path, current, allowed_uid);
         }
 
-        linked = true;
+        {
+            std::lock_guard lock(mutex);
+            ++connection_revision;
+            linked = true;
+        }
 
         while (!stopping)
         {
+            // Small, bounded control messages precede video in both directions.
+            std::deque<KeyboardCommand> commands;
+            std::deque<KeyboardResult> results;
+            {
+                std::lock_guard lock(mutex);
+                commands.swap(outgoing_keyboard);
+                results.swap(outgoing_results);
+            }
+            bool sent = true;
+            for (const auto& command : commands)
+            {
+                auto payload = command.cancel ? std::vector<uint8_t>{} : EncodeKeyboard(command.request);
+                sent &= send_packet(fd, command.cancel ? KeyboardCancel : KeyboardOpen,
+                                    command.request.id, 0, payload);
+                if (!sent) break;
+            }
+            for (const auto& result : results)
+            {
+                std::vector<uint8_t> payload(4 + result.text.size());
+                put(payload.data(), static_cast<uint32_t>(result.outcome));
+                std::copy(result.text.begin(), result.text.end(), payload.begin() + 4);
+                sent &= send_packet(fd, KeyboardReply, result.id, 0, payload);
+                if (!sent) break;
+            }
+            if (!sent) break;
             if (!server)
             {
                 Rgb frame, logo;
@@ -413,6 +466,42 @@ public:
                     std::lock_guard lock(mutex);
                     std::copy(payload.begin(), payload.end(), input.begin()); input_time = Clock::now();
                 }
+                else if (server && (type == KeyboardOpen || type == KeyboardCancel))
+                {
+                    KeyboardCommand command;
+                    command.request.id = id;
+                    command.cancel = type == KeyboardCancel;
+                    if (!id || offset != 0 || (command.cancel && !payload.empty()) ||
+                        (!command.cancel && payload.size() < 12)) { valid = false; break; }
+                    if (!command.cancel)
+                    {
+                        const auto titleSize = get(payload.data() + 8);
+                        const auto flags = get(payload.data() + 4);
+                        if (titleSize > payload.size() - 12 || flags > 1) { valid = false; break; }
+                        command.request.maxCharacters = get(payload.data());
+                        command.request.password = flags != 0;
+                        command.request.title.assign(reinterpret_cast<const char*>(payload.data() + 12), titleSize);
+                        command.request.initialText.assign(reinterpret_cast<const char*>(payload.data() + 12 + titleSize), payload.size() - 12 - titleSize);
+                        if (!ValidKeyboard(command.request)) { valid = false; break; }
+                    }
+                    std::lock_guard lock(mutex);
+                    if (keyboard_commands.size() >= 16) { valid = false; break; }
+                    command.connectionRevision = connection_revision;
+                    keyboard_commands.push_back(std::move(command));
+                }
+                else if (!server && type == KeyboardReply)
+                {
+                    if (!id || offset || payload.size() < 4 || payload.size() > 4100 ||
+                        get(payload.data()) > 2) { valid = false; break; }
+                    KeyboardResult result{id, static_cast<KeyboardOutcome>(get(payload.data())),
+                        std::string(reinterpret_cast<const char*>(payload.data() + 4), payload.size() - 4)};
+                    std::vector<uint32_t> characters;
+                    if (!Utf8Characters(result.text, characters) || characters.size() > 1024 ||
+                        (result.outcome != KeyboardOutcome::Submitted && !result.text.empty())) { valid = false; break; }
+                    std::lock_guard lock(mutex);
+                    if (keyboard_results.size() >= 16) { valid = false; break; }
+                    keyboard_results.push_back(std::move(result));
+                }
                 else { valid = false; break; }
             }
             if (!valid) break;
@@ -424,6 +513,10 @@ public:
         }
         {
             std::lock_guard lock(mutex);
+            linked = false;
+            ++connection_revision;
+            keyboard_commands.clear(); keyboard_results.clear();
+            outgoing_keyboard.clear(); outgoing_results.clear();
             client_info = {};
             audio.clear(); video.clear(); input_time = {}; input_pending = false;
             if (server) { active = false; rumble = false; heartbeat = {}; }
@@ -584,6 +677,53 @@ bool AppHook::read_input(std::array<uint8_t, 128>& report) const
     std::lock_guard lock(m_impl->mutex);
     if (!m_impl->linked || Clock::now() - m_impl->input_time > std::chrono::milliseconds(500)) return false;
     report = m_impl->input; return true;
+}
+bool AppHook::request_keyboard(const KeyboardRequest& request)
+{
+    std::lock_guard lock(m_impl->mutex);
+    if (m_impl->server || !m_impl->linked || !ValidKeyboard(request) ||
+        m_impl->outgoing_keyboard.size() >= 16) return false;
+    m_impl->outgoing_keyboard.push_back({request, false, 0});
+    return true;
+}
+bool AppHook::cancel_keyboard(uint32_t id)
+{
+    std::lock_guard lock(m_impl->mutex);
+    if (m_impl->server || !m_impl->linked || !id || m_impl->outgoing_keyboard.size() >= 16) return false;
+    KeyboardCommand command; command.request.id = id; command.cancel = true;
+    m_impl->outgoing_keyboard.push_back(command);
+    return true;
+}
+bool AppHook::read_keyboard_command(KeyboardCommand& command)
+{
+    std::lock_guard lock(m_impl->mutex);
+    if (!m_impl->server || m_impl->keyboard_commands.empty()) return false;
+    command = std::move(m_impl->keyboard_commands.front()); m_impl->keyboard_commands.pop_front();
+    return true;
+}
+bool AppHook::submit_keyboard_result(const KeyboardResult& result, uint64_t revision)
+{
+    std::vector<uint32_t> characters;
+    if (!result.id || static_cast<uint32_t>(result.outcome) > 2 || result.text.size() > 4096 ||
+        !Utf8Characters(result.text, characters) || characters.size() > 1024 ||
+        (result.outcome != KeyboardOutcome::Submitted && !result.text.empty())) return false;
+    std::lock_guard lock(m_impl->mutex);
+    if (!m_impl->server || !m_impl->linked || m_impl->connection_revision != revision ||
+        m_impl->outgoing_results.size() >= 16) return false;
+    m_impl->outgoing_results.push_back(result);
+    return true;
+}
+bool AppHook::read_keyboard_result(KeyboardResult& result)
+{
+    std::lock_guard lock(m_impl->mutex);
+    if (m_impl->server || m_impl->keyboard_results.empty()) return false;
+    result = std::move(m_impl->keyboard_results.front()); m_impl->keyboard_results.pop_front();
+    return true;
+}
+uint64_t AppHook::connection_revision() const
+{
+    std::lock_guard lock(m_impl->mutex);
+    return m_impl->connection_revision;
 }
 bool AppHook::read_rumble() const
 {
