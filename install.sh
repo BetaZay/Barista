@@ -154,7 +154,16 @@ case "$package_manager" in
             fi
         done <<'EOF'
 /usr/bin/barista
+/usr/bin/barista-capture
 /usr/lib/systemd/system/barista.service
+/usr/libexec/barista/barista-capture-helper
+/usr/libexec/barista/capture-analysis/analyze-media-capture.py
+/usr/libexec/barista/capture-analysis/analyze_clock.py
+/usr/libexec/barista/capture-analysis/analyze_delivery.py
+/usr/libexec/barista/capture-analysis/analyze_format_clock.py
+/usr/libexec/barista/capture-analysis/block_ack.py
+/usr/libexec/barista/capture-analysis/decrypt_capture.py
+/usr/libexec/barista/capture-analysis/summarize-wifi-rates.py
 /usr/libexec/barista/barista-engine
 /usr/libexec/barista/barista-hostapd
 /usr/libexec/barista/barista-service
@@ -163,6 +172,7 @@ case "$package_manager" in
 /usr/share/dbus-1/system-services/org.barista.Service1.service
 /usr/share/dbus-1/system.d/org.barista.Service1.conf
 /usr/share/pixmaps/org.barista.Barista.png
+/usr/share/polkit-1/actions/org.barista.capture-session.policy
 /usr/share/polkit-1/actions/org.barista.manage-session.policy
 EOF
         if [ "$migrating_source_install" = true ] && systemctl cat barista.service >/dev/null 2>&1; then

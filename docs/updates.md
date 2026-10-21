@@ -153,6 +153,18 @@ automatically. On Arch-based systems, `install.sh` can safely adopt Barista's
 known, unowned `/usr` files during the first package installation; it never
 overwrites a path owned by another package.
 
+If an Arch update reports `barista-capture`, `capture-analysis/*.py`, or
+`org.barista.capture-session.policy` as existing files, these may be left over
+from installing the capture workflow with CMake. Check every reported path with
+`pacman -Qo /path/to/file` and back up the files first. If all are unowned, retry
+your original pacman command with an exact `--overwrite` argument for each
+reported path, omitting its leading slash (for example,
+`--overwrite usr/bin/barista-capture`). This lets the package take ownership.
+Do not use `--overwrite '*'` or overwrite files owned by another package.
+The installer includes the capture workflow in its source migration list;
+already subscribed systems can use this one-time repair without changing their
+repository configuration.
+
 ## Interrupted upgrades
 
 If a package transaction fails, first finish or repair it with your distribution's
