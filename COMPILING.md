@@ -7,8 +7,9 @@ use the [signed package repositories](docs/updates.md) instead.
 Barista has two build layers:
 
 - The portable Qt 6 UI/core can build without the GamePad radio engine.
-- The full GamePad implementation is currently Linux-only. It builds Barista's
-  patched hostapd and bundled DRC x264 encoder as part of the normal build.
+- The full GamePad implementation is currently Linux-only. It builds the
+  pinned Vanilla GamePad hostapd fork and bundled DRC x264 encoder as part of
+  the normal build.
 
 ## Prerequisites
 
@@ -26,9 +27,23 @@ families are commonly `build-essential`, `cmake`, `ninja-build`, `git`,
 `libnl-genl-3-dev`. Install the matching Qt 6 DBus development package if your
 distribution splits it out.
 
-The first full build clones the pinned upstream hostapd source and applies the
-patches included in this repository, so it needs Internet access. The DRC x264
-source is bundled.
+The first full build clones the pinned Vanilla hostapd source, so it needs
+Internet access. Barista builds the fork with
+`CONFIG_TENDONIN=y` and only the ported `0007` HT-advertisement patch (HT
+capabilities, A-MPDU, RIFS, and omission of Extended Capabilities and Supported
+Operating Classes). All other patches in `third_party/hostapd-drc/patches/`
+remain inactive. The replacement has been tested successfully on the local
+GamePad setup; broader pairing, reconnection, streaming, and adapter coverage
+still needs hardware testing. The DRC x264 source is bundled.
+
+Existing build directories retain their old CMake cache values. To switch one
+to the replacement, explicitly set the repository and commit:
+
+```sh
+cmake -S . -B build \
+  -DDRC_HOSTAPD_REPOSITORY=https://github.com/vanilla-wiiu/drc-hostap.git \
+  -DDRC_HOSTAPD_TAG=a2f705daa143791180754100194c91714f7e8801
+```
 
 ## Development build
 
@@ -75,7 +90,7 @@ sudo cmake --install build-release
 ```
 
 Installation places the desktop file, D-Bus activation service, polkit policy,
-root-owned engine, and Barista's patched hostapd together. Open Barista as the
+root-owned engine, and the GamePad hostapd together. Open Barista as the
 regular desktop user; do not start the GUI with `sudo` or `pkexec`.
 
 ### Using runit instead of systemd

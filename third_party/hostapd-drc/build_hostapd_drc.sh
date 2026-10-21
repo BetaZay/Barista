@@ -2,17 +2,17 @@
 set -euo pipefail
 
 if [[ $# -ne 7 ]]; then
-	echo "usage: $0 <src-dir> <repo-url> <tag> <patch-dir> <hostapd-config> <out-hostapd> <out-hostapd-cli>" >&2
+	echo "usage: $0 <src-dir> <repo-url> <tag> <hostapd-config> <out-hostapd> <out-hostapd-cli> <ht-patch>" >&2
 	exit 2
 fi
 
 src_dir="$1"
 repo_url="$2"
 tag="$3"
-patch_dir="$4"
-hostapd_config="$5"
-out_hostapd="$6"
-out_hostapd_cli="$7"
+hostapd_config="$4"
+out_hostapd="$5"
+out_hostapd_cli="$6"
+ht_patch="$7"
 
 if [[ ! -d "$src_dir/.git" ]]; then
 	mkdir -p "$(dirname "$src_dir")"
@@ -41,7 +41,16 @@ if [[ ! -d "$src_dir/.git" ]]; then
 	mv "$clone_dir" "$src_dir"
 fi
 
-patch_hash="$({ printf '%s\0' "$tag"; sha256sum "$hostapd_config" "$patch_dir"/*.patch; } | sha256sum | cut -d' ' -f1)"
+# Existing build trees may contain the previous upstream repository. Fetch the
+# requested pin before resetting this disposable, build-owned checkout.
+if [[ "$(git -C "$src_dir" remote get-url origin)" != "$repo_url" ]]; then
+	git -C "$src_dir" remote set-url origin "$repo_url"
+	git -C "$src_dir" fetch origin "$tag"
+elif ! git -C "$src_dir" cat-file -e "${tag}^{commit}" 2>/dev/null; then
+	git -C "$src_dir" fetch origin "$tag"
+fi
+
+patch_hash="$({ printf '%s\0%s\0ht-advertisement\0' "$repo_url" "$tag"; sha256sum "$hostapd_config" "$ht_patch"; } | sha256sum | cut -d' ' -f1)"
 patch_marker="$src_dir/.barista-patchset"
 current_hash=""
 if [[ -f "$patch_marker" ]]; then
@@ -52,13 +61,8 @@ if [[ "$current_hash" != "$patch_hash" ]]; then
 	git -C "$src_dir" am --abort >/dev/null 2>&1 || true
 	git -C "$src_dir" reset --hard "$tag"
 	git -C "$src_dir" clean -xfd
-	# `git am` creates local commits. CI runners do not necessarily have a
-	# global identity, so keep this deterministic and scoped to this checkout.
-	git -C "$src_dir" config user.name "Barista build"
-	git -C "$src_dir" config user.email "build@barista.invalid"
-	for patch in "$patch_dir"/*.patch; do
-		git -C "$src_dir" am "$patch"
-	done
+	git -C "$src_dir" apply --check "$ht_patch"
+	git -C "$src_dir" apply "$ht_patch"
 	cp "$hostapd_config" "$src_dir/hostapd/.config"
 	printf '%s\n' "$patch_hash" > "$patch_marker"
 elif ! cmp -s "$hostapd_config" "$src_dir/hostapd/.config"; then

@@ -18,6 +18,10 @@ your physical location, and choose a play mode:
 - **Controller-only**: exposes standard buttons, sticks, triggers, and D-pad
   through Linux `uinput`.
 
+The adapter list refreshes automatically while idle; use **Refresh** to check
+immediately after plugging in a USB adapter. A missing saved adapter is marked
+unavailable. Select an available adapter before connecting or pairing.
+
 The selected adapter is dedicated to the GamePad during a session. Use Ethernet
 or another adapter for Internet access. See [Wi-Fi compatibility](hardware.md).
 
@@ -76,3 +80,9 @@ the [API documentation](api/README.md).
 Settings groups configuration in **General**, read-only connection details in
 **Session info**, diagnostics in **Support**, and project information in **About**.
 For failures or bug reports, see [troubleshooting and support logs](troubleshooting.md).
+
+Connection errors offer **View details** to open Support directly and **Retry**
+when another attempt is possible. Retrying a GamePad connection still asks for
+Wi-Fi takeover confirmation. In Support, copied and saved reports include the
+selected sanitized session log by default; select the failed session's log or
+uncheck **Include selected session log** for a report of the current state only.
