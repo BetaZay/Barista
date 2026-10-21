@@ -221,11 +221,11 @@ Service::Service(QObject* parent) : QObject(parent)
     });
     connect(&m_statusSocket, &QLocalSocket::disconnected, this, &Service::ParseStatus);
     connect(&m_inputTimer, &QTimer::timeout, this, [this] {
-        if (m_mode == barista::api::SessionMode::Desktop && !m_stopping && m_worker.state() != QProcess::NotRunning) {
+        if (m_mode && barista::api::IsMirroringMode(*m_mode) && !m_stopping && m_worker.state() != QProcess::NotRunning) {
             const bool fresh = m_connected && std::chrono::steady_clock::now() - m_desktopReceived < std::chrono::milliseconds(150);
             if (!fresh) m_controller.CancelDesktopText();
             if (!m_controller.Submit(fresh ? m_desktopState : barista::ControllerState{})) {
-                m_error = "Desktop input write failed; session stopped";
+                m_error = "Mirroring input write failed; session stopped";
                 m_errorCode = "CONTROLLER_WRITE_FAILED"; StopWorker();
             }
             return;
@@ -798,18 +798,20 @@ QString Service::Start(const QString& interface, barista::api::SessionMode mode,
             return QString::fromStdString(error);
         }
     }
-    if (mode == barista::api::SessionMode::Controller) {
+    if (mode == barista::api::SessionMode::Controller || mode == barista::api::SessionMode::GameMirroring) {
         std::string error;
         if (!m_controller.Start(error)) {
             m_phase = "idle"; m_errorCode = "CONTROLLER_UNAVAILABLE";
             RecordDiagnostic(m_errorCode, "controller"); CloseSupportRun();
             return error.empty() ? "Cannot create virtual controller" : QString::fromStdString(error);
         }
-        m_input = std::make_unique<barista::api::AppHook>(false);
-        if (!m_input->start(m_endpoint.toStdString(), error)) {
-            m_controller.Stop(); m_input.reset(); m_errorCode = "ENGINE_START_FAILED";
-            RecordDiagnostic(m_errorCode, "media"); CloseSupportRun();
-            return QString::fromStdString(error);
+        if (mode == barista::api::SessionMode::Controller) {
+            m_input = std::make_unique<barista::api::AppHook>(false);
+            if (!m_input->start(m_endpoint.toStdString(), error)) {
+                m_controller.Stop(); m_input.reset(); m_errorCode = "ENGINE_START_FAILED";
+                RecordDiagnostic(m_errorCode, "media"); CloseSupportRun();
+                return QString::fromStdString(error);
+            }
         }
     }
     QProcessEnvironment env;
@@ -845,9 +847,9 @@ void Service::SubmitDesktopInput(const QByteArray& report)
 {
     // Session ownership authorizes this fixed input bridge, not arbitrary events.
     if (!calledFromDBus() || message().service() != m_owner ||
-        m_mode != barista::api::SessionMode::Desktop || m_stopping ||
+        (!m_mode || !barista::api::IsMirroringMode(*m_mode)) || m_stopping ||
         m_worker.state() == QProcess::NotRunning || (report.size() != 128 && !report.isEmpty())) {
-        if (calledFromDBus()) sendErrorReply(QDBusError::AccessDenied, "No owned desktop session");
+        if (calledFromDBus()) sendErrorReply(QDBusError::AccessDenied, "No owned mirroring session");
         return;
     }
     if (report.isEmpty()) m_controller.CancelDesktopText();

@@ -112,6 +112,18 @@ int main()
         const int expected = buttons == 0x800u ? -1 : buttons == 0x400u ? 1 : 0;
         Check(HasEvent(EV_ABS, ABS_HAT0X, expected), "controller D-pad direction");
     }
+    events.clear();
+    state.buttons = 0x8000 | 0x80 | 0x40 | 0x400000;
+    state.sticks = {12345, -12345, 23456, -23456};
+    Check(output.Submit(state), "mirrored game controller input");
+    Check(HasEvent(EV_KEY, BTN_SOUTH, 1) && HasEvent(EV_KEY, BTN_THUMBR, 1), "game buttons remain controller buttons");
+    Check(HasEvent(EV_ABS, ABS_X, 12345) && HasEvent(EV_ABS, ABS_Y, -12345) &&
+          HasEvent(EV_ABS, ABS_RX, 23456) && HasEvent(EV_ABS, ABS_RY, -23456), "both game sticks");
+    Check(HasEvent(EV_ABS, ABS_Z, 255) && HasEvent(EV_ABS, ABS_RZ, 255), "game triggers");
+    events.clear();
+    Check(output.Submit({}), "release game input");
+    Check(HasEvent(EV_KEY, BTN_SOUTH, 0) && HasEvent(EV_KEY, BTN_THUMBR, 0) &&
+          HasEvent(EV_ABS, ABS_X, 0) && HasEvent(EV_ABS, ABS_RZ, 0), "disconnect releases game controls");
     output.Stop();
     Check(!created, "device cleanup");
     std::cout << "uinput: idle, press/release, shared buttons and D-pad directions passed\n";

@@ -84,6 +84,8 @@ int main(int argc, char** argv)
         auto* screenMode = window.findChild<QPushButton*>("screenModeButton");
         auto* controllerMode = window.findChild<QPushButton*>("controllerModeButton");
         auto* desktopMode = window.findChild<QPushButton*>("desktopModeButton");
+        auto* gameMirroringMode = window.findChild<QPushButton*>("gameMirroringModeButton");
+        Check(gameMirroringMode, "game mirroring mode exists");
         auto* desktopPanel = window.findChild<QWidget*>("desktopSharingPanel");
         QImage tall(100,200,QImage::Format_RGB888); tall.fill(Qt::red);
         const auto mirrored = DesktopStreamer::Letterbox(tall);
@@ -206,6 +208,14 @@ int main(int argc, char** argv)
                 Q_ARG(barista::api::SessionStatus,status)),"apply status");
         };
         apply(); Check(start->isEnabled() && pair->isEnabled() && !stop->isEnabled(),"idle actions");
+        gameMirroringMode->click();
+        Check(gameMirroringMode->isChecked() && !desktopPanel->isHidden(), "game mirroring shows sharing controls");
+        Check(window.findChild<QPushButton*>("desktopKeyboardButton")->isHidden(), "game mirroring hides desktop keyboard");
+        Check(window.findChild<QLabel*>("modeDescription")->text().contains("standard controller"), "game mirroring describes controller input");
+        desktopMode->click();
+        Check(!window.findChild<QPushButton*>("desktopKeyboardButton")->isHidden(), "desktop restores keyboard control");
+        screenMode->click();
+        Check(desktopPanel->isHidden(), "app mode hides sharing controls");
         auto* pattern = window.findChild<QLineEdit*>("pairingCode");
         Check(!window.findChild<QPushButton*>("newPairingPatternButton"),"pairing has no pattern editing action");
         Check(pattern && pattern->isReadOnly() && barista::api::ParsePairCode(pattern->text().toStdString()).has_value(),"startup generates a valid read-only pairing pattern");
@@ -405,7 +415,7 @@ int main(int argc, char** argv)
         auto* sessionStatus = window.findChild<QLabel*>("sessionStatus");
         Check(sessionStatus && sessionStatus->styleSheet().contains("#efaaa0"),"waiting GamePad has readable warning color");
         Check(!start->isVisible() && stop->isVisible(),"running shows only disconnect action");
-        Check(!screenMode->isEnabled() && !controllerMode->isEnabled() && !desktopMode->isEnabled(),"running session locks mode controls");
+        Check(!screenMode->isEnabled() && !controllerMode->isEnabled() && !desktopMode->isEnabled() && !gameMirroringMode->isEnabled(),"running session locks mode controls");
         status.gamePadConnected = true; apply();
         Check(sessionStatus->text().contains("connected") && sessionStatus->styleSheet().contains("#a4c49a"),"connected GamePad is green");
         Check(sessionStatus->isVisible(),"connection status remains visible after moving out of status bar");
@@ -432,6 +442,10 @@ int main(int argc, char** argv)
             settingsTabs->setCurrentIndex(3); capture(&window,screenshot + ".about.png");
             const auto connectedStatus = status;
             status.running = false; status.gamePadConnected = false; status.phase = barista::api::SessionPhase::Idle; apply();
+            settingsTabs->setCurrentIndex(0);
+            gameMirroringMode->click();
+            capture(&window,screenshot + ".game-mirroring.png");
+            screenMode->click();
             window.OpenPairing(); capture(pairDialog,screenshot + ".pairing.png");
             status.busy = true; status.phase = barista::api::SessionPhase::Starting; apply();
             capture(pairDialog,screenshot + ".pairing-preparing.png");

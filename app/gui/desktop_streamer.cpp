@@ -61,7 +61,7 @@ QImage DesktopStreamer::Letterbox(const QImage& image)
     painter.drawImage((854 - scaled.width()) / 2, (480 - scaled.height()) / 2, scaled);
     return output;
 }
-void DesktopStreamer::Start(const QString& endpoint, QScreen* screen, const QVariant& window)
+void DesktopStreamer::Start(const QString& endpoint, QScreen* screen, const QVariant& window, bool desktopControls)
 {
     Stop();
     if (endpoint.isEmpty())
@@ -77,6 +77,7 @@ void DesktopStreamer::Start(const QString& endpoint, QScreen* screen, const QVar
         emit Status(QString::fromStdString(error));
         return;
     }
+    m_desktopControls = desktopControls;
     m_requested = true;
     m_captureClock.start();
     m_timer.start();
@@ -132,7 +133,7 @@ void DesktopStreamer::Receive(const QImage& image)
 }
 void DesktopStreamer::ShowKeyboard()
 {
-    if (!m_hook || !m_hook->connected() || m_rgb.empty() || m_keyboardId) return;
+    if (!KeyboardAvailable()) return;
     const barista::api::KeyboardRequest request{m_nextKeyboardId++, "Type into desktop", {}, 1024, false};
     if (m_nextKeyboardId == 0) m_nextKeyboardId = 1;
     if (m_hook->request_keyboard(request)) m_keyboardId = request.id;
@@ -173,7 +174,7 @@ void DesktopStreamer::Tick()
     if (active && m_hook->read_input(report))
     {
         const auto buttons = barista::DecodeInput(report).buttons;
-        if ((buttons & ~m_previousButtons) & 0x400000) ShowKeyboard(); // Right stick click.
+        if (m_desktopControls && ((buttons & ~m_previousButtons) & 0x400000)) ShowKeyboard(); // Right stick click.
         m_previousButtons = buttons;
         emit Input(QByteArray(reinterpret_cast<const char*>(report.data()), report.size()));
     }

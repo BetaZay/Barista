@@ -24,7 +24,7 @@ class DesktopStreamer : public QObject
 public:
     explicit DesktopStreamer(QObject* parent = nullptr);
     ~DesktopStreamer() override;
-    void Start(const QString& endpoint, QScreen* screen, const QVariant& window = {});
+    void Start(const QString& endpoint, QScreen* screen, const QVariant& window = {}, bool desktopControls = true);
     void Stop();
     void ShowKeyboard();
     bool Requested() const
@@ -33,7 +33,7 @@ public:
     }
     bool KeyboardAvailable() const
     {
-        return m_hook && m_hook->connected() && !m_rgb.empty() && !m_keyboardId;
+        return m_desktopControls && m_hook && m_hook->connected() && !m_rgb.empty() && !m_keyboardId;
     }
     static QImage Letterbox(const QImage& image);
 signals:
@@ -45,6 +45,7 @@ private:
     void Receive(const QImage& image);
     void Tick();
     bool m_requested = false;
+    bool m_desktopControls = true;
     uint32_t m_previousButtons = 0, m_keyboardId = 0, m_nextKeyboardId = 1;
     std::unique_ptr<barista::api::AppHook> m_hook;
 #ifdef BARISTA_QT_CAPTURE

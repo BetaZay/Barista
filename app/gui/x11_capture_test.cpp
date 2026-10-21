@@ -91,8 +91,12 @@ int main(int argc, char** argv)
     if (!selected.isValid())
         return 4;
     // Test the actual desktop streamer -> AppHook RGB -> I420 path for both sources.
-    for (bool application : {false, true})
+    for (int trial = 0; trial < 4; ++trial)
     {
+        const bool application = trial % 2;
+        const bool desktopControls = trial < 2;
+        inputReceived = released = false;
+        int gamingFrames = 0;
         bool passed = false, keyboardRequested = false, keyboardTextReceived = false;
         int lastCenter = -1, lastLeft = -1;
         QEventLoop loop;
@@ -119,6 +123,21 @@ int main(int argc, char** argv)
                                  return;
                              if (application ? (left < 93 || left > 99) : left > 20)
                                  return;
+                             if (!desktopControls)
+                             {
+                                 streamer.ShowKeyboard();
+                                 input[80] = 0x40; // R3 must remain a controller button.
+                                 barista::api::KeyboardCommand unexpected;
+                                 if (streamer.KeyboardAvailable() || server.read_keyboard_command(unexpected))
+                                 {
+                                     loop.quit();
+                                     return;
+                                 }
+                                 if (++gamingFrames < 10) return;
+                                 passed = true;
+                                 loop.quit();
+                                 return;
+                             }
                              if (!keyboardRequested)
                              {
                                  keyboardRequested = true;
@@ -140,7 +159,7 @@ int main(int argc, char** argv)
                          });
         QTimer::singleShot(8000, &loop, &QEventLoop::quit);
         streamer.Start(endpoint, QGuiApplication::primaryScreen(),
-                       application ? selected : QVariant{});
+                       application ? selected : QVariant{}, desktopControls);
         poll.start(10);
         loop.exec();
         streamer.Stop();

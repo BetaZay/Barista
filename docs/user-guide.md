@@ -19,6 +19,8 @@ your physical location, and choose a play mode:
   through Linux `uinput`.
 - **Desktop**: mirrors a monitor or application window and uses the sticks and
   buttons as a mouse and keyboard.
+- **Game mirroring**: mirrors a monitor or game window and provides standard
+  controller input for Steam and other PC games without game integration.
 
 The adapter list refreshes automatically while idle; use **Refresh** to check
 immediately after plugging in a USB adapter. A missing saved adapter is marked
@@ -52,6 +54,20 @@ session, battery level when available, and connected application.
 main window keeps Barista in the tray by default; change this in Settings.
 **Quit Barista**, at the bottom of the sidebar or in the tray menu, stops the
 session and exits.
+
+## Game mirroring mode
+
+Select **Game mirroring** in **Settings → General** before connecting. When the
+GamePad connects, share the monitor or window showing your Steam game or other
+PC game. Games receive the sticks, D-pad, triggers and buttons through the
+**Barista Wii U GamePad** virtual controller. No AppHook integration or special
+launch options are needed in the game; Barista uses its internal media bridge
+for the captured picture. Steam Input can map the controller for your game.
+
+Keep Barista running while playing. Stopping sharing, disconnecting the pad,
+or losing the input bridge releases held controls. Right stick click remains
+a controller button rather than opening the desktop keyboard. This mode shares
+video only; system audio, touch, motion and rumble are currently unavailable.
 
 ## Desktop mode
 

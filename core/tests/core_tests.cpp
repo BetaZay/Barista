@@ -31,6 +31,12 @@ int main()
     check(status.apiVersion == barista::api::ApiVersion);
     check(barista::api::ParseSessionMode("real") == barista::api::SessionMode::Real);
     check(barista::api::ParseSessionMode("controller") == barista::api::SessionMode::Controller);
+    check(barista::api::ParseSessionMode("game-mirroring") == barista::api::SessionMode::GameMirroring);
+    check(barista::api::SessionModeName(barista::api::SessionMode::GameMirroring) == "game-mirroring");
+    check(barista::api::IsMirroringMode(barista::api::SessionMode::GameMirroring));
+    check(barista::api::IsMirroringMode(barista::api::SessionMode::Desktop));
+    check(!barista::api::IsMirroringMode(barista::api::SessionMode::Controller));
+    check(!barista::api::IsMirroringMode(barista::api::SessionMode::Real));
     check(!barista::api::ParseSessionMode("invalid"));
     check(barista::api::SessionModeName(barista::api::SessionMode::Controller) == "controller");
     check(barista::api::ParseSessionPhase("runtime") == barista::api::SessionPhase::Runtime);

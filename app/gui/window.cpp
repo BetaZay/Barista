@@ -580,6 +580,7 @@ Window::Window(bool smokeTest)
     m_mode->addItem("Screen + controller","real");
     m_mode->addItem("Controller only","controller");
     m_mode->addItem("Desktop","desktop");
+    m_mode->addItem("Game mirroring","game-mirroring");
     m_mode->hide();
     auto* modeButtons = new QButtonGroup(this);
     auto* modes = new QHBoxLayout;
@@ -589,13 +590,16 @@ Window::Window(bool smokeTest)
     m_controllerMode->setObjectName("controllerModeButton");
     m_desktopMode = new QPushButton(CafeIcon(CafeSymbol::GamePad),"Desktop",settingsPage);
     m_desktopMode->setObjectName("desktopModeButton");
-    for (auto* button : {m_screenMode,m_controllerMode,m_desktopMode}) {
+    m_gameMirroringMode = new QPushButton(CafeIcon(CafeSymbol::GamePad),"Game mirroring",settingsPage);
+    m_gameMirroringMode->setObjectName("gameMirroringModeButton");
+    for (auto* button : {m_screenMode,m_controllerMode,m_desktopMode,m_gameMirroringMode}) {
         button->setCheckable(true);
         modes->addWidget(button);
     }
     modeButtons->addButton(m_screenMode,0);
     modeButtons->addButton(m_controllerMode,1);
     modeButtons->addButton(m_desktopMode,2);
+    modeButtons->addButton(m_gameMirroringMode,3);
     connect(modeButtons,&QButtonGroup::idClicked,m_mode,&QComboBox::setCurrentIndex);
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[modeButtons](int index) {
         if (auto* button = modeButtons->button(index)) button->setChecked(true);
@@ -618,7 +622,8 @@ Window::Window(bool smokeTest)
     m_desktopPanel->setObjectName("desktopSharingPanel");
     auto* sharing = new QVBoxLayout(m_desktopPanel);
     sharing->setContentsMargins(0,0,0,0);
-    sharing->addWidget(FormHint("Mirror a monitor or application. Left stick: cursor. Right stick: scroll. A / ZR: left click. B / ZL: right click. Plus: Enter. Minus: Escape. Y: Tab. X: Backspace. Right stick click: keyboard.",m_desktopPanel));
+    m_desktopControlsHint = FormHint("Mirror a monitor or application. Left stick: cursor. Right stick: scroll. A / ZR: left click. B / ZL: right click. Plus: Enter. Minus: Escape. Y: Tab. X: Backspace. Right stick click: keyboard.",m_desktopPanel);
+    sharing->addWidget(m_desktopControlsHint);
     m_desktopSource = new QComboBox(m_desktopPanel);
     m_desktopSource->setObjectName("desktopSourceCombo");
     sharing->addWidget(m_desktopSource);
@@ -630,7 +635,7 @@ Window::Window(bool smokeTest)
     m_desktopChoose = new QPushButton("Choose source…",m_desktopPanel);
     m_desktopChoose->setObjectName("desktopChooseSourceButton");
     m_desktopChoose->setText(portalSharing ? "Choose monitor or window…" : "Share selected source");
-    m_desktopChoose->setToolTip(portalSharing ? "Connect in Desktop mode, then choose a source in the system sharing picker." : "Stream the monitor or application selected above.");
+    m_desktopChoose->setToolTip(portalSharing ? "Connect in Desktop or Game mirroring mode, then choose a source in the system sharing picker." : "Stream the monitor or application selected above.");
     m_desktopStop = new QPushButton("Stop sharing",m_desktopPanel);
     m_desktopStop->setObjectName("desktopStopSharingButton");
     m_desktopKeyboard = new QPushButton("GamePad keyboard",m_desktopPanel);
@@ -1096,8 +1101,12 @@ Window::Window(bool smokeTest)
             ? "Video, audio, and controls for supported apps."
             : Mode() == barista::api::SessionMode::Desktop
                 ? "Mirror a monitor or application and navigate your desktop with the GamePad."
+                : Mode() == barista::api::SessionMode::GameMirroring
+                    ? "Mirror a Steam game or other PC game and use the GamePad as a standard controller. No game integration needed. Audio, touch, motion, and rumble are unavailable."
                 : "PC controller input. Touch, motion, and rumble are unavailable.");
-        m_desktopPanel->setVisible(Mode() == barista::api::SessionMode::Desktop);
+        m_desktopPanel->setVisible(barista::api::IsMirroringMode(Mode()));
+        m_desktopControlsHint->setVisible(Mode() == barista::api::SessionMode::Desktop);
+        m_desktopKeyboard->setVisible(Mode() == barista::api::SessionMode::Desktop);
     };
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[describe](int) { describe(); });
     connect(m_interface,&QComboBox::currentTextChanged,this,[this] {
@@ -1551,7 +1560,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     const auto ifaceName = QString::fromStdString(status.interfaceName);
     m_gamepadPhase->setText(running ? phaseText : "Idle");
     m_gamepadMode->setText(sessionMode == barista::api::SessionMode::Controller ? "Controller only" :
-        sessionMode == barista::api::SessionMode::Desktop ? "Desktop" : "Screen + controller");
+        sessionMode == barista::api::SessionMode::Desktop ? "Desktop" :
+        sessionMode == barista::api::SessionMode::GameMirroring ? "Game mirroring" : "Screen + controller");
     m_gamepadIface->setText(ifaceName.isEmpty() ? InterfaceName(m_interface) : ifaceName);
     if (status.batteryPercent)
         m_gamepadBattery->setText(QString("%1%").arg(*status.batteryPercent));
@@ -1665,7 +1675,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     }
     m_appSummary->setText(!running ? "Connect your GamePad to get started." :
         sessionMode == barista::api::SessionMode::Controller ? "Ready for PC games. Barista stays on the screen." :
-        sessionMode == barista::api::SessionMode::Desktop ? "Share a monitor or application in Settings → General." :
+        barista::api::IsMirroringMode(sessionMode) ? "Share a monitor or application in Settings → General." :
         appConnected ? "Screen, audio, and controls connected." : "Open a supported app on your computer.");
     if (!appConnected) m_appName->setToolTip({});
     m_start->setVisible(!running);
@@ -1719,7 +1729,8 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     m_interface->setEnabled(!running && !busy);
     m_mode->setEnabled(!running && !busy);
     m_desktopMode->setEnabled(!running && !busy);
-    const bool desktopOwned = running && owned && sessionMode == barista::api::SessionMode::Desktop;
+    m_gameMirroringMode->setEnabled(!running && !busy);
+    const bool desktopOwned = running && owned && barista::api::IsMirroringMode(sessionMode);
     m_desktopChoose->setEnabled(desktopOwned && connected && !busy);
     m_desktopStop->setEnabled(desktopOwned && m_desktop->Requested());
     m_desktopKeyboard->setEnabled(desktopOwned && connected && m_desktop->KeyboardAvailable());
@@ -1728,7 +1739,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
         const bool portalSharing = DesktopUsesPortal(QGuiApplication::platformName(), qEnvironmentVariable("XDG_SESSION_TYPE"));
         m_desktopStatus->setText(desktopOwned
             ? portalSharing ? "Turn on your GamePad. The sharing picker opens when it connects." : "Waiting for your GamePad."
-            : "Connect in Desktop mode to start sharing.");
+            : "Connect in Desktop or Game mirroring mode to start sharing.");
         if (!desktopOwned) m_desktopAttempted = false;
     } else if (!m_smokeTest && !m_desktopAttempted) {
         StartDesktopSharing();
@@ -1852,14 +1863,15 @@ void Window::StartDesktopSharing()
 {
     if (m_smokeTest) return;
     m_desktopAttempted = true;
+    const bool desktopControls = m_lastStatus.mode == barista::api::SessionMode::Desktop;
     const auto selection = m_desktopSource->currentData();
     if (selection.metaType().id() == QMetaType::UInt) {
-        m_desktop->Start(QString::fromStdString(m_lastStatus.mediaEndpoint), nullptr, selection);
+        m_desktop->Start(QString::fromStdString(m_lastStatus.mediaEndpoint), nullptr, selection, desktopControls);
         return;
     }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
     if (selection.canConvert<QCapturableWindow>()) {
-        m_desktop->Start(QString::fromStdString(m_lastStatus.mediaEndpoint), nullptr, selection);
+        m_desktop->Start(QString::fromStdString(m_lastStatus.mediaEndpoint), nullptr, selection, desktopControls);
         return;
     }
 #endif
@@ -1867,6 +1879,6 @@ void Window::StartDesktopSharing()
         QScreen* selected = QGuiApplication::primaryScreen();
         for (auto* screen : QGuiApplication::screens())
             if (screen->name() == selection.toString()) selected = screen;
-        m_desktop->Start(QString::fromStdString(m_lastStatus.mediaEndpoint), selected);
+        m_desktop->Start(QString::fromStdString(m_lastStatus.mediaEndpoint), selected, {}, desktopControls);
     }
 }

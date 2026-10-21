@@ -36,6 +36,7 @@ enum class SessionMode
     Real,
     Controller,
     Desktop,
+    GameMirroring,
 };
 
 inline constexpr std::string_view SessionModeName(SessionMode mode)
@@ -48,6 +49,8 @@ inline constexpr std::string_view SessionModeName(SessionMode mode)
         return "controller";
     case SessionMode::Desktop:
         return "desktop";
+    case SessionMode::GameMirroring:
+        return "game-mirroring";
     }
     return "real";
 }
@@ -60,7 +63,14 @@ inline constexpr std::optional<SessionMode> ParseSessionMode(std::string_view va
         return SessionMode::Controller;
     if (value == "desktop")
         return SessionMode::Desktop;
+    if (value == "game-mirroring")
+        return SessionMode::GameMirroring;
     return std::nullopt;
+}
+
+inline constexpr bool IsMirroringMode(SessionMode mode)
+{
+    return mode == SessionMode::Desktop || mode == SessionMode::GameMirroring;
 }
 
 // Fixed, credential-free progress values; never expose engine log text as status.
