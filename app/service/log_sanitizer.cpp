@@ -22,6 +22,17 @@ QString SanitizeSupportLogLine(QStringView input)
         R"((?i)(\bhexdump(?:_ascii)?\s*\([^)]*\)\s*:).*$)");
     line.replace(hexDump, "\\1 <redacted>");
 
+    // hostapd's ASCII dumps put their bytes and printable text on separate
+    // lines. Redact those continuations even when the header was already
+    // processed in a previous call (or the log starts partway through a dump).
+    static const QRegularExpression dumpContinuation(
+        R"((?i)(^|:\s+)[ \t]*[0-9a-f]{2}(?:[ \t]+[0-9a-f]{2})*(?:[ \t]{2,}.*)?[ \t]*$)");
+    line.replace(dumpContinuation, "\\1<redacted-dump>");
+
+    static const QRegularExpression pairingPattern(
+        R"((?i)(Running sync with pattern:).*$)");
+    line.replace(pairingPattern, "\\1 <redacted>");
+
     static const QRegularExpression macAddress(
         R"((?i)(?<![0-9a-f])(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?![0-9a-f]))");
     line.replace(macAddress, "<mac>");

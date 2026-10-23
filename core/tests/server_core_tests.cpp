@@ -31,6 +31,9 @@ bool contains(const std::string& value, const std::string& needle)
 class FakeBackend final : public barista::drh::SessionBackend
 {
 public:
+	bool channel_search_active = false;
+	bool pairing_channel_search_active() const override { return channel_search_active; }
+
 	barista::drh::BackendResult start_pairing(const barista::drh::PairStartRequest& request) override
 	{
 		m_snapshot.phase = "pairing";
@@ -176,6 +179,42 @@ int main()
 		const auto response = automatic_core.handle_line("status");
 		expect(contains(response.payload, "phase=runtime"),
 			"WPS completion event should enter runtime automatically");
+	}
+
+	{
+		auto backend = std::make_unique<FakeBackend>();
+		auto* radio = backend.get();
+		barista::drh::ServerCore automatic_core(std::move(backend));
+		barista::drh::AutomaticCycleConfig config;
+		config.request = {"wlan-test", *barista::drh::MacAddress::parse("00:11:22:33:44:55"),
+			*barista::drh::PairingCode::from_numeric(123)};
+		config.start_in_pairing = true;
+		config.pairing_duration = std::chrono::seconds(0);
+		radio->channel_search_active = true;
+		automatic_core.start_automatic(config);
+		for (int channel = 0; channel < 9; ++channel)
+		{
+			automatic_core.process_backend_events();
+			expect(automatic_core.state().phase == barista::drh::SessionPhase::Pairing,
+				"ordinary timeout must not interrupt an active channel search");
+		}
+		radio->channel_search_active = false;
+		automatic_core.process_backend_events();
+		expect(automatic_core.state().phase == barista::drh::SessionPhase::Runtime,
+			"a completed search must still time out and check for an already paired GamePad");
+
+		config.pairing_duration = std::chrono::seconds(20);
+		radio->channel_search_active = true;
+		automatic_core.start_automatic(config);
+		automatic_core.process_backend_events();
+		radio->channel_search_active = false;
+		automatic_core.process_backend_events();
+		expect(automatic_core.state().phase == barista::drh::SessionPhase::Pairing,
+			"locking onto pairing activity must retain time to finish authentication");
+		radio->signal_pairing_complete();
+		automatic_core.process_backend_events();
+		expect(automatic_core.state().phase == barista::drh::SessionPhase::Runtime,
+			"successful WPS must transition immediately without waiting for the search timeout");
 	}
 
 	std::cout << "drcd_core_tests: ok\n";

@@ -47,6 +47,8 @@ public:
 	virtual BackendResult stop_session() = 0;
 	virtual BackendSnapshot snapshot() const = 0;
 	virtual bool consume_pairing_complete_event() { return false; }
+	// Keep automatic pairing alive while the backend visits its channel plan.
+	virtual bool pairing_channel_search_active() const { return false; }
 	virtual bool consume_gamepad_connected_event() { return false; }
 	// Link association is progress, but is not enough to declare the DRC
 	// protocol connected. Automatic mode uses it to keep the AP alive.

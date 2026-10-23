@@ -33,6 +33,7 @@ protected:
 private slots:
     void ApplyStatus(const barista::api::SessionStatus& status);
     void CancelPairing();
+    void ShowConnectionProgress();
 private:
     bool ConfirmWifi(bool pairing, const QString& interface);
     barista::api::SessionMode Mode() const;
@@ -88,6 +89,7 @@ private:
     QString m_appLogoSource;
     bool m_pending = false;
     bool m_pairingRequested = false;
+    bool m_connectionRequested = false;
     bool m_smokeTest = false, m_backgroundNotice = false;
     bool m_quitting = false;
 };

@@ -55,6 +55,14 @@ int main()
             {"192.168.1.11", "02-11-22-33-44-55", "/home/alice"})) return 1;
     if (!Check("nl80211: Could not configure driver mode: Operation not supported",
             {"nl80211", "Could not configure driver mode", "Operation not supported"}, {})) return 1;
+    if (!Check("hostapd[pairing]:  61 62 63 64 65 66   abcdef",
+            {"hostapd[pairing]:", "<redacted-dump>"}, {"61 62", "abcdef"})) return 1;
+    if (!Check("  70 61 73 73 77 6f 72 64   password",
+            {"<redacted-dump>"}, {"70 61", "password"})) return 1;
+    if (!Check("hostapd[pairing]:  78                  x",
+            {"<redacted-dump>"}, {"78", " x"})) return 1;
+    if (!Check("Running sync with pattern: ♠ ♥ ♦ ♣",
+            {"Running sync with pattern:", "<redacted>"}, {"♠", "♥", "♦", "♣"})) return 1;
     std::cout << "support log sanitization passed\n";
     return 0;
 }

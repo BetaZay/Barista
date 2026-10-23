@@ -357,6 +357,17 @@ void ServerCore::process_backend_events()
 		}
 	}
 
+	if (m_automatic.has_value() &&
+		m_state_machine.state().phase == barista::drh::SessionPhase::Pairing &&
+		m_backend->pairing_channel_search_active())
+	{
+		// The first channel's dwell can consume the entire ordinary pairing
+		// timeout. Allow one bounded sweep, then a full authentication window
+		// after the sweep ends or locks onto pairing activity.
+		m_phase_deadline = std::chrono::steady_clock::now() + m_automatic->pairing_duration;
+		return;
+	}
+
 	if (!m_automatic.has_value() || m_state_machine.state().gamepad_connected ||
 		std::chrono::steady_clock::now() < m_phase_deadline)
 		return;

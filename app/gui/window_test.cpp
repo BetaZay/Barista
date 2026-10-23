@@ -281,6 +281,24 @@ int main(int argc, char** argv)
         auto* startDialog = window.findChild<QDialog*>("waitingDialog");
         auto* startStatus = window.findChild<QLabel*>("waitingStatus");
         Check(startDialog && startStatus,"standard start popup has a live status heading");
+        Check(QMetaObject::invokeMethod(&window,"ShowConnectionProgress",Qt::DirectConnection),
+            "show connection progress without accessing a live service");
+        emit client->Pending(true);
+        emit client->Pending(false);
+        apply();
+        Check(startDialog->isVisible(),"startup popup survives Pending(false) followed by stale idle status");
+        status.phase = barista::api::SessionPhase::Runtime;
+        status.running = true; status.ownedByCaller = true; apply();
+        Check(startDialog->isVisible(),"startup popup stays open while the running AP waits for a GamePad");
+        status.gamePadConnected = true; apply();
+        Check(!startDialog->isVisible(),"successful protocol connection closes the startup popup");
+        status.gamePadConnected = false; status.running = false;
+        status.phase = barista::api::SessionPhase::Idle; apply();
+        QMetaObject::invokeMethod(&window,"ShowConnectionProgress",Qt::DirectConnection);
+        emit client->Error("Test startup failure");
+        Check(!startDialog->isVisible(),"startup errors dismiss the waiting popup");
+        emit client->Pending(true); emit client->Pending(false);
+        operations = 0;
         startDialog->show();
         QApplication::processEvents();
         status.busy = true; apply();

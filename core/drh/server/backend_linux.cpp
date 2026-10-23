@@ -922,6 +922,11 @@ public:
 	}
 
 private:
+	bool pairing_channel_search_active() const override
+	{
+		return m_pair_channel_search_active.load();
+	}
+
 	bool CanApplyRegulatoryCountry(std::string_view compatibility_error) const
 	{
 		return !m_regulatory_country.empty() &&
@@ -2220,9 +2225,11 @@ private:
 			? 0
 			: (static_cast<size_t>(std::distance(channel_plan.begin(), current)) + 1) % channel_plan.size();
 		m_pair_channel_sweep_stop.store(false);
+		m_pair_channel_search_active.store(true);
 		m_pair_channel_sweep_thread = std::thread([this, channel_plan = std::move(channel_plan), pairing_ssid = std::move(pairing_ssid), channel_index]() mutable {
 			Log("pair-sweep: live rotation started; dwellMs=" + std::to_string(m_pair_channel_dwell_ms));
-			while (!m_pair_channel_sweep_stop.load() && !m_pairing_activity_seen.load() && !is_stop_requested())
+			for (size_t visited = 1; visited <= channel_plan.size() &&
+				!m_pair_channel_sweep_stop.load() && !m_pairing_activity_seen.load() && !is_stop_requested(); ++visited)
 			{
 				const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(m_pair_channel_dwell_ms);
 				int last_countdown = -1;
@@ -2241,6 +2248,8 @@ private:
 					std::this_thread::sleep_for(std::chrono::milliseconds(100));
 				}
 				if (m_pair_channel_sweep_stop.load() || m_pairing_activity_seen.load() || is_stop_requested())
+					break;
+				if (visited == channel_plan.size())
 					break;
 
 				const int next_channel = channel_plan[channel_index];
@@ -2285,6 +2294,7 @@ private:
 				Log("pair-sweep: pairing activity detected; locked on channel " + std::to_string(m_channel));
 			else
 				Log("pair-sweep: live rotation stopped");
+			m_pair_channel_search_active.store(false);
 		});
 	}
 
@@ -2293,6 +2303,7 @@ private:
 		m_pair_channel_sweep_stop.store(true);
 		if (m_pair_channel_sweep_thread.joinable())
 			m_pair_channel_sweep_thread.join();
+		m_pair_channel_search_active.store(false);
 	}
 
 	void MonitorHostapdOutputLoop()
@@ -2465,6 +2476,12 @@ private:
 						continue;
 					LogHostapdLine(std::string(phase), line);
 
+				if (line.find("not allowed for AP mode") != std::string::npos &&
+					line.find("NO-IR") != std::string::npos)
+				{
+					error = "wireless regulatory domain marks the selected AP channel no-IR";
+					return false;
+				}
 				if (line.find("AP-ENABLED") != std::string::npos || line.find("AP_ENABLED") != std::string::npos)
 					return true;
 				if (line.find("Failed to initialize") != std::string::npos ||
@@ -2662,7 +2679,7 @@ private:
 	bool ArmWpsPinAny(std::string& error)
 	{
 		const std::string pin = BuildWpsPin();
-		const std::string command = "WPS_PIN any " + pin + " " + std::to_string(m_wps_pin_timeout_seconds);
+		const std::string command = barista::drh::build_wps_pin_command(pin, m_wps_pin_timeout_seconds);
 		if (ArmWpsPinCommand(command, "WPS_PIN any", error))
 			return true;
 
@@ -2671,7 +2688,7 @@ private:
 			return false;
 
 		Log("hostapd-ctrl: WPS_PIN any fallback using checksum-corrected pin '" + corrected_pin + "'");
-		const std::string fallback_command = "WPS_PIN any " + corrected_pin + " " + std::to_string(m_wps_pin_timeout_seconds);
+		const std::string fallback_command = barista::drh::build_wps_pin_command(corrected_pin, m_wps_pin_timeout_seconds);
 		return ArmWpsPinCommand(fallback_command, "WPS_PIN any (checksum)", error);
 	}
 
@@ -2695,7 +2712,8 @@ private:
 
 		m_targeted_wps_pin_at[mac_key] = now;
 		std::string error;
-		const std::string command = "WPS_PIN " + mac_key + " " + BuildWpsPin() + " " + std::to_string(m_wps_pin_timeout_seconds);
+		const std::string command = barista::drh::build_wps_pin_command(
+			BuildWpsPin(), m_wps_pin_timeout_seconds, mac);
 		if (ArmWpsPinCommand(command, "WPS_PIN " + mac_key, error))
 		{
 			Log("pairing-candidate: targeted WPS PIN armed for " + mac_key);
@@ -2901,6 +2919,7 @@ private:
 	std::thread m_pair_channel_sweep_thread;
 	std::atomic_bool m_pair_channel_sweep_stop{false};
 	std::atomic_bool m_pairing_activity_seen{false};
+	std::atomic_bool m_pair_channel_search_active{false};
 	std::atomic_bool m_pairing_complete_requested{false};
 	std::atomic_bool m_gamepad_disconnected_requested{false};
 	std::atomic_bool m_gamepad_associated_requested{false};

@@ -24,17 +24,15 @@ seconds to leave managed Wi-Fi mode and bring up the pairing access point;
 wait for Barista to report that pairing is ready before using SYNC. It was
 stable once the pairing AP was running in our testing.
 
-Intel adapters (`iwlwifi`) work, but their driver **self-manages its regulatory
-domain**, which needs one extra thing from the environment: the firmware adopts
-a country only after hearing it from a neighboring 5 GHz access point during a
-scan, and falls back to the restrictive `00` world domain when nothing keeps
-supplying one. Barista scans to recover this automatically, so no manual setup
-is required, but a machine in true radio isolation has nothing to learn a
-country from and cannot host the pairing AP. `iw reg set` and
-`DRCD_REGULATORY_COUNTRY` cannot substitute — a self-managed domain ignores
-both. Tested with the **AX200** (desktop M.2, no ACPI regulatory tables, the
-harder case; laptops seed the country from firmware). Two `runtime-qos` tuning
-calls report `Operation not supported` on this driver and are skipped safely.
+Intel adapter support (`iwlwifi`) depends on the driver and firmware permitting
+a 5 GHz AP. The driver **self-manages its regulatory domain**; `iw reg set` and
+`DRCD_REGULATORY_COUNTRY` cannot override it. Barista attempts scan recovery,
+but the firmware can still mark every pairing channel `NO-IR` when hostapd
+switches to AP mode. This is confirmed in an **AX201** support log, despite
+successful capability checks before AP startup. An **AX200** has worked in
+testing; that does not establish compatibility for other Intel adapters or
+firmware versions. Two `runtime-qos` tuning calls can report
+`Operation not supported` on this driver and are skipped safely.
 
 For additional confirmed and incompatible hardware reports, see
 [Vanilla Wii U's Wireless Compatibility wiki](https://github.com/vanilla-wiiu/vanilla/wiki/Wireless-Compatibility).

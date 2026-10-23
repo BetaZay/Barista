@@ -303,6 +303,11 @@ int main()
 	const auto parsed_code = barista::drh::PairingCode::from_numeric(2232);
 	expect(parsed_code.has_value(), "from_numeric returned no value");
 	expect(parsed_code->pin_byte() == code.pin_byte(), "from_numeric pin mismatch");
+	expect(barista::drh::build_wps_pin_command("01235678", 600) ==
+		"WPS_PIN any 01235678 600", "wildcard WPS control syntax mismatch");
+	expect(barista::drh::build_wps_pin_command("01235678", 600, "00:11:22:33:44:55") ==
+		"WPS_PIN any 01235678 600 00:11:22:33:44:55",
+		"targeted WPS must put the enrollee MAC after the timeout, not in the UUID field");
 
 	barista::drh::PairingSessionStateMachine state_machine;
 	expect(state_machine.state().phase == barista::drh::SessionPhase::Idle, "initial phase should be idle");

@@ -18,6 +18,17 @@ and packet dumps are replaced with redaction markers. Detailed unsanitized engin
 logs remain available to administrators for local investigation and should be
 reviewed before being shared.
 
+## Pairing search
+
+Wait for **Pair now** before pressing SYNC and entering the displayed symbols.
+Barista searches each channel in its pairing plan once, normally waiting about
+20 seconds per channel. A full nine-channel search can take more than three
+minutes, including network setup. Authentication activity locks the search to
+that channel and leaves time for pairing to complete. Cancel stops the search.
+Switching back to the saved GamePad's runtime network after a timeout does not
+mean pairing succeeded; the GUI waits for a GamePad connection before displaying
+its success message.
+
 ## Regulatory restrictions
 
 If Barista reports `AP_REGULATORY_BLOCKED`, check the active country with
@@ -31,8 +42,10 @@ component changed the setting in the meantime.
 
 If `iw reg get` marks the phy itself `(self-managed)` — Intel `iwlwifi` does —
 then the country override above cannot apply, because such a driver ignores the
-kernel regulatory core. Barista instead scans to make the firmware re-adopt a
-country, which requires a neighboring 5 GHz access point within range. There is
+kernel regulatory core. Barista attempts recovery with a scan, but a usable
+channel before AP startup does not guarantee that the firmware will permit it
+after switching to AP mode. An AX201 report shows all nine pairing channels
+remaining blocked at that stage. There is
 no module option to disable this behavior; `iwlwifi.lar_disable` was removed
 from the kernel years ago and is silently ignored.
 

@@ -35,4 +35,6 @@ std::string pairing_symbol_utf8(PairingSymbol symbol);
 PairingCode derive_code_from_ap_mac(const MacAddress& ap_mac);
 MacAddress build_pairing_code_mac(const MacAddress& ap_mac, const PairingCode& code);
 std::string build_pairing_ssid(const MacAddress& ap_mac, const PairingCode& code);
+std::string build_wps_pin_command(std::string_view pin, int timeout_seconds,
+	std::string_view enrollee_mac = {});
 }

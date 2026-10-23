@@ -1127,7 +1127,7 @@ Window::Window(bool smokeTest)
         const QString country = m_country->text().trimmed().toUpper();
         settings.setValue("regulatoryCountry",country);
         m_message->hide();
-        m_waitingDialog->show();
+        ShowConnectionProgress();
         m_client.Start({interface.toStdString(), Mode(), country.toStdString()});
     });
     connect(m_stop,&QPushButton::clicked,&m_client,&ControlClient::Stop);
@@ -1191,6 +1191,8 @@ Window::Window(bool smokeTest)
         });
     connect(&m_client,&ControlClient::Error,this,[this](const QString& error) {
         m_pairingRequested = false;
+        m_connectionRequested = false;
+        m_waitingDialog->hide();
         if (!isVisible()) ShowWindow();
         const QString code = QString::fromLatin1(barista::api::ClassifyDiagnosticMessage(error.toStdString()));
         const auto advice = barista::api::AdviceForDiagnostic(code.toStdString());
@@ -1207,6 +1209,8 @@ Window::Window(bool smokeTest)
         ApplyStatus(m_lastStatus);
     });
     connect(&m_client,&ControlClient::Stopped,this,[this](bool) {
+        m_connectionRequested = false;
+        m_waitingDialog->hide();
         if (m_quitting) QApplication::quit();
     });
     connect(m_mode,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int) { ApplyStatus(m_lastStatus); });
@@ -1464,6 +1468,16 @@ void Window::UpdateHomeDevice()
         count == 0 ? "No saved GamePads listed. Add one from the GamePads page." :
         QString("%1 saved pairing%2 · Ready to reconnect").arg(count).arg(count == 1 ? "" : "s"));
 }
+void Window::ShowConnectionProgress()
+{
+    // Pending(false) may arrive before the first updated service status.
+    // Retain the user's request across that stale idle snapshot.
+    m_connectionRequested = true;
+    ApplyStatus(m_lastStatus);
+    m_waitingDialog->show();
+    m_waitingDialog->raise();
+}
+
 void Window::ApplyStatus(const barista::api::SessionStatus& status)
 {
     const auto previousPhase = m_lastStatus.phase;
@@ -1476,6 +1490,9 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     const bool owned = status.ownedByCaller;
     const bool connected = status.gamePadConnected;
     const auto phase = status.phase;
+    if (running || connected || status.error || (!available && !status.activating) ||
+        phase == barista::api::SessionPhase::Failed || phase == barista::api::SessionPhase::Stopping)
+        m_connectionRequested = false;
     if (!busy && (!available || status.error || phase == barista::api::SessionPhase::Failed ||
         phase == barista::api::SessionPhase::Stopping ||
         (phase == barista::api::SessionPhase::Idle && previousPhase != barista::api::SessionPhase::Idle)))
@@ -1483,8 +1500,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     UpdateHomeDevice();
     const QString phaseText = QString::fromLatin1(barista::api::SessionPhaseName(phase));
     if (previousRunning && !running) RefreshDiagnostics();
-    if (m_pairingRequested && phase == barista::api::SessionPhase::Runtime &&
-        previousPhase != barista::api::SessionPhase::Runtime) {
+    if (m_pairingRequested && phase == barista::api::SessionPhase::Runtime && connected) {
         RefreshSavedGamePads();
         m_pairingRequested = false;
         m_pairDialog->hide();
@@ -1532,7 +1548,7 @@ void Window::ApplyStatus(const barista::api::SessionStatus& status)
     m_hint->setText(hint);
     SetTone(m_hint,sessionTone);
     m_hint->show();
-    const bool startingConnection = activating || busy ||
+    const bool startingConnection = m_connectionRequested || activating || busy ||
         phase == barista::api::SessionPhase::Starting ||
         phase == barista::api::SessionPhase::Preparing;
     QString waitingStage = "Waiting for your GamePad";
