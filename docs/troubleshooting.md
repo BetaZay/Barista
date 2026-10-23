@@ -25,6 +25,8 @@ Barista searches each channel in its pairing plan once, normally waiting about
 20 seconds per channel. A full nine-channel search can take more than three
 minutes, including network setup. Authentication activity locks the search to
 that channel and leaves time for pairing to complete. Cancel stops the search.
+Probe requests alone do not identify the GamePad: Barista logs them without
+replacing the pairing PIN or narrowing authorization to their source address.
 Switching back to the saved GamePad's runtime network after a timeout does not
 mean pairing succeeded; the GUI waits for a GamePad connection before displaying
 its success message.

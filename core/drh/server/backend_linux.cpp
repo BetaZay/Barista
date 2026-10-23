@@ -771,7 +771,6 @@ public:
 		channel_plan = BuildPairingChannelPlan(
 			m_channel, m_pair_channel_sweep, m_pair_channel_list_override);
 		m_probe_seen.clear();
-		m_targeted_wps_pin_at.clear();
 		m_pairing_activity_seen.store(false);
 		m_credential_blob_path = BuildTempPath("cred") + ".bin";
 		m_pairing_config_path = BuildTempPath("pair") + ".conf";
@@ -1236,7 +1235,6 @@ public:
 		RestoreRegulatoryCountry();
 		CleanupTemporaryFiles();
 		m_probe_seen.clear();
-		m_targeted_wps_pin_at.clear();
 		m_pairing_complete_requested.store(false);
 		m_gamepad_disconnected_requested.store(false);
 		m_base_interface.clear();
@@ -2089,7 +2087,6 @@ private:
 		m_runtime_ssid.clear();
 		m_psk_hex.clear();
 		m_paired_gamepad_macs.clear();
-		m_targeted_wps_pin_at.clear();
 		m_snapshot.phase = "idle";
 		m_snapshot.base_interface.clear();
 		m_snapshot.ap_interface.clear();
@@ -2692,37 +2689,6 @@ private:
 		return ArmWpsPinCommand(fallback_command, "WPS_PIN any (checksum)", error);
 	}
 
-	void MaybeArmTargetedWpsPin(std::string_view phase, std::string_view mac)
-	{
-		if (IsLocallyAdministeredMac(mac))
-			return;
-		if (phase != "pairing")
-			return;
-		if (m_hostapd_pid <= 0 || m_hostapd_output_fd < 0)
-			return;
-
-		const auto now = std::chrono::steady_clock::now();
-		const auto mac_key = std::string(mac);
-		const auto last_it = m_targeted_wps_pin_at.find(mac_key);
-		if (last_it != m_targeted_wps_pin_at.end() &&
-			now - last_it->second < std::chrono::seconds(30))
-		{
-			return;
-		}
-
-		m_targeted_wps_pin_at[mac_key] = now;
-		std::string error;
-		const std::string command = barista::drh::build_wps_pin_command(
-			BuildWpsPin(), m_wps_pin_timeout_seconds, mac);
-		if (ArmWpsPinCommand(command, "WPS_PIN " + mac_key, error))
-		{
-			Log("pairing-candidate: targeted WPS PIN armed for " + mac_key);
-		}
-		else
-		{
-			Log("pairing-candidate: targeted WPS PIN failed for " + mac_key + ": " + error);
-		}
-	}
 
 	bool IsImportantHostapdLine(std::string_view line) const
 	{
@@ -2800,7 +2766,7 @@ private:
 		return std::string(match[0].first, match[0].second);
 	}
 
-	void MaybeLogProbeSourceMac(std::string_view phase, std::string_view line)
+	void MaybeLogProbeSourceMac(std::string_view line)
 	{
 		const auto mac = ExtractProbeSourceMac(line);
 		if (!mac.has_value())
@@ -2817,8 +2783,9 @@ private:
 		m_probe_seen[*mac] = now;
 		const bool locally_administered = IsLocallyAdministeredMac(*mac);
 		Log("probe-seen: sa=" + *mac + (locally_administered ? " local-admin=1" : " local-admin=0"));
-		if (!locally_administered)
-			MaybeArmTargetedWpsPin(phase, *mac);
+		// A probe does not identify the GamePad. Re-arming WPS for its source
+		// would invalidate the wildcard PIN and restrict authorization to a
+		// possibly unrelated device. Keep probe observation free of mutations.
 	}
 
 	void LogHostapdLine(const std::string& phase, const std::string& line)
@@ -2873,7 +2840,7 @@ private:
 		if (line.find("INTERFACE_UNAVAILABLE") != std::string::npos ||
 			line.find("is unavailable -- stopped") != std::string::npos)
 			QueueStatus("Wi-Fi AP was stopped externally; see " + m_log_path);
-		MaybeLogProbeSourceMac(phase, line);
+		MaybeLogProbeSourceMac(line);
 
 		const std::string message = "hostapd[" + phase + "]: " + line;
 		WritePrivateLog(message);
@@ -2958,7 +2925,6 @@ private:
 	std::string m_test_media_path;
 	bool m_test_black_frames = false;
 	std::unordered_map<std::string, std::chrono::steady_clock::time_point> m_probe_seen;
-	std::unordered_map<std::string, std::chrono::steady_clock::time_point> m_targeted_wps_pin_at;
 
 	std::string m_credential_blob_path;
 	std::string m_pairing_config_path;

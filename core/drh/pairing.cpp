@@ -104,13 +104,10 @@ std::string build_pairing_ssid(const MacAddress& ap_mac, const PairingCode& code
 	return "WiiU" + mac_minus_last_nibble + code_hex + "_STA1";
 }
 
-std::string build_wps_pin_command(std::string_view pin, int timeout_seconds,
-	std::string_view enrollee_mac)
+std::string build_wps_pin_command(std::string_view pin, int timeout_seconds)
 {
-	// hostapd expects UUID (or "any"), PIN, timeout, then optional MAC.
-	std::string command = "WPS_PIN any " + std::string(pin) + " " + std::to_string(timeout_seconds);
-	if (!enrollee_mac.empty())
-		command += " " + std::string(enrollee_mac);
-	return command;
+	// Keep the PIN open to the GamePad throughout discovery. Registering a
+	// MAC-scoped wildcard PIN replaces this authorization in hostapd.
+	return "WPS_PIN any " + std::string(pin) + " " + std::to_string(timeout_seconds);
 }
 }
