@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 7 ]]; then
-	echo "usage: $0 <src-dir> <repo-url> <tag> <hostapd-config> <out-hostapd> <out-hostapd-cli> <ht-patch>" >&2
+if [[ $# -lt 7 ]]; then
+	echo "usage: $0 <src-dir> <repo-url> <tag> <hostapd-config> <out-hostapd> <out-hostapd-cli> <patch>..." >&2
 	exit 2
 fi
 
@@ -12,7 +12,8 @@ tag="$3"
 hostapd_config="$4"
 out_hostapd="$5"
 out_hostapd_cli="$6"
-ht_patch="$7"
+shift 6
+patches=("$@")
 
 if [[ ! -d "$src_dir/.git" ]]; then
 	mkdir -p "$(dirname "$src_dir")"
@@ -50,7 +51,7 @@ elif ! git -C "$src_dir" cat-file -e "${tag}^{commit}" 2>/dev/null; then
 	git -C "$src_dir" fetch origin "$tag"
 fi
 
-patch_hash="$({ printf '%s\0%s\0ht-advertisement\0' "$repo_url" "$tag"; sha256sum "$hostapd_config" "$ht_patch"; } | sha256sum | cut -d' ' -f1)"
+patch_hash="$({ printf '%s\0%s\0barista-compatibility\0' "$repo_url" "$tag"; sha256sum "$hostapd_config" "${patches[@]}"; } | sha256sum | cut -d' ' -f1)"
 patch_marker="$src_dir/.barista-patchset"
 current_hash=""
 if [[ -f "$patch_marker" ]]; then
@@ -61,8 +62,10 @@ if [[ "$current_hash" != "$patch_hash" ]]; then
 	git -C "$src_dir" am --abort >/dev/null 2>&1 || true
 	git -C "$src_dir" reset --hard "$tag"
 	git -C "$src_dir" clean -xfd
-	git -C "$src_dir" apply --check "$ht_patch"
-	git -C "$src_dir" apply "$ht_patch"
+	for patch in "${patches[@]}"; do
+		git -C "$src_dir" apply --check "$patch"
+		git -C "$src_dir" apply "$patch"
+	done
 	cp "$hostapd_config" "$src_dir/hostapd/.config"
 	printf '%s\n' "$patch_hash" > "$patch_marker"
 elif ! cmp -s "$hostapd_config" "$src_dir/hostapd/.config"; then

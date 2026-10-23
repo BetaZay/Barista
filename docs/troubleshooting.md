@@ -20,6 +20,16 @@ reviewed before being shared.
 
 ## Pairing search
 
+If the pairing AP becomes ready but the GamePad returns to its pairing screen
+without authenticating, check that the installed bundled hostapd includes the
+Nintendo WPS discovery patch (`0015`). The original Vanilla-fork integration
+retained Nintendo encryption but dropped the Nintendo WPS advertisements.
+A local 2026-10-23 pairing log on `rtw89_8852be` showed standard WPS Version2
+advertisements and no received authentication, while an earlier connection
+with saved credentials succeeded. The restored format has deterministic
+encoding/parsing coverage; a new physical pairing remains the confirmation.
+Updating only the engine leaves an old hostapd in place.
+
 Wait for **Pair now** before pressing SYNC and entering the displayed symbols.
 Barista searches each channel in its pairing plan once, normally waiting about
 20 seconds per channel. A full nine-channel search can take more than three

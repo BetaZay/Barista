@@ -1,0 +1,152 @@
+From: Barista <barista@example.invalid>
+Subject: [PATCH] restore Nintendo WPS discovery on the Vanilla fork
+
+The pinned fork retains Tendonin key derivation but emits standard WFA
+WPS IEs. Restore Nintendo vendor IEs, WPS 1.0 and registrar method bits
+from the earlier Barista patches, and recognize Nintendo WPS on receive.
+All changes are scoped to CONFIG_TENDONIN; standard WPS remains unchanged.
+
+--- a/src/ap/wps_hostapd.c
++++ b/src/ap/wps_hostapd.c
+@@ -1137,6 +1137,7 @@
+ 		os_strdup(hapd->conf->serial_number) : NULL;
+ 	wps->config_methods =
+ 		wps_config_methods_str2bin(hapd->conf->config_methods);
++#ifndef CONFIG_TENDONIN
+ 	if ((wps->config_methods &
+ 	     (WPS_CONFIG_DISPLAY | WPS_CONFIG_VIRT_DISPLAY |
+ 	      WPS_CONFIG_PHY_DISPLAY)) == WPS_CONFIG_DISPLAY) {
+@@ -1151,6 +1152,7 @@
+ 			   "virtual_push_button for WPS 2.0 compliance");
+ 		wps->config_methods |= WPS_CONFIG_VIRT_PUSHBUTTON;
+ 	}
++#endif /* CONFIG_TENDONIN */
+ 	os_memcpy(wps->dev.pri_dev_type, hapd->conf->device_type,
+ 		  WPS_DEV_TYPE_LEN);
+ 
+@@ -1656,7 +1658,7 @@
+ 	     0))
+ 		return 0; /* Not for us */
+ 
+-	wps_ie = ieee802_11_vendor_ie_concat(ie, ie_len, WPS_DEV_OUI_WFA);
++	wps_ie = ieee802_11_vendor_ie_concat(ie, ie_len, WPS_IE_VENDOR_TYPE);
+ 	if (wps_ie == NULL)
+ 		return 0;
+ 	if (wps_validate_probe_req(wps_ie, addr) < 0) {
+--- a/src/common/ieee802_11_defs.h
++++ b/src/common/ieee802_11_defs.h
+@@ -1493,7 +1493,11 @@
+ 				* 00:50:F2 */
+ #define WPA_IE_VENDOR_TYPE 0x0050f201
+ #define WMM_IE_VENDOR_TYPE 0x0050f202
++#ifdef CONFIG_TENDONIN
++#define WPS_IE_VENDOR_TYPE 0xa4c0e1f4
++#else /* CONFIG_TENDONIN */
+ #define WPS_IE_VENDOR_TYPE 0x0050f204
++#endif /* CONFIG_TENDONIN */
+ #define OUI_WFA 0x506f9a
+ #define P2P_IE_VENDOR_TYPE 0x506f9a09
+ #define P2P2_IE_VENDOR_TYPE 0x506f9a28
+--- a/src/common/ieee802_11_common.c
++++ b/src/common/ieee802_11_common.c
+@@ -37,6 +37,16 @@
+ 
+ 	oui = WPA_GET_BE24(pos);
+ 	switch (oui) {
++#ifdef CONFIG_TENDONIN
++	case 0xa4c0e1:
++		/* Nintendo's WPS information element used by the GamePad. */
++		if (pos[3] != 0xf4)
++			return -1;
++		elems->wps_ie = pos;
++		elems->wps_ie_len = elen;
++		break;
++#endif /* CONFIG_TENDONIN */
++
+ 	case OUI_MICROSOFT:
+ 		/* Microsoft/Wi-Fi information elements are further typed and
+ 		 * subtyped */
+--- a/src/wps/wps.c
++++ b/src/wps/wps.c
+@@ -429,7 +429,11 @@
+ 
+ 	wpabuf_put_u8(ie, WLAN_EID_VENDOR_SPECIFIC);
+ 	len = wpabuf_put(ie, 1);
++#ifdef CONFIG_TENDONIN
++	wpabuf_put_be32(ie, WPS_DEV_OUI_NIN);
++#else /* CONFIG_TENDONIN */
+ 	wpabuf_put_be32(ie, WPS_DEV_OUI_WFA);
++#endif /* CONFIG_TENDONIN */
+ 
+ 	if (wps_build_version(ie) ||
+ 	    wps_build_req_type(ie, req_type) ||
+@@ -463,7 +467,11 @@
+ 
+ 	wpabuf_put_u8(ie, WLAN_EID_VENDOR_SPECIFIC);
+ 	len = wpabuf_put(ie, 1);
++#ifdef CONFIG_TENDONIN
++	wpabuf_put_be32(ie, WPS_DEV_OUI_NIN);
++#else /* CONFIG_TENDONIN */
+ 	wpabuf_put_be32(ie, WPS_DEV_OUI_WFA);
++#endif /* CONFIG_TENDONIN */
+ 
+ 	if (wps_build_version(ie) ||
+ 	    wps_build_resp_type(ie, WPS_RESP_AP) ||
+--- a/src/wps/wps_attr_build.c
++++ b/src/wps/wps_attr_build.c
+@@ -211,6 +211,11 @@
+ {
+ 	u8 *len;
+ 
++#ifdef CONFIG_TENDONIN
++	/* The Wii U implements WPS 1.0 and does not advertise WFA Version2. */
++	return 0;
++#endif /* CONFIG_TENDONIN */
++
+ #ifdef CONFIG_WPS_TESTING
+ 	if (WPS_VERSION == 0x10)
+ 		return 0;
+@@ -481,7 +486,11 @@
+ 			frag_len = 251;
+ 		wpabuf_put_u8(ie, WLAN_EID_VENDOR_SPECIFIC);
+ 		wpabuf_put_u8(ie, 4 + frag_len);
++#ifdef CONFIG_TENDONIN
++		wpabuf_put_be32(ie, WPS_DEV_OUI_NIN);
++#else /* CONFIG_TENDONIN */
+ 		wpabuf_put_be32(ie, WPS_DEV_OUI_WFA);
++#endif /* CONFIG_TENDONIN */
+ 		wpabuf_put_data(ie, pos, frag_len);
+ 		pos += frag_len;
+ 	}
+--- a/src/wps/wps_registrar.c
++++ b/src/wps/wps_registrar.c
+@@ -596,6 +596,7 @@
+ 	if (!reg->sel_reg_union)
+ 		return 0;
+ 	methods = reg->wps->config_methods;
++#ifndef CONFIG_TENDONIN
+ 	methods &= ~WPS_CONFIG_PUSHBUTTON;
+ 	methods &= ~(WPS_CONFIG_VIRT_PUSHBUTTON |
+ 		     WPS_CONFIG_PHY_PUSHBUTTON);
+@@ -603,6 +604,7 @@
+ 		wps_set_pushbutton(&methods, reg->wps->config_methods);
+ 	if (reg->sel_reg_config_methods_override >= 0)
+ 		methods = reg->sel_reg_config_methods_override;
++#endif /* CONFIG_TENDONIN */
+ 	wpa_printf(MSG_DEBUG, "WPS:  * Selected Registrar Config Methods (%x)",
+ 		   methods);
+ 	wpabuf_put_be16(msg, ATTR_SELECTED_REGISTRAR_CONFIG_METHODS);
+@@ -620,9 +622,12 @@
+ 	 * These are the methods that the AP supports as an Enrollee for adding
+ 	 * external Registrars.
+ 	 */
+-	methods = reg->wps->config_methods & ~WPS_CONFIG_PUSHBUTTON;
++	methods = reg->wps->config_methods;
++#ifndef CONFIG_TENDONIN
++	methods &= ~WPS_CONFIG_PUSHBUTTON;
+ 	methods &= ~(WPS_CONFIG_VIRT_PUSHBUTTON |
+ 		     WPS_CONFIG_PHY_PUSHBUTTON);
++#endif /* CONFIG_TENDONIN */
+ 	wpa_printf(MSG_DEBUG, "WPS:  * Config Methods (%x)", methods);
+ 	wpabuf_put_be16(msg, ATTR_CONFIG_METHODS);
+ 	wpabuf_put_be16(msg, 2);
