@@ -290,6 +290,14 @@ const barista::drh::PairingSessionState& ServerCore::state() const
 CommandResponse ServerCore::handle_line(std::string_view line)
 {
 	const std::vector<std::string> tokens = SplitWhitespace(line);
+	if (!tokens.empty() && (tokens[0] == "pair-stop" || tokens[0] == "runtime-stop" ||
+		tokens[0] == "shutdown"))
+	{
+		// An idle backend can still have a scheduled retry after a failed
+		// start. Explicit stop commands must cancel that retry as well.
+		m_automatic.reset();
+		m_pairing_suppressed_until = {};
+	}
 	const CommandResult result = ExecuteCommand(tokens, m_state_machine, *m_backend);
 	CommandResponse response;
 	response.ok = result.ok;
@@ -383,6 +391,7 @@ void ServerCore::process_backend_events()
 void ServerCore::start_automatic(AutomaticCycleConfig config)
 {
 	m_automatic = std::move(config);
+	m_pairing_suppressed_until = {};
 	if (m_automatic->start_in_pairing)
 		start_pairing_cycle();
 	else
@@ -443,6 +452,10 @@ void ServerCore::start_check_cycle()
 				m_pairing_suppressed_until);
 			return;
 		}
+		// A first-time automatic discovery check normally has no saved
+		// credentials yet; it should fall through to pairing without an error.
+		if (!m_automatic->pairing_enabled || result.message.rfind("no saved credentials for AP ", 0) != 0)
+			EmitBackendFailure(result.message);
 	}
 	m_state_machine.reset();
 	if (!m_automatic->pairing_enabled)

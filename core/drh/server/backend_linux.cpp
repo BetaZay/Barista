@@ -1,4 +1,5 @@
 #include "drh/server/interrupt.h"
+#include "drh/server/hostapd_output.h"
 #include "api/types.h"
 #include "drh/encoder/media_streamer.h"
 #include "drh/server/session_backend.h"
@@ -1236,6 +1237,7 @@ public:
 		CleanupTemporaryFiles();
 		m_probe_seen.clear();
 		m_pairing_complete_requested.store(false);
+		m_gamepad_associated_requested.store(false);
 		m_gamepad_disconnected_requested.store(false);
 		m_base_interface.clear();
 		m_ap_interface.clear();
@@ -2141,6 +2143,7 @@ private:
 		m_hostapd_pid = pid;
 		m_hostapd_output_fd = pipe_fd[0];
 		m_hostapd_log.clear();
+		m_hostapd_output.Clear();
 		Log("hostapd: pid=" + std::to_string(m_hostapd_pid) + " config=" + config_path);
 
 		const int flags = fcntl(m_hostapd_output_fd, F_GETFL, 0);
@@ -2305,9 +2308,15 @@ private:
 
 	void MonitorHostapdOutputLoop()
 	{
-		std::string read_buffer;
 		while (!m_hostapd_monitor_stop.load() && !is_stop_requested())
 		{
+			// Drain startup's unread lines before waiting for more pipe data.
+			while (const auto raw_line = m_hostapd_output.NextLine())
+			{
+				const auto line = Trim(*raw_line);
+				if (!line.empty())
+					LogHostapdLine(m_hostapd_monitor_phase, line);
+			}
 			const int fd = m_hostapd_output_fd;
 			if (fd < 0)
 				break;
@@ -2334,7 +2343,7 @@ private:
 			const auto read_size = read(fd, block.data(), block.size());
 			if (read_size > 0)
 			{
-				read_buffer.append(block.data(), static_cast<size_t>(read_size));
+				m_hostapd_output.Append(std::string_view(block.data(), static_cast<size_t>(read_size)));
 				AppendCapped(m_hostapd_log, std::string_view(block.data(), static_cast<size_t>(read_size)), 64 * 1024);
 			}
 			else if (read_size == 0)
@@ -2349,16 +2358,6 @@ private:
 				if (errno != EBADF)
 					Log("hostapd monitor: read failed: " + std::string(std::strerror(errno)));
 				break;
-			}
-
-			size_t nl_pos = std::string::npos;
-			while ((nl_pos = read_buffer.find('\n')) != std::string::npos)
-			{
-				std::string line = Trim(read_buffer.substr(0, nl_pos));
-				read_buffer.erase(0, nl_pos + 1);
-				if (line.empty())
-					continue;
-				LogHostapdLine(m_hostapd_monitor_phase, line);
 			}
 		}
 		Log("hostapd monitor: stopped");
@@ -2395,7 +2394,6 @@ private:
 	bool WaitForHostapdReady(std::string_view phase, std::chrono::seconds timeout, std::string& error)
 	{
 		auto deadline = std::chrono::steady_clock::now() + timeout;
-		std::string read_buffer;
 
 		while (std::chrono::steady_clock::now() < deadline)
 		{
@@ -2423,7 +2421,7 @@ private:
 				const auto read_size = read(m_hostapd_output_fd, block.data(), block.size());
 				if (read_size > 0)
 				{
-					read_buffer.append(block.data(), static_cast<size_t>(read_size));
+					m_hostapd_output.Append(std::string_view(block.data(), static_cast<size_t>(read_size)));
 					AppendCapped(m_hostapd_log, std::string_view(block.data(), static_cast<size_t>(read_size)), 64 * 1024);
 				}
 				else if (read_size == 0)
@@ -2464,14 +2462,12 @@ private:
 				}
 			}
 
-			size_t nl_pos = std::string::npos;
-				while ((nl_pos = read_buffer.find('\n')) != std::string::npos)
-				{
-					std::string line = Trim(read_buffer.substr(0, nl_pos));
-					read_buffer.erase(0, nl_pos + 1);
-					if (line.empty())
-						continue;
-					LogHostapdLine(std::string(phase), line);
+			while (const auto raw_line = m_hostapd_output.NextLine())
+			{
+				const auto line = Trim(*raw_line);
+				if (line.empty())
+					continue;
+				LogHostapdLine(std::string(phase), line);
 
 				if (line.find("not allowed for AP mode") != std::string::npos &&
 					line.find("NO-IR") != std::string::npos)
@@ -2903,6 +2899,7 @@ private:
 	pid_t m_hostapd_pid = -1;
 	int m_hostapd_output_fd = -1;
 	std::string m_hostapd_log;
+	HostapdOutput m_hostapd_output;
 	std::thread m_hostapd_monitor_thread;
 	std::atomic_bool m_hostapd_monitor_stop{false};
 	std::string m_hostapd_monitor_phase;

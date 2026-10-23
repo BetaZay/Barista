@@ -213,6 +213,10 @@ if(BUILD_TESTING)
         target_link_libraries(drcd_core_tests PRIVATE barista_drh_server)
         add_test(NAME drcd_core_tests COMMAND drcd_core_tests)
 
+        add_executable(drcd_hostapd_output_tests tests/hostapd_output_tests.cpp)
+        target_link_libraries(drcd_hostapd_output_tests PRIVATE barista_api)
+        add_test(NAME drcd_hostapd_output_tests COMMAND drcd_hostapd_output_tests)
+
         add_executable(drcd_wifi_capability_tests tests/wifi_capability_tests.cpp)
         target_link_libraries(drcd_wifi_capability_tests PRIVATE barista_drh_server)
         add_test(NAME drcd_wifi_capability_tests COMMAND drcd_wifi_capability_tests)
