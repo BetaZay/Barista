@@ -27,7 +27,9 @@ retained Nintendo encryption but dropped the Nintendo WPS advertisements.
 A local 2026-10-23 pairing log on `rtw89_8852be` showed standard WPS Version2
 advertisements and no received authentication, while an earlier connection
 with saved credentials succeeded. The restored format has deterministic
-encoding/parsing coverage; a new physical pairing remains the confirmation.
+encoding/parsing coverage. The local user confirmed successful pairing after
+installing the fix, and subsequent 0.1.68 logs on `rtw88_8822bu` show successful
+WPS enrollment on channel 36.
 Updating only the engine leaves an old hostapd in place.
 
 Wait for **Pair now** before pressing SYNC and entering the displayed symbols.
@@ -68,11 +70,46 @@ Two host settings produce failures that look like Barista faults:
 - A radio soft-block reports `AP_START_FAILED` even though the adapter passes
   every capability check. Check `rfkill list` and clear it with
   `rfkill unblock wifi`.
-- A host firewall that denies inbound traffic lets the GamePad associate and
-  complete its key handshake, then stalls with protocol command timeouts and no
-  `dhcp: sent OFFER` line, because the GamePad's DHCP and protocol replies are
-  dropped locally. Allow inbound UDP on the GamePad interface for port 67 and
-  the runtime ports 50010 and 50020-50025.
+- A host firewall can allow pairing and Wi-Fi authentication while blocking
+  DHCP or individual runtime streams. Stateful rules may allow replies to
+  Barista's command queries while dropping unsolicited controller input. In
+  that case, DHCP and UVC/UAC synchronization succeed, but Barista never records
+  valid input or declares the session ready.
+
+### Allow GamePad traffic through the host firewall
+
+These are local firewall permissions on the PC's selected GamePad Wi-Fi
+interface. **Router port forwarding is not required.** Restrict the rules to
+that interface (for example, `wlan1`); do not expose these ports on unrelated
+network interfaces. Barista uses UDP for all traffic listed below.
+
+| Direction relative to the PC | Destination port(s) | Purpose |
+| --- | --- | --- |
+| Inbound | 67 | GamePad DHCP requests |
+| Inbound | 50010 | GamePad messages, including video recovery requests |
+| Inbound | 50020, 50021 | Video/audio service return traffic |
+| Inbound | 50022 | Buttons, sticks, touch and other controller input |
+| Inbound | 50023 | Command acknowledgments and replies |
+| Inbound | 50025 | Auxiliary protocol traffic |
+| Outbound | 68 | DHCP replies, including broadcasts |
+| Outbound to GamePad | 50120 | Video, from PC source port 50020 |
+| Outbound to GamePad | 50121 | Audio, from PC source port 50021 |
+| Outbound to GamePad | 50123 | Commands, from PC source port 50023 |
+| Outbound to GamePad | 50125 | Auxiliary protocol traffic, from PC source port 50025 |
+
+The default runtime addresses are PC `192.168.1.10` and GamePad `192.168.1.11`.
+DHCP also needs to work before the GamePad has an address. If outbound traffic
+is already allowed, additional outbound rules are unnecessary. Configure the
+firewall manager actually active on the machine; disabling UFW alone does not
+establish that all packet filtering is disabled.
+
+Working audio and controls do not prove that video and its recovery messages
+are passing. If video remains partial or blank, reproduce it once and collect
+the latest **run** log through Settings → Support. Include whether the firewall
+was fully disabled or which rules were added, and whether the problem affects
+Barista's idle screen, a running application, or both. The log can reveal media
+startup failures, send errors and recovery requests; a capture may still be
+needed to distinguish delivery, timing and decoder problems.
 
 Shareable logs are stored in `/var/log/barista/support`. Detailed private logs
 are stored in `/var/log/barista/private` and remain root-only.

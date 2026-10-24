@@ -58,6 +58,9 @@ After installation:
 3. Open **GamePads → Pair a GamePad** and follow the instructions.
 4. For a saved GamePad, use **Connect GamePad** on Home.
 
+If a host firewall is enabled, allow the [GamePad UDP ports](docs/troubleshooting.md#allow-gamepad-traffic-through-the-host-firewall)
+on the selected Wi-Fi interface. Router port forwarding is not required.
+
 See the [user guide](docs/user-guide.md) for pairing, play modes, and running
 compatible applications. If something fails, open **Settings → Support** and
 check the [troubleshooting guide](docs/troubleshooting.md).
