@@ -1,5 +1,6 @@
 #include "window.h"
 #include "single_instance.h"
+#include "../cli/cli.h"
 #include <QApplication>
 #include <QTimer>
 #include <QIcon>
@@ -20,13 +21,7 @@
 
 int main(int argc,char** argv)
 {
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view arg(argv[i]);
-        if (arg == "--version" || arg == "-v") {
-            std::printf("Barista %s\n", BARISTA_VERSION_STRING);
-            return 0;
-        }
-    }
+    if (barista::cli::Requested(argc, argv)) return barista::cli::Run(argc, argv);
     QApplication app(argc,argv);
 #ifdef BARISTA_LINUX_CONTROL
     if (geteuid() == 0) { qCritical("Do not run the Barista GUI as root; use its polkit-backed service"); return 1; }

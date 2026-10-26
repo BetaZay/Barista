@@ -17,6 +17,11 @@ endif()
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Widgets Network Svg Multimedia)
 set(CMAKE_AUTOMOC ON)
+add_library(barista_cli STATIC cli/cli.cpp cli/cli.h)
+target_link_libraries(barista_cli PUBLIC Qt6::Core PRIVATE barista_core)
+add_executable(barista-cli cli/main.cpp)
+target_link_libraries(barista-cli PRIVATE barista_cli)
+install(TARGETS barista-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 set(BARISTA_INTERFACE_ICONS
     "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/dropdown.svg"
     "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons/kenney/home.svg"
@@ -40,13 +45,15 @@ add_executable(barista gui/main.cpp gui/window.cpp gui/window.h gui/cafe_icons.c
     gui/cafe_theme.cpp gui/cafe_theme.h gui/pairing_pattern.h gui/control_client.cpp gui/control_client.h
     gui/single_instance.cpp gui/single_instance.h gui/update_checker.cpp gui/update_checker.h
     gui/desktop_streamer.cpp gui/desktop_streamer.h)
-target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Multimedia barista_core drc_ipc)
+target_link_libraries(barista PRIVATE Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Multimedia barista_core drc_ipc barista_cli)
 qt_add_resources(barista branding PREFIX "/barista" BASE "${PROJECT_SOURCE_DIR}"
     FILES "${PROJECT_SOURCE_DIR}/barista-logo.png")
 qt_add_resources(barista interface_icons PREFIX "/barista/icons" BASE "${CMAKE_CURRENT_SOURCE_DIR}/branding/icons"
     FILES ${BARISTA_INTERFACE_ICONS})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(Qt6 REQUIRED COMPONENTS DBus)
+    target_link_libraries(barista_cli PRIVATE Qt6::DBus)
+    target_compile_definitions(barista_cli PRIVATE BARISTA_LINUX_CONTROL=1)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
     pkg_check_modules(XCB_CAPTURE REQUIRED IMPORTED_TARGET xcb xcb-xfixes)
@@ -197,6 +204,11 @@ if(BUILD_TESTING)
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         find_program(BARISTA_DBUS_RUN_SESSION dbus-run-session REQUIRED)
+        add_executable(barista_cli_test cli/cli_test.cpp)
+        target_link_libraries(barista_cli_test PRIVATE Qt6::Core Qt6::DBus)
+        add_test(NAME barista_cli COMMAND ${BARISTA_DBUS_RUN_SESSION} -- $<TARGET_FILE:barista_cli_test>
+            $<TARGET_FILE:barista-cli> $<TARGET_FILE:barista>)
+        set_tests_properties(barista_cli PROPERTIES TIMEOUT 30)
         add_executable(barista_portal_test gui/portal_capture_test.cpp gui/portal_capture.cpp gui/portal_capture.h)
         target_link_libraries(barista_portal_test PRIVATE Qt6::Core Qt6::Gui Qt6::DBus PkgConfig::PIPEWIRE)
         add_test(NAME barista_portal_capture COMMAND ${BARISTA_DBUS_RUN_SESSION} -- $<TARGET_FILE:barista_portal_test>)

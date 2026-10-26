@@ -29,6 +29,55 @@ unavailable. Select an available adapter before connecting or pairing.
 The selected adapter is dedicated to the GamePad during a session. Use Ethernet
 or another adapter for Internet access. See [Wi-Fi compatibility](hardware.md).
 
+## Terminal commands
+
+Use `barista` with an action to control the installed Linux service without
+opening a window. `barista-cli` accepts the same options; `barista` without
+options still opens the desktop app. Run these commands as your normal user.
+Polkit handles authorization for pairing, starting, stopping, and system setup.
+
+```sh
+barista --list
+barista --interfaces
+barista --pair --interface wlan0 --country US
+barista --start --interface wlan0
+barista --start --interface wlan0 --mode controller
+barista --status
+barista --stop
+barista --diagnostics
+barista --help
+```
+
+`--list` shows wireless adapters and saved GamePads. `--interfaces` lists only
+local adapters and works without the service. If you omit `--interface`, Barista
+uses the GUI's saved adapter when available, or the sole wireless adapter.
+With several adapters and no usable saved choice, specify one explicitly.
+The service checks whether the selected adapter supports the session.
+
+`--pair` generates a random four-symbol pattern. Wait for **Pair now** in the
+terminal, press SYNC on the GamePad, and enter the displayed symbols from left
+to right. To choose a pattern, add `--code 0123`: `0` is Spade, `1` Heart,
+`2` Diamond, and `3` Club. Successful pairing continues into a running session.
+
+`--start` reconnects using saved pairing data. The default mode is `real`, for
+applications using AppHook; `--mode controller` provides a virtual controller.
+Use the GUI for desktop and game mirroring, which require its capture controls.
+`--country` is optional and must match your physical location; it is passed
+explicitly and does not change the GUI's saved country setting.
+
+Pairing and starting keep the CLI in the foreground so it remains the session
+owner. Keep that terminal open while playing. Press Ctrl+C to stop, or run
+`barista --stop` from another terminal in the same desktop login. `--stop`
+requests shutdown through the owning CLI; use the GUI to disconnect a
+GUI-owned session. Exiting the controlling process also releases its session.
+Read-only status and listing commands do not take ownership.
+
+`--prepare` prepares the host facilities without starting a session.
+`--diagnostics` prints the service's shareable support report. Exit codes are
+`0` for success, `1` for a service or session failure, and `2` for invalid
+arguments. A successful `--stop` means the owner accepted the stop request;
+the owning terminal reports any shutdown failure.
+
 ## Pair a new GamePad
 
 1. Turn on the GamePad and keep it near the adapter.

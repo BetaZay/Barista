@@ -58,6 +58,11 @@ After installation:
 3. Open **GamePads → Pair a GamePad** and follow the instructions.
 4. For a saved GamePad, use **Connect GamePad** on Home.
 
+Prefer a terminal? Use `barista --list`, `barista --pair --interface wlan0`, or
+`barista --start --interface wlan0`. Pairing and starting stay in the foreground;
+Ctrl+C or `barista --stop` ends the CLI session. `barista-cli` provides the same
+commands. See [terminal usage](docs/user-guide.md#terminal-commands).
+
 If a host firewall is enabled, allow the [GamePad UDP ports](docs/troubleshooting.md#allow-gamepad-traffic-through-the-host-firewall)
 on the selected Wi-Fi interface. Router port forwarding is not required.
 

@@ -62,8 +62,11 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-The build produces `build/app/barista`, `build/app/barista-service`, the engine,
-and test tools. A development build deliberately refuses to let the GUI launch
+The build produces `build/app/barista`, `build/app/barista-cli`,
+`build/app/barista-service`, the engine, and test tools. Both `barista --help`
+and `barista-cli --help` work without a display. See the
+[terminal commands](docs/user-guide.md#terminal-commands) for usage.
+A development build deliberately refuses to let the GUI launch
 writable binaries with root privileges; install the project before trying a
 real radio session.
 

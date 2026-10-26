@@ -97,6 +97,12 @@ exposes both fields alongside the human-readable message.
 - Pairing is not a separate long-lived service. A successful pair request moves
   into the requested running mode.
 
+The terminal client (`barista --start` / `barista --pair`, also available as
+`barista-cli`) keeps its D-Bus connection alive in the foreground. A second
+invocation's `--stop` calls `org.barista.Cli1.Stop` at `/org/barista/Cli1` on the
+user's session bus; the owning CLI then calls `StopSession()` on the system
+service. This preserves the system service's caller ownership checks.
+
 The normal state progression is:
 
 ```text
