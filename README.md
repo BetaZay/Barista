@@ -88,7 +88,9 @@ of or endorsements by the upstream projects:
 Pairing, basic video/audio streaming, controller input, and AppHook have been
 tested with real hardware. Video can still show artifacts or fall behind;
 audio can stutter, and recovery needs improvement. Touch and motion need
-broader testing. Camera, microphone, and NFC support are not implemented.
+broader testing. The engine's transport can turn the camera and microphone on
+and decode what they send, but they are not yet exposed to applications. NFC
+support is not implemented.
 
 ## Documentation
 

@@ -22,6 +22,7 @@ if(BARISTA_BUILD_ENGINE)
     add_library(drc_host STATIC
         drh/mac_address.cpp
         drh/pairing.cpp
+        drh/gamepad_media.cpp
         drh/runtime_transport.cpp
         drh/session.cpp
         drh/version.cpp
@@ -115,6 +116,10 @@ if(BUILD_TESTING)
         add_executable(drc_host_tests tests/pairing_tests.cpp)
         target_link_libraries(drc_host_tests PRIVATE drc_host)
         add_test(NAME drc_host_tests COMMAND drc_host_tests)
+
+        add_executable(drc_gamepad_media_tests tests/gamepad_media_tests.cpp)
+        target_link_libraries(drc_gamepad_media_tests PRIVATE drc_host)
+        add_test(NAME drc_gamepad_media_tests COMMAND drc_gamepad_media_tests)
 
         add_executable(ap_tsf_clock_tests tests/ap_tsf_clock_tests.cpp)
         target_include_directories(ap_tsf_clock_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

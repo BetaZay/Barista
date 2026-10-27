@@ -281,6 +281,119 @@ void test_runtime_keepalive()
 	::close(input_fd);
 	::close(command_fd);
 }
+
+// What a fake GamePad saw of the transport's commands, answering each one.
+struct MediaCommandLog
+{
+	std::vector<std::pair<uint8_t, uint8_t>> generic; // service, method
+	std::vector<uint8_t> camera_write;
+	std::vector<uint8_t> last_uvc;
+};
+
+bool answer_media_command(int fd, int timeout_ms, MediaCommandLog& log)
+{
+	pollfd descriptor{fd, POLLIN, 0};
+	if (::poll(&descriptor, 1, timeout_ms) <= 0)
+		return false;
+	std::array<uint8_t, 1024> request{};
+	sockaddr_in console{};
+	socklen_t console_size = sizeof(console);
+	const ssize_t size = ::recvfrom(fd, request.data(), request.size(), 0,
+		reinterpret_cast<sockaddr*>(&console), &console_size);
+	if (size < 8 || read_le16(request.data()) != 0)
+		return false;
+	const uint16_t query_type = read_le16(request.data() + 2);
+	const uint16_t sequence = read_le16(request.data() + 6);
+	const auto ack = command_packet(1, query_type, sequence);
+	expect(::sendto(fd, ack.data(), ack.size(), 0,
+		reinterpret_cast<sockaddr*>(&console), console_size) == static_cast<ssize_t>(ack.size()),
+		"could not ACK a media command");
+	std::vector<uint8_t> payload;
+	if (query_type == 1)
+	{
+		log.last_uvc.assign(request.begin() + 8, request.begin() + size);
+		payload.resize(16);
+		payload[12] = log.last_uvc[4];
+		payload[13] = log.last_uvc[16];
+	}
+	else
+	{
+		const uint8_t service = request[14];
+		const uint8_t method = request[15];
+		log.generic.emplace_back(service, method);
+		payload = {0x7e, 0x01, request[10], request[11], 0x00, 0x09, service, method, 0x00, 0x00};
+		if (service == 0x05 && method == 0x06)
+		{
+			payload.resize(12 + 0x304);
+			payload[10] = 0x03;
+			payload[11] = 0x04;
+		}
+		else if (service == 0x04 && method == 0x09)
+			payload.insert(payload.end(), {0x00, 0x04, 0x00, 0x02, 0x07, 0xde});
+		else
+		{
+			if (service == 0x04 && method == 0x08)
+				log.camera_write.assign(request.begin() + 8, request.begin() + size);
+			payload.insert(payload.end(), {0x00, 0x00});
+		}
+	}
+	const auto response = command_packet(2, query_type, sequence, payload);
+	expect(::sendto(fd, response.data(), response.size(), 0,
+		reinterpret_cast<sockaddr*>(&console), console_size) == static_cast<ssize_t>(response.size()),
+		"could not answer a media command");
+	return true;
+}
+
+void test_runtime_camera_and_microphone()
+{
+	using namespace std::chrono;
+	const int command_fd = bind_udp("127.0.0.2", 50123);
+	barista::drh::RuntimeTransport transport;
+	std::string error;
+	expect(transport.start({
+		.console_address = "127.0.0.1",
+		.gamepad_address = "127.0.0.2",
+	}, error), error.empty() ? "could not start loopback transport" : error.c_str());
+
+	MediaCommandLog log;
+	const auto keepalive_deadline = steady_clock::now() + seconds(2);
+	while (log.last_uvc.empty() && steady_clock::now() < keepalive_deadline)
+		answer_media_command(command_fd, 100, log);
+	expect(!log.last_uvc.empty(), "transport did not issue the UVC/UAC command");
+	expect(log.last_uvc[4] == 0 && log.last_uvc[16] == 0,
+		"microphone or camera was on before an application asked");
+
+	transport.set_microphone_enabled(true);
+	transport.set_camera_enabled(true);
+	const auto camera_deadline = steady_clock::now() + seconds(3);
+	while (!(log.last_uvc[16] == 1 && log.last_uvc[17] == 0 && log.last_uvc[4] == 1) &&
+		steady_clock::now() < camera_deadline)
+		answer_media_command(command_fd, 100, log);
+	expect(log.last_uvc[4] == 1, "the UVC/UAC request did not turn the microphone on");
+	expect(log.last_uvc[16] == 1 && log.last_uvc[17] == 0,
+		"the UVC/UAC request did not turn the camera on");
+	expect(log.last_uvc[21] == 0x80 && log.last_uvc[28] == 0x70 && log.last_uvc[34] == 0x03 &&
+		log.last_uvc[36] == 0x2d, "the UVC/UAC request did not carry the console's camera settings");
+	const auto read = std::find(log.generic.begin(), log.generic.end(), std::pair<uint8_t, uint8_t>{4, 9});
+	const auto write = std::find(log.generic.begin(), log.generic.end(), std::pair<uint8_t, uint8_t>{4, 8});
+	expect(read != log.generic.end() && write != log.generic.end() && read < write,
+		"the camera start-up did not read and then write the system value");
+	expect(log.camera_write == std::vector<uint8_t>{0x7e, 0x01, 0x00, 0x08, 0x00, 0x40, 0x04, 0x08,
+		0x00, 0x00, 0x00, 0x04, 0x00, 0x02, 0x0f, 0xbc},
+		"the camera start-up wrote a different value than the real console");
+
+	// While the camera runs the GamePad reports it on; turning it off must not
+	// echo that back.
+	transport.set_camera_enabled(false);
+	const auto off_deadline = steady_clock::now() + seconds(3);
+	while (log.last_uvc[16] != 0 && steady_clock::now() < off_deadline)
+		answer_media_command(command_fd, 100, log);
+	expect(log.last_uvc[16] == 0, "the UVC/UAC request did not turn the camera off");
+	expect(log.last_uvc[4] == 1, "turning the camera off turned the microphone off");
+
+	transport.stop();
+	::close(command_fd);
+}
 }
 
 int main()
@@ -318,6 +431,7 @@ int main()
 	expect(state_machine.state().phase == barista::drh::SessionPhase::Idle, "phase should return to idle");
 
 	test_runtime_keepalive();
+	test_runtime_camera_and_microphone();
 
 	std::cout << "drc_host_tests: ok\n";
 	return 0;
