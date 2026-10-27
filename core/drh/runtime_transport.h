@@ -84,6 +84,14 @@ public:
 	// Queue a peripheral command on the transport worker. The GamePad accepts
 	// five LCD levels, where 1 is dimmest and 5 is brightest.
 	void set_lcd_brightness(uint8_t level);
+	// Turn the GamePad's camera and microphone on or off, as the real console
+	// does: the camera after two system-service commands, both through the
+	// UVC/UAC request. Their media arrive through receive(): camera video on
+	// RuntimeChannel::Video and microphone audio on RuntimeChannel::Audio, which
+	// drh/gamepad_media.h decodes. Until either is called the request follows
+	// the GamePad's reply, as before.
+	void set_camera_enabled(bool enabled);
+	void set_microphone_enabled(bool enabled);
 	// Best available reading of the AP TSF clock, in microseconds. A sysfs TSF
 	// exporter is preferred, followed by radiotap samples from the configured
 	// monitor interface. It is zero-based only when neither source is available.

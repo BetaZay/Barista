@@ -237,6 +237,28 @@ std::vector<uint8_t> BuildLcdBrightnessCommand(uint8_t level)
 		0x00, 0x00, 0x00, 0x01, static_cast<uint8_t>(std::clamp<int>(level, 1, 5))};
 }
 
+// The real console's camera start-up: it reads a system-service value
+// (method 9; the GamePad answered 0002 07de) and writes it back as 0002 0fbc
+// (method 8) before it sets the camera bits of the UVC/UAC request. Observed
+// with a Wii U opening its camera; the value's meaning is unknown.
+std::vector<uint8_t> BuildCameraReadCommand()
+{
+	return {0x7e, 0x01, 0x00, 0x08, 0x00, 0x40, 0x04, 0x09, 0x00, 0x00, 0x00, 0x00};
+}
+
+std::vector<uint8_t> BuildCameraWriteCommand()
+{
+	return {0x7e, 0x01, 0x00, 0x08, 0x00, 0x40, 0x04, 0x08, 0x00, 0x00, 0x00, 0x04,
+		0x00, 0x02, 0x0f, 0xbc};
+}
+
+// UVC/UAC request bytes 18-47, the camera's image settings, as the real
+// console sends them while its camera is open. With them left at zero the
+// camera runs but every frame is black.
+constexpr std::array<uint8_t, 30> kConsoleCameraSettings{
+	0x00, 0x02, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x70, 0x00, 0x00, 0x00, 0x40,
+	0x40, 0x03, 0x00, 0x2d, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
 std::vector<uint8_t> BuildUvcUacQuery()
 {
 	std::vector<uint8_t> payload(48);
@@ -273,9 +295,18 @@ enum class CommandKind
 	UicConfig,
 	UvcUac,
 	LcdBrightness,
+	CameraSetup,
 };
 
-bool ValidateGenericReply(std::span<const uint8_t> payload, uint8_t method,
+// A media switch an application set, or Unset to follow the GamePad's reply.
+enum class MediaSwitch : int8_t
+{
+	Unset = -1,
+	Off = 0,
+	On = 1,
+};
+
+bool ValidateGenericReply(std::span<const uint8_t> payload, uint8_t service, uint8_t method,
 	size_t expected_inner_size, std::string& reason)
 {
 	if (payload.size() != 12 + expected_inner_size)
@@ -284,7 +315,7 @@ bool ValidateGenericReply(std::span<const uint8_t> payload, uint8_t method,
 			std::to_string(12 + expected_inner_size) + ")";
 		return false;
 	}
-	if (payload[0] != 0x7e || payload[1] != 0x01 || payload[6] != 0x05 ||
+	if (payload[0] != 0x7e || payload[1] != 0x01 || payload[6] != service ||
 		payload[7] != method || payload[8] != 0 || payload[9] != 0)
 	{
 		reason = "generic-command header mismatch";
@@ -304,10 +335,16 @@ bool ValidateCommandReply(CommandKind kind, std::span<const uint8_t> payload,
 {
 	if (kind == CommandKind::UicConfig)
 	{
-		return ValidateGenericReply(payload, 0x06, 0x304, reason);
+		return ValidateGenericReply(payload, 0x05, 0x06, 0x304, reason);
 	}
 	if (kind == CommandKind::LcdBrightness)
-		return ValidateGenericReply(payload, 0x14, 0, reason);
+		return ValidateGenericReply(payload, 0x05, 0x14, 0, reason);
+	if (kind == CommandKind::CameraSetup)
+	{
+		if (payload.size() > 7 && payload[7] == 0x09)
+			return ValidateGenericReply(payload, 0x04, 0x09, 4, reason);
+		return ValidateGenericReply(payload, 0x04, 0x08, 0, reason);
+	}
 	if (payload.size() != 16)
 	{
 		reason = "UVC/UAC reply size " + std::to_string(payload.size()) + " (expected 16)";
@@ -317,7 +354,7 @@ bool ValidateCommandReply(CommandKind kind, std::span<const uint8_t> payload,
 }
 
 void SynchronizeUvcUacRequest(std::vector<uint8_t>& request,
-	std::span<const uint8_t> response)
+	std::span<const uint8_t> response, MediaSwitch microphone, MediaSwitch camera)
 {
 	// Compatibility experiment: the real console changes byte 0 from 0 to 1
 	// after its first exchange. Its precise meaning remains unconfirmed.
@@ -326,11 +363,23 @@ void SynchronizeUvcUacRequest(std::vector<uint8_t>& request,
 	// authenticated real-console capture (unlike the old libdrc request code).
 	const uint16_t mic_volume = ReadLe16(response.data());
 	const uint16_t mic_jack_volume = ReadLe16(response.data() + 2);
-	request[4] = response[12] != 0;
+	request[4] = microphone == MediaSwitch::Unset ? response[12] != 0 : microphone == MediaSwitch::On;
 	WriteLe16(request.data() + 6, mic_volume);
 	WriteLe16(request.data() + 8, mic_jack_volume);
 	request[16] = response[13];
 	request[17] = response[14] != 0;
+	// The camera runs with byte 16 set, 17 clear and the console's image
+	// settings, as the real console sends once its camera is open. While it
+	// runs the GamePad reports byte 13 as set, so turning it off must clear
+	// byte 16 rather than echo the reply.
+	if (camera == MediaSwitch::On)
+	{
+		request[16] = 1;
+		request[17] = 0;
+		std::copy(kConsoleCameraSettings.begin(), kConsoleCameraSettings.end(), request.begin() + 18);
+	}
+	else if (camera == MediaSwitch::Off)
+		request[16] = 0;
 }
 
 enum class CommandStage
@@ -477,6 +526,9 @@ public:
 		m_next_sequence = 0;
 		m_brightness_request_generation.store(0);
 		m_brightness_completed_generation = 0;
+		m_camera_state = CameraState::Off;
+		m_applied_camera = MediaSwitch::Unset;
+		m_applied_microphone = MediaSwitch::Unset;
 		m_clock_origin = std::chrono::steady_clock::now();
 		const auto now = std::chrono::steady_clock::now();
 		m_command_transactions = {{
@@ -485,6 +537,8 @@ public:
 			{.kind = CommandKind::UvcUac, .query_type = 1,
 				.payload = BuildUvcUacQuery(), .next_due = now},
 			{.kind = CommandKind::LcdBrightness, .query_type = 0,
+				.next_due = std::chrono::steady_clock::time_point::max()},
+			{.kind = CommandKind::CameraSetup, .query_type = 0,
 				.next_due = std::chrono::steady_clock::time_point::max()},
 		}};
 		m_uic_response.clear();
@@ -617,6 +671,16 @@ public:
 		++m_brightness_request_generation;
 	}
 
+	void set_camera_enabled(bool enabled)
+	{
+		m_requested_camera.store(enabled ? MediaSwitch::On : MediaSwitch::Off);
+	}
+
+	void set_microphone_enabled(bool enabled)
+	{
+		m_requested_microphone.store(enabled ? MediaSwitch::On : MediaSwitch::Off);
+	}
+
 	uint32_t timestamp_us() const
 	{
 		if (m_ap_clock)
@@ -703,6 +767,7 @@ private:
 			service_command(m_command_transactions[0], now, m_uic_reply_seen.load());
 			service_command(m_command_transactions[1], now, false);
 			service_brightness(now);
+			service_media(now);
 			if (m_protocol_ready.load() && last_protocol_packet != steady_clock::time_point{} &&
 				now - last_protocol_packet > seconds(3))
 			{
@@ -712,6 +777,7 @@ private:
 				m_uvc_uac_reply_seen.store(false);
 				m_waiting_for_streaming.store(true);
 				m_disconnected_event.store(true);
+				m_camera_state = CameraState::Off;
 				queue_status("DRC protocol traffic timed out");
 			}
 		}
@@ -858,11 +924,26 @@ private:
 			else if (transaction->kind == CommandKind::UvcUac)
 			{
 				m_uvc_uac_response.assign(response.begin(), response.end());
-				SynchronizeUvcUacRequest(transaction->payload, response);
+				SynchronizeUvcUacRequest(transaction->payload, response, m_applied_microphone,
+					m_applied_camera);
 				++m_uvc_uac_replies;
 				if (!m_uvc_uac_reply_seen.exchange(true))
 					queue_status("UVC/UAC keepalive synchronized; media may start");
 				maybe_mark_session_ready();
+			}
+			else if (transaction->kind == CommandKind::CameraSetup)
+			{
+				if (m_camera_state == CameraState::Reading)
+				{
+					m_camera_state = CameraState::Writing;
+					transaction->payload = BuildCameraWriteCommand();
+					transaction->next_due = now;
+				}
+				else if (m_camera_state == CameraState::Writing)
+				{
+					m_camera_state = CameraState::On;
+					transaction->next_due = std::chrono::steady_clock::time_point::max();
+				}
 			}
 			else if (transaction->kind == CommandKind::LcdBrightness)
 			{
@@ -923,6 +1004,47 @@ private:
 			transaction.next_due = now;
 		}
 		service_command(transaction, now, false);
+	}
+
+	// Runs the camera start-up commands and keeps the UVC/UAC request in step
+	// with the camera and microphone switches.
+	void service_media(std::chrono::steady_clock::time_point now)
+	{
+		const MediaSwitch camera = m_requested_camera.load();
+		CommandTransaction& setup = m_command_transactions[3];
+		if (camera == MediaSwitch::On && m_camera_state == CameraState::Off && m_uvc_uac_reply_seen.load())
+		{
+			m_camera_state = CameraState::Reading;
+			setup.payload = BuildCameraReadCommand();
+			setup.stage = CommandStage::Idle;
+			setup.next_due = now;
+			queue_status("GamePad camera: starting");
+		}
+		else if (camera != MediaSwitch::On && m_camera_state != CameraState::Off)
+		{
+			m_camera_state = CameraState::Off;
+			setup.stage = CommandStage::Idle;
+			setup.next_due = std::chrono::steady_clock::time_point::max();
+		}
+		if (m_camera_state == CameraState::Reading || m_camera_state == CameraState::Writing)
+			service_command(setup, now, false);
+
+		const MediaSwitch applied_camera = m_camera_state == CameraState::On ? MediaSwitch::On :
+			camera == MediaSwitch::Unset ? MediaSwitch::Unset : MediaSwitch::Off;
+		const MediaSwitch microphone = m_requested_microphone.load();
+		if (applied_camera == m_applied_camera && microphone == m_applied_microphone)
+			return;
+		if (applied_camera != m_applied_camera)
+			queue_status(applied_camera == MediaSwitch::On ? "GamePad camera: on" : "GamePad camera: off");
+		if (microphone != m_applied_microphone)
+			queue_status(microphone == MediaSwitch::On ? "GamePad microphone: on" : "GamePad microphone: off");
+		m_applied_camera = applied_camera;
+		m_applied_microphone = microphone;
+		CommandTransaction& uvc = m_command_transactions[1];
+		if (!m_uvc_uac_response.empty())
+			SynchronizeUvcUacRequest(uvc.payload, m_uvc_uac_response, microphone, applied_camera);
+		if (uvc.stage == CommandStage::Idle)
+			uvc.next_due = now;
 	}
 
 	void service_command(CommandTransaction& transaction,
@@ -1256,7 +1378,19 @@ private:
 	std::chrono::steady_clock::time_point m_last_input_report{};
 	std::chrono::steady_clock::time_point m_clock_origin{};
 	uint16_t m_next_sequence = 0;
-	std::array<CommandTransaction, 3> m_command_transactions{};
+	std::array<CommandTransaction, 4> m_command_transactions{};
+	enum class CameraState
+	{
+		Off,
+		Reading,
+		Writing,
+		On,
+	};
+	CameraState m_camera_state = CameraState::Off;
+	std::atomic<MediaSwitch> m_requested_camera{MediaSwitch::Unset};
+	std::atomic<MediaSwitch> m_requested_microphone{MediaSwitch::Unset};
+	MediaSwitch m_applied_camera = MediaSwitch::Unset;
+	MediaSwitch m_applied_microphone = MediaSwitch::Unset;
 	std::atomic_uint8_t m_requested_brightness{3};
 	std::atomic_uint64_t m_brightness_request_generation{0};
 	uint64_t m_brightness_completed_generation = 0;
@@ -1280,5 +1414,7 @@ bool RuntimeTransport::consume_video_resync_event() { return m_impl->consume_vid
 RuntimeTransportStats RuntimeTransport::stats() const { return m_impl->stats(); }
 void RuntimeTransport::report_status(std::string status) { m_impl->report_status(std::move(status)); }
 void RuntimeTransport::set_lcd_brightness(uint8_t level) { m_impl->set_lcd_brightness(level); }
+void RuntimeTransport::set_camera_enabled(bool enabled) { m_impl->set_camera_enabled(enabled); }
+void RuntimeTransport::set_microphone_enabled(bool enabled) { m_impl->set_microphone_enabled(enabled); }
 uint32_t RuntimeTransport::timestamp_us() const { return m_impl->timestamp_us(); }
 }
