@@ -1,5 +1,7 @@
 #include "drh/runtime_transport.h"
 #include "ap_tsf_clock.h"
+#include "monitor_tsf_clock.h"
+#include "monitor_tsf_estimator.h"
 #include "monitor_tsf_sample.h"
 
 #include <array>
@@ -694,13 +696,8 @@ public:
 		// Publish/read the hardware value and its host time as one sample.
 		// Independent atomics can combine values from two different packets.
 		std::lock_guard clock_lock(m_clock_mutex);
-		const uint64_t sampled_tsf = m_monitor_tsf;
-		const int64_t sampled_at = m_monitor_tsf_sampled_at;
-		if (sampled_tsf != 0 && sampled_at != 0)
-		{
-			const int64_t elapsed = std::max<int64_t>(0, SteadyMicroseconds() - sampled_at);
-			return static_cast<uint32_t>(sampled_tsf + static_cast<uint64_t>(elapsed));
-		}
+		if (const auto tsf = m_monitor_clock.Timestamp(SteadyMicroseconds()))
+			return *tsf;
 		using namespace std::chrono;
 		return static_cast<uint32_t>(duration_cast<microseconds>(steady_clock::now() - m_clock_origin).count());
 	}
@@ -717,6 +714,7 @@ private:
 		using namespace std::chrono;
 		auto last_protocol_packet = steady_clock::time_point{};
 		auto next_clock_sample = steady_clock::now();
+		auto next_clock_report = steady_clock::now();
 		bool clock_failure_reported = false;
 		while (!m_stop.load())
 		{
@@ -764,6 +762,19 @@ private:
 			}
 
 			const auto now = steady_clock::now();
+#ifdef BARISTA_EXPERIMENTAL_MONITOR_CLOCK
+			if (m_tsf_monitor_fd >= 0 && now >= next_clock_report)
+			{
+				std::lock_guard clock_lock(m_clock_mutex);
+				const auto age = m_monitor_clock.SampleAgeUs(SteadyMicroseconds());
+				queue_status("Monitor clock estimator: samples=" + std::to_string(m_monitor_clock.Accepted()) +
+					" rejected=" + std::to_string(m_monitor_clock.Rejected()) +
+					" sample_age_us=" + std::to_string(age) +
+					" correction_us=" + std::to_string(m_monitor_clock.CorrectionUs()) +
+					" state=" + (age < 0 ? "waiting" : age > 1000000 ? "holdover" : "tracking"));
+				next_clock_report = now + seconds(5);
+			}
+#endif
 			service_command(m_command_transactions[0], now, m_uic_reply_seen.load());
 			service_command(m_command_transactions[1], now, false);
 			service_brightness(now);
@@ -1244,6 +1255,11 @@ private:
 		}
 		queue_status("Media clock: waiting for hardware TSF on " +
 			m_config.tsf_monitor_interface + "; kernel RX timestamps remove socket queue delay");
+#ifdef BARISTA_EXPERIMENTAL_MONITOR_CLOCK
+		queue_status("Media clock experiment: least-delay monitor estimator; window=1000ms buckets=100ms downward_slew=1000ppm jump_limit=10000us");
+#else
+		queue_status("Media clock: latest monitor sample (baseline)");
+#endif
 	}
 
 	void drain_tsf_monitor()
@@ -1296,11 +1312,9 @@ private:
 			bool first_sample;
 			{
 				std::lock_guard clock_lock(m_clock_mutex);
-				if (m_monitor_tsf != 0 && (*tsf <= m_monitor_tsf || *sampledAt <= m_monitor_tsf_sampled_at))
+				first_sample = !m_monitor_clock.Initialized();
+				if (!m_monitor_clock.Update(*tsf, *sampledAt))
 					continue;
-				first_sample = m_monitor_tsf == 0;
-				m_monitor_tsf = *tsf;
-				m_monitor_tsf_sampled_at = *sampledAt;
 			}
 			if (first_sample)
 				queue_status("Media clock synchronized to hardware TSF=" + std::to_string(*tsf));
@@ -1324,8 +1338,7 @@ private:
 		m_tsf_monitor_fd = -1;
 		m_ap_clock.reset();
 		std::lock_guard clock_lock(m_clock_mutex);
-		m_monitor_tsf = 0;
-		m_monitor_tsf_sampled_at = 0;
+		m_monitor_clock = {};
 	}
 
 	RuntimeTransportConfig m_config;
@@ -1340,8 +1353,11 @@ private:
 	int m_tsf_monitor_fd = -1;
 	std::unique_ptr<ApTsfClock> m_ap_clock;
 	mutable std::mutex m_clock_mutex;
-	uint64_t m_monitor_tsf = 0;
-	int64_t m_monitor_tsf_sampled_at = 0;
+#ifdef BARISTA_EXPERIMENTAL_MONITOR_CLOCK
+	MonitorTsfEstimator m_monitor_clock;
+#else
+	MonitorTsfClock m_monitor_clock;
+#endif
 	std::mutex m_lifecycle_mutex;
 	std::thread m_thread;
 	std::atomic_bool m_stop{false};

@@ -211,6 +211,29 @@ Detailed measurements are in [the experiment report](gamepad-recovery-experiment
   zero observed corruption in this run, while leaving the root cause open.
   Saved engine: `/tmp/barista-engine-zero-motion-retained-20261004`.
 
+- [x] **RTL8822BU partial-video investigation — inconclusive for the reported fault.**
+  The remote host capture contains complete, checksum-valid video with matching
+  formats, but no radio clock/delivery evidence. Compare against the retained
+  working RTL8821AU capture; do not infer GamePad acceptance from offline decode.
+  A separate 32-bit monitor-TSF rollover bug was reproduced and corrected with
+  deterministic coverage. No changed engine was installed and no video setting
+  was changed. This is not a fix for the short remote failing run. Details are
+  in the report's 2026-10-24 investigation entry.
+
+- [x] **Monitor receive-delay estimator — local USB non-regression; compatibility inconclusive.** User
+  explicitly requested trying a clock change for adapters that pair but show no
+  video, starting with the locally working USB adapter. Select the least-delayed
+  recent RX TSF/kernel-time anchor, expire old samples to follow drift, bound
+  downward correction, reject large jumps and report sample quality. This is
+  distinct from the earlier scheduled-format phase trial; no encoder, pacing or
+  recovery changes. Compile-time opt-in and installed binary backup provide
+  rollback. Constant latency/wrong clock domains remain unresolved. See the
+  2026-10-27 report entry for settings, limits and evidence. All 61 Release
+  tests pass after correcting a stale Xvfb cache path. Completed capture:
+  `20261027-174256-abunvvgk`; user: "Video works about the same." Estimated
+  format age median/p99 1,695/2,032 us. Keep opt-in for a failing-adapter trial;
+  no compatibility fix is claimed from the working USB comparison.
+
 Further candidates need a concrete hypothesis before becoming trials:
 
 - Content-dependent transition load: colored fades and sliding graphics,

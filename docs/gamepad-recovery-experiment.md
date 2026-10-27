@@ -920,3 +920,254 @@ all gone” to essentially zero observed corruption in that run. Keep the saved
 zero-motion engine as the comparison baseline. This is a playback observation
 for this bounded session, not proof of the exact underlying defect or a claim
 that all future content will be artifact-free.
+
+## RTL8822BU partial-video investigation (2026-10-24 UTC)
+
+Status: **inconclusive for the reported partial/blank video**. No new hardware
+trial, engine installation, encoder change, pacing change or driver change.
+The remote user reports working audio/input after resolving a firewall issue,
+but only a quarter/half of the picture or a blank screen. The local user
+reports that both their USB and onboard adapters work.
+
+Remote evidence: `barista-wifi-info (1).txt` and
+`run-20261024-034526-a6461224.log` in Downloads. Realtek RTL8822BU
+(`rtw88_8822bu`, in-tree, firmware 30.20.0) on CachyOS 7.3.0-4-cachyos,
+USB 480 Mbps, AP channel 36/HT20, monitor-derived media clock. The independent
+Intel AX201 uses `iwlwifi`/`iwlmvm`, firmware 77.563a6e92.0, and is connected
+to home Wi-Fi on channel 100. Country is US; channel 36 is no longer marked
+NO-IR in this snapshot. That does not prove Intel AP startup will succeed.
+WARP/Tailscale interfaces exist and the saved pairing MAC is also still in
+use by Intel. Neither observation establishes the video fault. The filtered
+kernel log contains no Realtek firmware crash. `Power save: on` alone is not
+proof of AP sleep. Realtek uses the existing global RTS fallback and requests
+fixed HT20 MCS6 long GI; command success does not verify over-air behavior.
+
+Remote host capture: `/home/isaiah/Downloads/barista-video-check.pcap`, SHA-256
+`8d5dc53d2512d321ae6fcdba3e4ad8b4925eb87d384d983a8818d3ec1d5c1f48`.
+It starts at 2026-10-24 04:07:23.631162 UTC and spans 19.806586 seconds,
+so it is not the same session as the earlier supplied run log.
+
+- 4,453 video packets: 890 complete five-chunk frames plus one final
+  three-chunk frame at the recording boundary. No video sequence gaps,
+  payload-length errors or observed IP fragmentation. Maximum video UDP
+  payload is 1,399 bytes in this idle-image sample.
+- All 891 observed frame timestamps have a matching format. First video
+  follows its format by median 5,093 us, maximum 5,270 us. Final video follows
+  by median 16,084 us, maximum 16,203 us. No frame crosses the next format
+  transmission. These are host observations, not radio arrival deadlines.
+- All 4,453 video and 3,473 audio/format packets have valid IPv4 and UDP
+  checksums. The 891 recovery requests have valid IPv4 checksums and omitted
+  UDP checksums, which IPv4 permits.
+- Offline reconstruction skips two initial P frames before its first IDR,
+  then decodes 296 complete IDRs and 592 P frames with no FFmpeg errors. The
+  extracted first image shows the complete Barista idle logo. This does not
+  prove physical GamePad decoder acceptance.
+- 891 recovery requests in 19.81 seconds, approximately 45 per second.
+  The observed I/P/P pattern plus format-only recovery slots produces about
+  45 encoded frames and 15 IDRs per second. Requests are not visible-error
+  counts. Do not restore the rejected requested-IDR cooldown.
+
+Analysis artifacts: `/tmp/barista-video-check-analysis/` contains
+`packet-summary.json`, `analyze.py`, `reconstructed.h264`, `reconstruction.txt`,
+the empty `decode-stderr.txt`, and `first-frame.png`.
+
+Working USB reference: `/var/lib/barista-captures/20261004-180602-jo9dg6o_`.
+Its service report identifies `rtw_8821au`. The existing radio analysis measures
+format age relative to nearby AP beacons: median 1,794 us, p99 2,657 us,
+maximum 18,791 us, two of 5,306 observations at least 8 ms. The user reported
+essentially no corruption. This reference contains interactive game content,
+not the remote idle logo; do not treat packet counts/bitrate as a controlled
+comparison. The local onboard `rtw89_8852be` has a separate direct AP-register
+clock path. No equivalent clock-age measurement is possible from the remote
+host-only capture.
+
+The remaining concrete hypotheses are a monitor-to-AP clock offset/USB receive
+delay, or changed delivery after the host capture point. Barista corrects for
+monitor socket queue delay using kernel receipt timestamps; that cannot measure
+earlier device/USB buffering. A simultaneous independent-radio/host capture is
+needed to estimate format age, transmission delay and authenticated delivery.
+Missing sniffer observations do not prove loss; Block ACK does not prove decode.
+The transport binds its sockets to the selected adapter with `SO_BINDTODEVICE`,
+so simple default-route diversion by another interface is less compelling than
+an unmeasured timing/delivery issue; firewall and policy interactions remain
+unverified. No VPN changes were made during this investigation.
+
+### Separate monitor counter rollover correction
+
+Status: **corrected with deterministic coverage; not established as the remote
+video cause**. Upstream `rtw88` copies the 32-bit RX descriptor `tsf_low` into
+the 64-bit radiotap timestamp
+([upstream RX implementation](https://github.com/torvalds/linux/blob/master/drivers/net/wireless/realtek/rtw88/rx.c)).
+The prior Barista comparison rejected every lower timestamp, so fresh samples
+after the 2^32-us rollover (about 71.6 minutes) were rejected while the old
+anchor continued to extrapolate. The short failing run does not demonstrate
+this rollover, and the captured timestamps continue to vary with new anchors.
+
+`MonitorTsfClock` now handles serial ordering for zero-extended 32-bit samples,
+retains strict forward ordering for full-width samples, and represents a valid
+zero sample independently of initialization. Kernel receive-time anchoring and
+the existing clock mutex remain intact. Tests cover wrap through zero, updates
+after wrap, late pre-wrap/duplicate/backward samples, reordered receipt times,
+full-width counters, ambiguous half-range gaps and session reset. Rebuilding
+the test with the old comparison fails with `32-bit RX counter wrap rejected`.
+No smoothing, clock offset, media settings or recovery policy was changed.
+
+Rollback is the prior monitor sample comparison/storage in
+`runtime_transport.cpp`. The installed engine remains SHA-256
+`9b9be386625eff5ecff175fc31b93aaba5e46f2f8c795e34c653dfaaf80cfba2`.
+Validation: `cmake --build build --parallel 4` succeeded (Debug development
+build); `ctest --test-dir build --output-on-failure` with host socket access
+passed **59/59**, including GUI smoke tests, in 104.48 seconds.
+`git diff --check` passed. No physical playback result is claimed.
+
+
+## Monitor receive-delay estimator compatibility trial (2026-10-27 UTC)
+
+Status: **local USB trial passed without reported regression; failing-adapter
+compatibility remains unproven**. The user
+explicitly requested a timing experiment to improve adapter compatibility,
+even though the earlier scheduled-format phase-smoothing trial did not improve
+playback. First physical comparison is on the locally working RTL8821AU USB
+adapter, at the user's request, before trying the failing RTL8851BE homelab.
+
+The homelab's `pair-20261027-232623-4c9285ed.log` shows WPS success on channel
+44 at 23:27:48.902 and protocol connection at 23:27:53.708. WPA, DHCP, HID input
+and UVC/UAC replies work, but `pad_streaming=waiting` persists. At 23:29:03.949
+it reports 3,055 recovery requests, zero send errors and zero command timeouts.
+The 14 encoder timing reports have zero overruns and maximum encode time
+5,300 us. Observed incoming management frames have RSSI -77 to -82 dBm.
+The user confirms pairing succeeded but there was no video. This establishes
+the symptom, not its cause: loss, clock offset and receive buffering remain
+possible. The first pairing attempt stopped normally before completing its
+channel sweep; the earlier runtime attempt had no saved credentials.
+
+Hypothesis: treating each RX TSF/kernel receipt pair as the latest clock anchor
+makes variable device/driver buffering appear as changes in the AP clock. The
+new `MonitorTsfEstimator` selects the greatest TSF-minus-host-time offset from
+ten 100-ms buckets (roughly 0.9–1.0 seconds of history). With equal clock rates,
+this is the least-delayed observed anchor. Host monotonic time advances between
+samples; bucket expiry follows drift instead of keeping an all-time maximum.
+Downward offset adjustment is limited to 1000 ppm of accepted-sample host time;
+a publication floor prevents backward steps (a correction can briefly hold
+time still). Better samples correct forward immediately. A sample advancing
+more than 10 ms beyond host elapsed time is rejected, along with duplicates,
+reordering, ambiguous half-range intervals and invalid receipt timestamps.
+Both zero-extended 32-bit and full-width counter rollover are covered.
+
+These are experimental limits, not measured GamePad tolerance. A fixed driver
+latency or wrong clock domain remains unobservable from these samples alone.
+A persistent latency increase eventually enters the estimate after old buckets
+expire. Clock reset/large jumps are rejected, not automatically rebased;
+restart the session to acquire a new epoch. Missing samples extrapolate the
+last estimate and report `holdover` after one second; this experiment does not
+add a new media-stop gate. No claim of accurate absolute AP time is made from
+`tracking` status. Logs expose accepted/rejected sample counts, last sample age
+and correction relative to the latest raw sample every five seconds.
+
+Enable with `-DBARISTA_EXPERIMENTAL_MONITOR_CLOCK=ON` in the Release CMake
+configuration. Default is OFF. This compile-time selection survives the
+service's explicit environment construction; verify the live support line
+`Media clock experiment: least-delay monitor estimator`. OFF logs
+`Media clock: latest monitor sample (baseline)`. Direct AP-register and sysfs
+clock paths are unchanged. Preserve the retained zero-motion encoder, preset 5,
+QP32, 1694-byte payloads, kernel RX timestamps, pacing, format/video timestamp
+relationship, immediate recovery and periodic IDRs. The separate existing
+32-bit monitor-counter fix remains present in both configurations.
+
+Before building, saved the installed engine to
+`/tmp/barista-monitor-clock-trial-20261027T233549Z/installed-engine`, SHA-256
+`35da1439d036238cf70c664464f4b917428999f734ce9493d7cf767f57952c1f`.
+The existing Release output is also saved there as `release-engine-before`,
+SHA-256 `fe68fa26a479118163f278d8e2effdc5ccf2b74e90bb2b14695348983560cc93`.
+Rollback is to restore the backed-up installed engine and verify that hash;
+configure the trial build with the option OFF for source-level behavior rollback.
+The old Release cache pointed at an obsolete hostapd pin; it has been updated
+to the documented Vanilla pin `a2f705daa143791180754100194c91714f7e8801`, using
+the existing local dependency checkout as an offline source. Only the engine
+is intended for installation; installed hostapd is not changed by this trial.
+
+Validation so far: standalone estimator tests compile with C++20 and
+`-Wall -Wextra -Werror` and pass. The experiment-enabled Release build and the
+baseline-disabled Debug `drc_host` target both build. First full Release CTest
+run: 59 passed, two X11 capture tests **Not Run**, so the suite failed. The
+cached `BARISTA_XVFB_RUN` pointed to deleted
+`/tmp/barista-xvfb/usr/bin/xvfb-run`; corrected it to installed
+`/usr/bin/xvfb-run` and reran the full suite. No engine was installed before
+resolving this validation failure.
+
+Corrected full Release CTest run: **61/61 passed**, 66.43 seconds, including
+X11 capture and GUI smoke tests. `git diff --check` passes. Installed only
+`build-gamepad-release/app/drcd` through Polkit and verified both hashes:
+`e63065ef333d58f1fc2e229eabfac385e3f3a46206b361d52fa7ab7676a5275b`.
+Logs and trial settings are retained alongside the rollback engine.
+
+First physical attempt: runner logs
+`/tmp/barista-experiment-20261027-173954-uci74h7n`; partial capture
+`/var/lib/barista-captures/20261027-174014-o9aqwr6v`; support log
+`/var/log/barista/support/run-20261027-233954-c1494f93.log`. Confirmed
+`rtw_8821au` on wlan0, channel 149, and the live experimental clock mode line.
+The capture reached READY but the service was stopped at 23:40:19 UTC and
+restarted at 23:40:32, causing the runner's status call to fail before Cemu
+launched. The journal records an orderly stop/restart, not a crash. A separate
+pairing session subsequently started on wlan1. Capture metadata says
+`capture_complete=false`; helper/tcpdump processes exited and its monitor was
+removed. **Inconclusive: no playback comparison from this interrupted attempt.**
+The separate pairing session was left untouched pending user coordination.
+
+The user confirmed the interruption was necessary to re-pair, completed pairing,
+and authorized retrying the USB trial. The re-pairing workflow had replaced the
+installed engine (SHA-256
+`a14ce4bf16502621236961420de7ba352d8362cbf194176275babb23267f7d7d`);
+saved that version as `installed-engine-after-repair` in the same backup folder.
+The Release tree reported no pending build work. Reinstalled the tested trial
+engine and verified SHA-256 `e63065ef333d58f1fc2e229eabfac385e3f3a46206b361d52fa7ab7676a5275b`.
+Second runner log directory: `/tmp/barista-experiment-20261027-174229-v9l25f2_`.
+
+Second capture completed:
+`/var/lib/barista-captures/20261027-174256-abunvvgk`, support log
+`/var/log/barista/support/run-20261027-234229-11f777a4.log`. The first runtime
+startup retried before protocol connection at 23:43:38.302; Cemu launched only
+after that connection. The nominal 90-second capture includes about 67.5 seconds
+of video. Host analysis: 3,922 complete frames plus one boundary frame,
+58.07 fps. All 14 encode timing reports have zero overruns, maximum 8,870 us.
+Last service counters after capture: video=21,184, audio=12,275, UVC replies=69,
+command timeouts=0, send errors=0, streaming=active, recovery requests=194.
+The radio capture contains 182 unique recovery requests; different observation
+intervals mean these are not interchangeable counters.
+
+Authenticated handshake MIC and one rotated PTK verified; 43,712 encrypted
+observations authenticated. Decrypt summary has 972 CCMP authentication failures;
+delivery analysis counts 984 unauthenticated encrypted observations in total.
+Do not use unauthenticated observations as decoded packet evidence. Radio/host
+matching found 3,401 complete video frames, 522 incomplete observed frames and
+3,364 fully Block-ACKed frames. Capture gaps do not establish GamePad loss, and
+Block ACK does not establish decoder acceptance.
+
+Using 691 nearby AP beacons, estimated format age: median 1,695 us, p99 2,032 us,
+maximum 5,591 us, zero negative and zero >=8,000 us among 3,896 formats.
+Format-to-first-video lead: median 5,062 us, p99 5,540 us, maximum 6,017 us.
+Median first/last packet ages were 6,768/17,765 us for IDRs and
+6,761/17,759 us for P frames. Compare the earlier retained USB reference's
+median/p99 format age 1,794/2,657 us cautiously: these are different sessions
+and scene content, not a controlled before/after proof.
+
+The final estimator report has 78,295 accepted samples, 7,378 rejected samples,
+last-sample age 2,432 us and correction 123 us, state=tracking. Rejections include
+duplicates/reordering as well as jump limits; this aggregate does not identify
+their cause. The live experiment-mode line was verified. User comparison:
+**"Video works about the same."** Retain the opt-in experiment for a failing
+adapter comparison; do not claim this fixes RTL8851BE or RTL8822BU video.
+Capture processes and monitors were cleaned up, and the Cemu test instance had
+already exited when checked. The experimental engine remains installed on the
+local machine, with both pre-trial and post-re-pairing backups available.
+
+Preview publication: the user authorized enabling the experiment in DEB, RPM
+and Arch Preview packages and pushing it to main with an `experiment:` subject.
+Rebased onto `e88555c` (camera/microphone support) without conflicts, rebuilt with
+Release and `BARISTA_EXPERIMENTAL_MONITOR_CLOCK=ON`, and reran the full suite:
+**62/62 passed**, 67.25 seconds. Logs:
+`/tmp/barista-monitor-clock-rebase-build.log` and
+`/tmp/barista-monitor-clock-rebase-ctest.log`. This integrated build was not
+installed locally or physically retested; the installed USB trial remains the
+previously recorded binary. Packaging script checks passed (50 tests, one
+expected skip), as did documentation links and PKGBUILD shell syntax.

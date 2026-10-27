@@ -70,6 +70,23 @@ A development build deliberately refuses to let the GUI launch
 writable binaries with root privileges; install the project before trying a
 real radio session.
 
+### Monitor clock compatibility trial
+
+Package builds explicitly enable `BARISTA_EXPERIMENTAL_MONITOR_CLOCK=ON` for
+the monitor receive-delay estimator trial. Ordinary source builds default to
+OFF, preserving the latest-sample clock as a comparison. Set the option
+explicitly when using an existing build directory, since CMake caches it.
+The trial applies only to the monitor clock; direct AP-register and sysfs
+clock paths are unchanged. Its support-log marker is
+`Media clock experiment: least-delay monitor estimator`.
+
+The working local USB comparison showed no reported visual regression. This
+does not establish compatibility with adapters that previously produced no
+video. See [the experiment report](docs/gamepad-recovery-experiment.md) for
+measurements and limitations. Package users should receive the trial through
+their Preview subscription once that build is published, without applying
+source patches or replacing package-owned engine files manually.
+
 ## UI/core-only build
 
 This is useful for UI work or non-Linux development:

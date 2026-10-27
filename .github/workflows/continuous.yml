@@ -132,7 +132,8 @@ jobs:
             qt6-base-dev qt6-svg-dev qt6-multimedia-dev libpipewire-0.3-dev libxcb1-dev libxcb-xfixes0-dev xvfb xauth dbus libfreetype-dev libssl-dev libnl-3-dev libnl-genl-3-dev policykit-1 kmod systemd
       - name: Build and test package
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DBARISTA_VERSION="$BARISTA_VERSION"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DBARISTA_VERSION="$BARISTA_VERSION" -DBARISTA_EXPERIMENTAL_MONITOR_CLOCK=ON
           cmake --build build --parallel 4
           ctest --test-dir build --output-on-failure --parallel 4 --timeout 180
           cpack --config build/CPackConfig.cmake -G DEB -B dist
@@ -178,6 +179,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
             -DBARISTA_VERSION="$BARISTA_VERSION" \
+            -DBARISTA_EXPERIMENTAL_MONITOR_CLOCK=ON \
             -DDRCD_TEST_FFMPEG="$RUNNER_TEMP/barista-test-ffmpeg/bin/ffmpeg"
           cmake --build build --parallel 4
           useradd --create-home tester

@@ -29,6 +29,10 @@ if(BARISTA_BUILD_ENGINE)
     )
     target_include_directories(drc_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(drc_host PUBLIC cxx_std_20)
+    option(BARISTA_EXPERIMENTAL_MONITOR_CLOCK "Use the experimental receive-delay clock estimator" OFF)
+    if(BARISTA_EXPERIMENTAL_MONITOR_CLOCK)
+        target_compile_definitions(drc_host PRIVATE BARISTA_EXPERIMENTAL_MONITOR_CLOCK=1)
+    endif()
 
     add_library(barista_drh_encoder STATIC
         drh/encoder/gamepad_home_menu.cpp
@@ -125,6 +129,10 @@ if(BUILD_TESTING)
         target_include_directories(ap_tsf_clock_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_features(ap_tsf_clock_tests PRIVATE cxx_std_20)
         add_test(NAME ap_tsf_clock_tests COMMAND ap_tsf_clock_tests)
+        add_executable(monitor_tsf_estimator_tests tests/monitor_tsf_estimator_tests.cpp)
+        target_include_directories(monitor_tsf_estimator_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_features(monitor_tsf_estimator_tests PRIVATE cxx_std_20)
+        add_test(NAME monitor_tsf_estimator_tests COMMAND monitor_tsf_estimator_tests)
 
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             add_executable(drc_keyboard_ipc_tests tests/keyboard_ipc_tests.cpp)
