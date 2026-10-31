@@ -1,5 +1,6 @@
 #include "drh/server/interrupt.h"
 #include "drh/server/hostapd_output.h"
+#include "drh/server/hostapd_startup.h"
 #include "api/types.h"
 #include "drh/encoder/media_streamer.h"
 #include "drh/server/session_backend.h"
@@ -2394,6 +2395,7 @@ private:
 	bool WaitForHostapdReady(std::string_view phase, std::chrono::seconds timeout, std::string& error)
 	{
 		auto deadline = std::chrono::steady_clock::now() + timeout;
+		HostapdStartup startup;
 
 		while (std::chrono::steady_clock::now() < deadline)
 		{
@@ -2458,6 +2460,7 @@ private:
 					const auto tail = TailLines(m_hostapd_log, 24);
 					if (!tail.empty())
 						error += " | " + tail;
+					error = startup.FailureMessage(error);
 					return false;
 				}
 			}
@@ -2469,14 +2472,14 @@ private:
 					continue;
 				LogHostapdLine(std::string(phase), line);
 
-				if (line.find("not allowed for AP mode") != std::string::npos &&
-					line.find("NO-IR") != std::string::npos)
+				const auto result = startup.Observe(line);
+				if (result == HostapdStartup::Result::Ready)
+					return true;
+				if (result == HostapdStartup::Result::Failed)
 				{
-					error = "wireless regulatory domain marks the selected AP channel no-IR";
+					error = startup.FailureMessage("hostapd disabled the AP before it became ready");
 					return false;
 				}
-				if (line.find("AP-ENABLED") != std::string::npos || line.find("AP_ENABLED") != std::string::npos)
-					return true;
 				if (line.find("Failed to initialize") != std::string::npos ||
 					line.find("Could not configure driver mode") != std::string::npos ||
 					line.find("Could not set channel") != std::string::npos ||
@@ -2487,6 +2490,7 @@ private:
 					const auto tail = TailLines(m_hostapd_log, 16);
 					if (!tail.empty())
 						error += " (" + tail + ")";
+					error = startup.FailureMessage(error);
 					return false;
 				}
 				if (line.find("NL80211_CMD_STOP_AP") != std::string::npos ||
@@ -2512,11 +2516,12 @@ private:
 					const auto tail = TailLines(m_hostapd_log, 24);
 					if (!tail.empty())
 						error += " (" + tail + ")";
+					error = startup.FailureMessage(error);
 					return false;
 			}
 		}
 
-		error = "timed out waiting for hostapd AP-ENABLED";
+		error = startup.FailureMessage("timed out waiting for hostapd AP-ENABLED");
 		return false;
 	}
 

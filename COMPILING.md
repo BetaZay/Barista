@@ -33,12 +33,14 @@ The first full build clones the pinned Vanilla hostapd source, so it needs
 Internet access. Barista builds the fork with
 `CONFIG_TENDONIN=y`, the ported `0007` HT-advertisement patch (HT
 capabilities, A-MPDU, RIFS, and omission of Extended Capabilities and Supported
-Operating Classes), and `0015` for Nintendo WPS discovery. The latter restores
+Operating Classes), `0014` for a bounded regulatory scan retry after an AP-mode
+channel-selection failure, and `0015` for Nintendo WPS discovery. The latter restores
 Nintendo vendor IEs, WPS 1.0 advertisements, registrar method bits and receive
 parsing that the fork's encryption support alone does not provide. Other legacy
 patches in `third_party/hostapd-drc/patches/` remain inactive. CTest exercises the
 dependency's WPS encoding and parsing with and without `CONFIG_TENDONIN` using
-no radio hardware. Physical pairing and adapter coverage still need hardware
+no radio hardware. A mock-driver test also exercises the regulatory scan helper.
+Physical pairing and adapter coverage still need hardware
 testing. Rebuild and reinstall the bundled hostapd along with Barista when
 updating these patches; replacing only the engine does not update hostapd.
 The DRC x264 source is bundled.

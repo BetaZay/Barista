@@ -34,6 +34,10 @@ testing; that does not establish compatibility for other Intel adapters or
 firmware versions. Two `runtime-qos` tuning calls can report
 `Operation not supported` on this driver and are skipped safely.
 
+The [Intel regulatory investigation](intel-regulatory-investigation.md) records
+the restored AP-mode scan workaround, the regression in the Vanilla hostapd
+migration, and the evidence needed to identify a separate firmware regression.
+
 For additional confirmed and incompatible hardware reports, see
 [Vanilla Wii U's Wireless Compatibility wiki](https://github.com/vanilla-wiiu/vanilla/wiki/Wireless-Compatibility).
 

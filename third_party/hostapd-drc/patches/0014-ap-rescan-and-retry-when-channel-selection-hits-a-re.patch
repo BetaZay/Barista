@@ -1,118 +1,106 @@
-From fe14fbaa88605d4ffc5886d4da99841ed735e676 Mon Sep 17 00:00:00 2001
-From: Barista build <build@barista.invalid>
-Date: Sat, 12 Sep 2026 20:24:19 -0400
-Subject: [PATCH] ap: rescan and retry when channel selection hits a reset
- regdomain
+From: Barista contributors <build@barista.invalid>
+Subject: [PATCH] ap: restore bounded regulatory scan recovery on Vanilla hostapd
 
-Intel iwlwifi LAR firmware reverts to the world-safe "00" regulatory
-domain when the interface changes mode, which happens while hostapd is
-initialising the AP. It only re-adopts a real country after hearing a
-Country IE during a scan, and hostapd reads its channel list before any
-scan occurs, so every 5 GHz channel appears unavailable and channel
-selection fails with "not found from the channel list of the current
-mode" even when the adapter was verified usable moments earlier.
+Port thefriendlyhedgehog's PR #3 recovery to the pinned Vanilla fork. The
+fork switch dropped this patch from the build. Retry channel resolution or
+mode selection once after a successful scan, retaining the original bounded
+wait. A rejected scan fails without waiting or retrying. Normal successful
+startup and builds without CONFIG_TENDONIN keep their existing path.
 
-When resolving the configured channel or selecting the hardware mode
-fails, scan once to let the firmware re-adopt a country and retry. The
-scan is only reached after a failure, so adapters that do not
-self-manage their regulatory domain keep their existing code path and
-pay no startup delay.
----
- src/ap/hostapd.c | 62 ++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 62 insertions(+)
+The firmware remains authoritative; this does not clear regulatory flags.
 
 diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
-index a05de030d..2bc454026 100644
 --- a/src/ap/hostapd.c
 +++ b/src/ap/hostapd.c
-@@ -2139,11 +2139,59 @@ static void hostapd_set_6ghz_sec_chan(struct hostapd_iface *iface)
- }
- 
- 
+@@ -40,6 +40,9 @@
+ #include "hw_features.h"
+ #include "wpa_auth_glue.h"
+ #include "ap_drv_ops.h"
 +#ifdef CONFIG_TENDONIN
-+/*
-+ * Self-managed-regulatory drivers (Intel iwlwifi and its LAR firmware) fall
-+ * back to the restrictive "00" world domain whenever the interface changes
-+ * mode, which is exactly what happens while hostapd is bringing the interface
-+ * up as an AP. The firmware only re-adopts a real country once it hears a
-+ * Country IE from a nearby AP during a scan, and hostapd otherwise reads its
-+ * channel list before any scan has happened - so every 5 GHz channel looks
-+ * unavailable and channel selection fails with "not found from the channel
-+ * list of the current mode".
-+ *
-+ * Kick off one scan and give the firmware a moment to apply the regulatory
-+ * update, so the caller can re-read the channel list. This runs only after
-+ * channel selection has already failed, which keeps it off the path entirely
-+ * for drivers that do not self-manage their regulatory domain.
-+ */
-+static void hostapd_regulatory_prescan(struct hostapd_iface *iface)
-+{
-+	struct hostapd_data *hapd = iface->bss[0];
-+	struct wpa_driver_scan_params params;
-+	int i;
-+
-+	if (!hapd)
-+		return;
-+
-+	os_memset(&params, 0, sizeof(params));
-+	if (hostapd_driver_scan(hapd, &params) < 0) {
-+		wpa_printf(MSG_DEBUG,
-+			   "regulatory-prescan: could not start scan; continuing");
-+		return;
-+	}
-+
-+	/* The scan itself is asynchronous and its results are irrelevant here;
-+	 * only the regulatory-domain side effect matters. */
-+	for (i = 0; i < 60; i++)
-+		os_sleep(0, 100000);
-+	wpa_printf(MSG_DEBUG, "regulatory-prescan: done");
-+}
++#include "regulatory_prescan.h"
 +#endif /* CONFIG_TENDONIN */
-+
-+
+ #include "ap_config.h"
+ #include "p2p_hostapd.h"
+ #include "gas_serv.h"
+@@ -2286,6 +2289,11 @@
+
  static int setup_interface2(struct hostapd_iface *iface)
  {
 +#ifdef CONFIG_TENDONIN
 +	int prescan_done = 0;
-+#endif /* CONFIG_TENDONIN */
 +
- 	iface->wait_channel_update = 0;
- 	iface->is_no_ir = false;
- 
-+#ifdef CONFIG_TENDONIN
 +retry_after_prescan:
 +#endif /* CONFIG_TENDONIN */
- 	if (hostapd_get_hw_features(iface)) {
- 		/* Not all drivers support this yet, so continue without hw
- 		 * feature data. */
-@@ -2157,6 +2205,13 @@ static int setup_interface2(struct hostapd_iface *iface)
+-	iface->wait_channel_update = 0;
+-	iface->is_no_ir = false;
++	iface->wait_channel_update = 0;
++	iface->is_no_ir = false;
+
+@@ -2302,6 +2310,10 @@
  		iface->is_ch_switch_dfs = false;
- 
+
  		ret = configured_fixed_chan_to_freq(iface);
 +#ifdef CONFIG_TENDONIN
-+		if (ret < 0 && !prescan_done) {
-+			prescan_done = 1;
-+			hostapd_regulatory_prescan(iface);
++		if (ret < 0 && hostapd_regulatory_prescan(iface, &prescan_done))
 +			goto retry_after_prescan;
-+		}
 +#endif /* CONFIG_TENDONIN */
  		if (ret < 0)
  			goto fail;
- 
-@@ -2169,6 +2224,13 @@ static int setup_interface2(struct hostapd_iface *iface)
+
+@@ -2314,6 +2326,10 @@
  		}
- 
+
  		ret = hostapd_select_hw_mode(iface);
 +#ifdef CONFIG_TENDONIN
-+		if (ret < 0 && !prescan_done) {
-+			prescan_done = 1;
-+			hostapd_regulatory_prescan(iface);
++		if (ret < 0 && hostapd_regulatory_prescan(iface, &prescan_done))
 +			goto retry_after_prescan;
-+		}
 +#endif /* CONFIG_TENDONIN */
  		if (ret < 0) {
  			wpa_printf(MSG_ERROR, "Could not select hw_mode and "
  				   "channel. (%d)", ret);
--- 
-2.55.0
-
+diff --git a/src/ap/regulatory_prescan.h b/src/ap/regulatory_prescan.h
+new file mode 100644
+--- /dev/null
++++ b/src/ap/regulatory_prescan.h
+@@ -0,0 +1,41 @@
++/*
++ * Recover channel availability after switching to AP mode.
++ * This software may be distributed under the terms of the BSD license.
++ * See README for more details.
++ */
++
++#ifndef REGULATORY_PRESCAN_H
++#define REGULATORY_PRESCAN_H
++
++/*
++ * PR #3 observed that a scan after the AP-mode switch restored channels on
++ * an AX200. Ask the driver to scan once, then re-read its channel list.
++ * This cannot override firmware restrictions or guarantee recovery.
++ * Kept in a header so the same helper can be tested with a mock driver.
++ */
++static int hostapd_regulatory_prescan(struct hostapd_iface *iface,
++				    int *prescan_done)
++{
++	struct hostapd_data *hapd = iface->bss[0];
++	struct wpa_driver_scan_params params;
++
++	if (*prescan_done || !hapd)
++		return 0;
++	*prescan_done = 1;
++	os_memset(&params, 0, sizeof(params));
++	if (hostapd_driver_scan(hapd, &params) < 0) {
++		wpa_printf(MSG_INFO,
++			   "regulatory-prescan: could not start scan");
++		return 0;
++	}
++
++	/* Retain the bounded six-second wait from the tested PR #3 workaround.
++	 * The kernel/firmware update channels independently of our event loop.
++	 * An empty SSID list requests a passive scan; do not override NO-IR. */
++	wpa_printf(MSG_INFO, "regulatory-prescan: waiting for channel update");
++	os_sleep(6, 0);
++	wpa_printf(MSG_INFO, "regulatory-prescan: rechecking channels");
++	return 1;
++}
++
++#endif /* REGULATORY_PRESCAN_H */

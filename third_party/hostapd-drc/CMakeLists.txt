@@ -8,10 +8,11 @@ set(drc_hostapd_root "${CMAKE_CURRENT_BINARY_DIR}")
 set(drc_hostapd_source "${drc_hostapd_root}/src")
 set(drc_hostapd_binary "${drc_hostapd_root}/bin/drc-hostapd")
 set(drc_hostapd_cli_binary "${drc_hostapd_root}/bin/drc-hostapd_cli")
-# The fork supplies Nintendo crypto, but still needs the Wii U HT and WPS
-# advertisement/receive compatibility patches.
+# The fork supplies Nintendo crypto, but still needs the Wii U HT/WPS
+# compatibility patches and PR #3's AP-mode regulatory scan recovery.
 set(drc_hostapd_patches
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/0007-hostapd-match-Wii-U-HT-advertisement.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/patches/0014-ap-rescan-and-retry-when-channel-selection-hits-a-re.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/patches/0015-restore-Nintendo-WPS-discovery.patch")
 file(GENERATE OUTPUT "${drc_hostapd_root}/build-inputs.txt"
     CONTENT "${DRC_HOSTAPD_REPOSITORY}\n${DRC_HOSTAPD_TAG}\n")
@@ -40,6 +41,13 @@ add_custom_target(drc_hostapd ALL
     DEPENDS "${drc_hostapd_binary}" "${drc_hostapd_cli_binary}")
 
 if(BUILD_TESTING)
+    add_executable(barista_hostapd_regulatory_tests
+        "${PROJECT_SOURCE_DIR}/core/tests/hostapd_regulatory_tests.c")
+    add_dependencies(barista_hostapd_regulatory_tests drc_hostapd)
+    target_include_directories(barista_hostapd_regulatory_tests PRIVATE
+        "${drc_hostapd_source}/src" "${drc_hostapd_source}/src/utils")
+    add_test(NAME barista_hostapd_regulatory_tests COMMAND barista_hostapd_regulatory_tests)
+
     # Exercise the actual dependency's WPS builders/parser without a radio.
     # Section GC omits unrelated protocol entry points and their dependencies.
     set(wps_test_sources
